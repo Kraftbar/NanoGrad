@@ -6,24 +6,76 @@ The project starts with a minimal autograd core and builds small experiments on 
 
 ## Project Goals
 
-- [ ] Build a minimal autograd and tensor engine
-- [ ] Implement small neural network components from scratch
-- [ ] Train tiny language models on public text datasets (self-supervised)
-- [ ] Explore vision and SLAM-related learning tasks
-- [ ] Benchmark against simple reference implementations
+### Stage 1: Core Learning Engine
+
+- [ ] Build a minimal scalar autograd engine
+- [ ] Add basic tensor operations
+- [ ] Implement simple neural network components from scratch
+- [ ] Add SGD and basic optimization tools
+- [ ] Validate gradients with small deterministic examples
+
+### Stage 2: Small Models
+
+- [ ] Train tiny MLP-style models
+- [ ] Add simple dataset and dataloader utilities
+- [ ] Benchmark loss, speed, and memory on small examples
+- [ ] Keep implementations readable rather than over-compressed
+
+### Stage 3: Language Modeling
+
+- [ ] Train a tiny character-level language model
+- [ ] Add Tiny Shakespeare as the first language dataset
+- [ ] Add transformer/GPT-style components later
+- [ ] Compare structure and training behavior against nanoGPT
+
+### Stage 4: Vision / SLAM Exploration
+
+- [ ] Add basic vision utilities
+- [ ] Explore camera geometry and pose estimation
+- [ ] Add small visual odometry experiments
+- [ ] Compare ideas against ORB-SLAM3 and DROID-SLAM as references
+
+### Stage 5: Benchmarking
+
+- [ ] Benchmark core operations
+- [ ] Benchmark training loss and validation loss
+- [ ] Track tokens per second where relevant
+- [ ] Track memory usage
+- [ ] Track SLAM trajectory error when SLAM experiments exist
+
+
+Benchmarking starts with the basics. Early benchmarks should focus on whether the core engine works correctly and performs reasonably on small examples.
+
+NanoGrad does not aim to maximize benchmark scores by hiding complexity, over-tuning parameters, or making the code unreadable. Benchmarks should help guide design decisions, not replace them.
+
+
+
+## Development Philosophy
+
+NanoGrad is built in stages. The first goal is not to compete with PyTorch, nanoGPT, or SLAM systems directly. The first goal is to build the core ideas clearly and verify that they work.
+
+The project favors:
+
+- Small, readable implementations
+- Correctness before performance
+- Benchmarks on simple core components first
+- Gradual expansion into LLM and SLAM experiments
+- Reasonable LOC growth without forcing extreme code golf
+
+The project does **not** optimize only for lowest lines of code. Code should stay understandable, testable, and flexible enough to experiment with new ideas.
 
 ## Project Structure
 
 ```text
-core/        # tensors, autograd, operations
-nn/          # layers, losses, activations
-optim/       # SGD, Adam, etc.
-data/        # datasets and dataloaders
-train/       # training loops, checkpoints, logging
-llm/         # tokenizers, transformers, GPT-style models
-slam/        # camera models, pose estimation, mapping experiments
-benchmarks/  # speed, memory, loss, trajectory metrics
 refs/        # reference implementations (baselines)
+data/        # datasets and dataloaders
+
+engine.py    # tensors, autograd, operations
+nn.py        # layers, losses, activations
+optim.py     # SGD, Adam, etc.
+model.py     # general model definitions built from nn.py
+train.py     # training loops, checkpoints, logging
+demo.py      # entry point for experiments and visualizations
 ```
 
 ## Reference Implementations (in `refs/`)
