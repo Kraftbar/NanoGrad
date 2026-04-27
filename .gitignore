@@ -14,9 +14,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Git sub-folders (ignore their internal history if not using submodules)
-# We ignore the .git folders within reference implementations to keep the root repo clean
-micrograd/.git
-nanogpt/.git
-pytorch/.git
-tinygrad/.git
+# Reference Implementations (keeping them local/untracked to keep repo small)
+pytorch/
+
