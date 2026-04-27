@@ -1,0 +1,22 @@
+# System files
+.DS_Store
+Thumbs.db
+
+# Environments
+.env
+.venv
+env/
+venv/
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Git sub-folders (ignore their internal history if not using submodules)
+# We ignore the .git folders within reference implementations to keep the root repo clean
+micrograd/.git
+nanogpt/.git
+pytorch/.git
+tinygrad/.git
