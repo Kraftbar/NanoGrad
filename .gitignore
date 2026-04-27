@@ -15,5 +15,8 @@ __pycache__/
 *$py.class
 
 # Reference Implementations (keeping them local/untracked to keep repo small)
-pytorch/
-
+ref/pytorch/
+# We include others in ref/ but if you want to exclude them too, add them below:
+# ref/tinygrad/
+# ref/nanogpt/
+# ref/micrograd/

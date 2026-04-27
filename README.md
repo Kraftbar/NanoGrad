@@ -15,28 +15,28 @@ The project starts with a minimal autograd core and builds small experiments on 
 ## Project Structure
 
 ```text
-nanograd/
-  core/        # tensors, autograd, operations
-  nn/          # layers, losses, activations
-  optim/       # SGD, Adam, etc.
-  data/        # datasets and dataloaders
-  train/       # training loops, checkpoints, logging
-  llm/         # tokenizers, transformers, GPT-style models
-  slam/        # camera models, pose estimation, mapping experiments
-  benchmarks/  # speed, memory, loss, trajectory metrics
+core/        # tensors, autograd, operations
+nn/          # layers, losses, activations
+optim/       # SGD, Adam, etc.
+data/        # datasets and dataloaders
+train/       # training loops, checkpoints, logging
+llm/         # tokenizers, transformers, GPT-style models
+slam/        # camera models, pose estimation, mapping experiments
+benchmarks/  # speed, memory, loss, trajectory metrics
+ref/         # reference implementations (baselines)
 ```
 
-## Reference Implementations
+## Reference Implementations (in `ref/`)
 
 NanoGrad uses the following projects as reference points:
 
 ### Autograd / Tensor Engines
-- **[micrograd](./micrograd)**: Tiny scalar automatic differentiation baseline. (RedRef*)
-- **[tinygrad](./tinygrad)**: Minimal tensor and neural network framework baseline. (RedRef*)
-- **[pytorch](./pytorch)**: Production-grade tensor and autograd reference. (RedRef*)
+- **[micrograd](./ref/micrograd)**: Tiny scalar automatic differentiation baseline. (RedRef*)
+- **[tinygrad](./ref/tinygrad)**: Minimal tensor and neural network framework baseline. (RedRef*)
+- **[pytorch](./ref/pytorch)**: Production-grade tensor and autograd reference. (RedRef*)
 
 ### Language Modeling
-- **[nanoGPT](./nanogpt)**: Compact GPT-style language model training baseline. (RedRef*)
+- **[nanoGPT](./ref/nanogpt)**: Compact GPT-style language model training baseline. (RedRef*)
 
 ### SLAM / Robotics
 - **ORB-SLAM3**: Classical visual SLAM reference.
