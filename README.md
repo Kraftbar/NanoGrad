@@ -67,8 +67,10 @@ The project does **not** optimize only for lowest lines of code. Code should sta
 ## Project Structure
 
 ```text
-refs/        # reference implementations (baselines)
-data/        # datasets and dataloaders
+ref_micrograd/  # micrograd reference implementation
+ref_nanogpt/    # nanoGPT reference implementation
+ref_tinygrad/   # tinygrad reference implementation
+data/           # datasets and dataloaders
 
 engine.py    # tensors, autograd, operations
 nn.py        # layers, losses, activations
@@ -78,17 +80,17 @@ train.py     # training loops, checkpoints, logging
 demo.py      # entry point for experiments and visualizations
 ```
 
-## Reference Implementations (in `refs/`)
+## Reference Implementations
 
 NanoGrad uses the following projects as reference points:
 
 ### Autograd / Tensor Engines
-- **[micrograd](./refs/micrograd)**: Tiny scalar automatic differentiation baseline. (RedRef*)
-- **[tinygrad](./refs/tinygrad)**: Minimal tensor and neural network framework baseline. (RedRef*)
-- **[pytorch](./refs/pytorch)**: Production-grade tensor and autograd reference. (RedRef*)
+- **[micrograd](./ref_micrograd)**: Tiny scalar automatic differentiation baseline. (RedRef*)
+- **[tinygrad](./ref_tinygrad)**: Minimal tensor and neural network framework baseline. (RedRef*)
+- **PyTorch**: Production-grade tensor and autograd reference. External reference only.
 
 ### Language Modeling
-- **[nanoGPT](./refs/nanogpt)**: Compact GPT-style language model training baseline. (RedRef*)
+- **[nanoGPT](./ref_nanogpt)**: Compact GPT-style language model training baseline. (RedRef*)
 
 ### SLAM / Robotics
 - **ORB-SLAM3**: Classical visual SLAM reference.
