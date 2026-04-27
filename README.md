@@ -23,20 +23,20 @@ train/       # training loops, checkpoints, logging
 llm/         # tokenizers, transformers, GPT-style models
 slam/        # camera models, pose estimation, mapping experiments
 benchmarks/  # speed, memory, loss, trajectory metrics
-ref/         # reference implementations (baselines)
+refs/        # reference implementations (baselines)
 ```
 
-## Reference Implementations (in `ref/`)
+## Reference Implementations (in `refs/`)
 
 NanoGrad uses the following projects as reference points:
 
 ### Autograd / Tensor Engines
-- **[micrograd](./ref/micrograd)**: Tiny scalar automatic differentiation baseline. (RedRef*)
-- **[tinygrad](./ref/tinygrad)**: Minimal tensor and neural network framework baseline. (RedRef*)
-- **[pytorch](./ref/pytorch)**: Production-grade tensor and autograd reference. (RedRef*)
+- **[micrograd](./refs/micrograd)**: Tiny scalar automatic differentiation baseline. (RedRef*)
+- **[tinygrad](./refs/tinygrad)**: Minimal tensor and neural network framework baseline. (RedRef*)
+- **[pytorch](./refs/pytorch)**: Production-grade tensor and autograd reference. (RedRef*)
 
 ### Language Modeling
-- **[nanoGPT](./ref/nanogpt)**: Compact GPT-style language model training baseline. (RedRef*)
+- **[nanoGPT](./refs/nanogpt)**: Compact GPT-style language model training baseline. (RedRef*)
 
 ### SLAM / Robotics
 - **ORB-SLAM3**: Classical visual SLAM reference.
