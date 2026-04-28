@@ -104,6 +104,16 @@ class Tensor:
     def __rmul__(self, other: Number | "Tensor") -> "Tensor":
         return multiply(self, other)
 
+    @property
+    def T(self) -> "Tensor":
+        return transpose(self)
+
+    def sum(self, axis: int | None = None) -> "Tensor":
+        return tensor_sum(self, axis=axis)
+
+    def mean(self, axis: int | None = None) -> "Tensor":
+        return tensor_mean(self, axis=axis)
+
 
 def add(left: Tensor, right: Number | Tensor) -> Tensor:
     """Elementwise addition with scalar broadcasting."""
@@ -178,6 +188,73 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
         return Tensor(data, (rows, cols))
 
     raise ValueError("matmul does not support vector-matrix multiplication yet")
+
+
+def transpose(tensor: Tensor) -> Tensor:
+    """Transpose a 2D tensor."""
+
+    if len(tensor.shape) != 2:
+        raise ValueError("transpose expects a 2D tensor")
+
+    rows, cols = tensor.shape
+    data = []
+    for col in range(cols):
+        for row in range(rows):
+            data.append(tensor[row, col])
+    return Tensor(data, (cols, rows))
+
+
+def tensor_sum(tensor: Tensor, axis: int | None = None) -> Tensor:
+    """Sum all values or reduce a 2D tensor along one axis."""
+
+    if axis is None:
+        return Tensor([sum(tensor.data)], (1,))
+
+    if len(tensor.shape) == 1:
+        if axis != 0:
+            raise ValueError("1D tensors only support axis=0")
+        return Tensor([sum(tensor.data)], (1,))
+
+    rows, cols = tensor.shape
+    if axis == 0:
+        data = []
+        for col in range(cols):
+            total = 0.0
+            for row in range(rows):
+                total += tensor[row, col]
+            data.append(total)
+        return Tensor(data, (cols,))
+
+    if axis == 1:
+        data = []
+        for row in range(rows):
+            total = 0.0
+            for col in range(cols):
+                total += tensor[row, col]
+            data.append(total)
+        return Tensor(data, (rows,))
+
+    raise ValueError("2D tensors only support axis=0 or axis=1")
+
+
+def tensor_mean(tensor: Tensor, axis: int | None = None) -> Tensor:
+    """Mean of all values or a 2D tensor along one axis."""
+
+    if axis is None:
+        return tensor_sum(tensor) * (1 / len(tensor.data))
+
+    if len(tensor.shape) == 1:
+        if axis != 0:
+            raise ValueError("1D tensors only support axis=0")
+        return tensor_sum(tensor, axis=0) * (1 / tensor.shape[0])
+
+    if axis == 0:
+        return tensor_sum(tensor, axis=0) * (1 / tensor.shape[0])
+
+    if axis == 1:
+        return tensor_sum(tensor, axis=1) * (1 / tensor.shape[1])
+
+    raise ValueError("2D tensors only support axis=0 or axis=1")
 
 
 def _numel(shape: tuple[int, ...]) -> int:

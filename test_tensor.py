@@ -1,6 +1,6 @@
 import unittest
 
-from tensor import Tensor, matmul
+from tensor import Tensor, matmul, tensor_mean, tensor_sum, transpose
 
 
 class TensorTests(unittest.TestCase):
@@ -105,6 +105,50 @@ class TensorTests(unittest.TestCase):
             ],
         )
 
+    def test_transpose(self) -> None:
+        x = Tensor.from_list([
+            [1, 2, 3],
+            [4, 5, 6],
+        ])
+
+        self.assertEqual(
+            transpose(x).tolist(),
+            [
+                [1.0, 4.0],
+                [2.0, 5.0],
+                [3.0, 6.0],
+            ],
+        )
+        self.assertEqual(x.T.tolist(), transpose(x).tolist())
+
+    def test_sum_reductions(self) -> None:
+        x = Tensor.from_list([
+            [1, 2, 3],
+            [4, 5, 6],
+        ])
+
+        self.assertEqual(tensor_sum(x).tolist(), [21.0])
+        self.assertEqual(x.sum(axis=0).tolist(), [5.0, 7.0, 9.0])
+        self.assertEqual(x.sum(axis=1).tolist(), [6.0, 15.0])
+
+    def test_mean_reductions(self) -> None:
+        x = Tensor.from_list([
+            [1, 2, 3],
+            [4, 5, 6],
+        ])
+
+        self.assertEqual(tensor_mean(x).tolist(), [3.5])
+        self.assertEqual(x.mean(axis=0).tolist(), [2.5, 3.5, 4.5])
+        self.assertEqual(x.mean(axis=1).tolist(), [2.0, 5.0])
+
+    def test_1d_sum_and_mean(self) -> None:
+        x = Tensor.from_list([1, 2, 3])
+
+        self.assertEqual(x.sum().tolist(), [6.0])
+        self.assertEqual(x.sum(axis=0).tolist(), [6.0])
+        self.assertEqual(x.mean().tolist(), [2.0])
+        self.assertEqual(x.mean(axis=0).tolist(), [2.0])
+
     def test_shape_errors(self) -> None:
         with self.assertRaises(ValueError):
             Tensor.from_list([
@@ -117,6 +161,15 @@ class TensorTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             matmul(Tensor.from_list([1, 2]), Tensor.from_list([1, 2, 3]))
+
+        with self.assertRaises(ValueError):
+            Tensor.from_list([1, 2]).T
+
+        with self.assertRaises(ValueError):
+            Tensor.from_list([
+                [1, 2],
+                [3, 4],
+            ]).sum(axis=2)
 
 
 if __name__ == "__main__":
