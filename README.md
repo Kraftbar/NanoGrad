@@ -69,10 +69,11 @@ The project does **not** optimize only for lowest lines of code. Code should sta
 
 ## Development Workflow
 
-When working with an LLM assistant, prefer small logical commits at clean,
-verified checkpoints. The assistant should suggest a commit after tests or demos
-pass and the working tree represents a coherent step, rather than committing
-half-finished experiments.
+When working with an LLM assistant, prefer commits for changes that are
+independently meaningful and meet the project's current verification standard.
+The assistant should suggest a commit when the working tree represents a clean,
+coherent step, rather than after every small edit or during half-finished
+experiments.
 
 ## Project Structure
 
