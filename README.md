@@ -69,11 +69,8 @@ The project does **not** optimize only for lowest lines of code. Code should sta
 
 ## Development Workflow
 
-When working with an LLM assistant, prefer commits for changes that are
-independently meaningful and meet the project's current verification standard.
-The assistant should suggest a commit when the working tree represents a clean,
-coherent step, rather than after every small edit or during half-finished
-experiments.
+Use small, logical commits when they help preserve a clean checkpoint. Avoid
+committing half-finished experiments or every tiny edit.
 
 ## Project Structure
 
@@ -110,11 +107,12 @@ NanoGrad uses the following projects as reference points:
 ## Datasets
 
 ### Synthetic / Toy
-- **Line fitting**: Small scalar regression check for learning `y = ax + b`.
-- **Sign separator**: Binary classification check for separating negative and
-  positive scalar inputs.
-- **XOR logic gate**: Non-linear binary classification check for hidden-layer
-  MLPs.
+
+| Dataset / Check | Purpose | Status |
+| --- | --- | --- |
+| Line fitting | Scalar regression check for learning `y = ax + b` | ok |
+| Sign separator | Binary classification check for separating negative and positive scalar inputs | ok |
+| XOR logic gate | Non-linear binary classification check for hidden-layer MLPs | ok |
 
 ### Language Modeling
 - **Tiny Shakespeare**: Small smoke-test dataset.
