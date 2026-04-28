@@ -4,25 +4,14 @@ from __future__ import annotations
 
 import random
 
+from datasets import line_fitting, sign_separator, xor_gate
 from engine import Value
 from model import MLP
 from train import train_binary_classifier, train_mse
 
 
 def regression_demo() -> None:
-    xs = [
-        [-1.0],
-        [0.0],
-        [1.0],
-        [2.0],
-    ]
-    ys = [
-        -2.0,
-        1.0,
-        4.0,
-        7.0,
-    ]
-
+    xs, ys = line_fitting()
     model = MLP(inputs=1, layers=[1])
     history = train_mse(model, xs, ys, steps=80, lr=0.05)
 
@@ -32,19 +21,7 @@ def regression_demo() -> None:
 
 
 def classification_demo() -> None:
-    xs = [
-        [-2.0],
-        [-1.0],
-        [1.0],
-        [2.0],
-    ]
-    ys = [
-        0.0,
-        0.0,
-        1.0,
-        1.0,
-    ]
-
+    xs, ys = sign_separator()
     model = MLP(inputs=1, layers=[1])
     history = train_binary_classifier(model, xs, ys, steps=80, lr=0.1)
 
@@ -54,19 +31,7 @@ def classification_demo() -> None:
 
 
 def xor_demo() -> None:
-    xs = [
-        [0.0, 0.0],
-        [0.0, 1.0],
-        [1.0, 0.0],
-        [1.0, 1.0],
-    ]
-    ys = [
-        0.0,
-        1.0,
-        1.0,
-        0.0,
-    ]
-
+    xs, ys = xor_gate()
     model = MLP(inputs=2, layers=[4, 1])
     history = train_binary_classifier(model, xs, ys, steps=1000, lr=0.2)
 

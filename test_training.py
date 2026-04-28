@@ -1,6 +1,7 @@
 import random
 import unittest
 
+from datasets import line_fitting, sign_separator, xor_gate
 from engine import Value
 from model import MLP
 from train import binary_cross_entropy, train_binary_classifier, train_mse
@@ -10,19 +11,7 @@ class TrainingTests(unittest.TestCase):
     def test_tiny_regression_loss_decreases(self) -> None:
         random.seed(0)
 
-        xs = [
-            [-1.0],
-            [0.0],
-            [1.0],
-            [2.0],
-        ]
-        ys = [
-            -2.0,
-            1.0,
-            4.0,
-            7.0,
-        ]
-
+        xs, ys = line_fitting()
         model = MLP(inputs=1, layers=[1])
         history = train_mse(model, xs, ys, steps=40, lr=0.05)
 
@@ -56,19 +45,7 @@ class TrainingTests(unittest.TestCase):
     def test_tiny_binary_classifier_loss_decreases(self) -> None:
         random.seed(0)
 
-        xs = [
-            [-2.0],
-            [-1.0],
-            [1.0],
-            [2.0],
-        ]
-        ys = [
-            0.0,
-            0.0,
-            1.0,
-            1.0,
-        ]
-
+        xs, ys = sign_separator()
         model = MLP(inputs=1, layers=[1])
         history = train_binary_classifier(model, xs, ys, steps=60, lr=0.1)
 
@@ -78,19 +55,7 @@ class TrainingTests(unittest.TestCase):
     def test_xor_classifier_learns_non_linear_pattern(self) -> None:
         random.seed(0)
 
-        xs = [
-            [0.0, 0.0],
-            [0.0, 1.0],
-            [1.0, 0.0],
-            [1.0, 1.0],
-        ]
-        ys = [
-            0.0,
-            1.0,
-            1.0,
-            0.0,
-        ]
-
+        xs, ys = xor_gate()
         model = MLP(inputs=2, layers=[4, 1])
         history = train_binary_classifier(model, xs, ys, steps=1000, lr=0.2)
 
