@@ -109,6 +109,13 @@ NanoGrad uses the following projects as reference points:
 
 ## Datasets
 
+### Synthetic / Toy
+- **Line fitting**: Small scalar regression check for learning `y = ax + b`.
+- **Sign separator**: Binary classification check for separating negative and
+  positive scalar inputs.
+- **XOR logic gate**: Non-linear binary classification check for hidden-layer
+  MLPs.
+
 ### Language Modeling
 - **Tiny Shakespeare**: Small smoke-test dataset.
 - **TinyStories**: Small-model language learning dataset.
@@ -151,8 +158,7 @@ Run the current test suite:
 python3 -m unittest discover
 ```
 
-The current demos are human-readable learning checks, not performance
-benchmarks.
+The current demos use tiny synthetic datasets as human-readable learning checks.
 
 ## Status
 
