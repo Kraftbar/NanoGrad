@@ -3,6 +3,7 @@ import unittest
 
 from datasets import line_fitting, sign_separator, xor_gate
 from engine import Value
+from metrics import binary_accuracy
 from model import MLP
 from train import binary_cross_entropy, train_binary_classifier, train_mse
 
@@ -42,6 +43,24 @@ class TrainingTests(unittest.TestCase):
 
         self.assertLess(good.data, bad.data)
 
+    def test_binary_accuracy_counts_thresholded_predictions(self) -> None:
+        accuracy = binary_accuracy(
+            probabilities=[
+                0.1,
+                0.8,
+                0.4,
+                0.7,
+            ],
+            targets=[
+                0.0,
+                1.0,
+                1.0,
+                1.0,
+            ],
+        )
+
+        self.assertEqual(accuracy, 0.75)
+
     def test_tiny_binary_classifier_loss_decreases(self) -> None:
         random.seed(0)
 
@@ -65,14 +84,9 @@ class TrainingTests(unittest.TestCase):
             self.assertIsInstance(logit, Value)
             probabilities.append(logit.sigmoid().data)
 
-        predictions = [
-            1.0 if probability >= 0.5 else 0.0
-            for probability in probabilities
-        ]
-
         self.assertLess(history[-1], history[0])
         self.assertLess(history[-1], 0.2)
-        self.assertEqual(predictions, ys)
+        self.assertEqual(binary_accuracy(probabilities, ys), 1.0)
 
 
 if __name__ == "__main__":
