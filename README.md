@@ -8,11 +8,11 @@ The project starts with a minimal autograd core and builds small experiments on 
 
 ### Stage 1: Core Learning Engine
 
-- [ ] Build a minimal scalar autograd engine
-- [ ] Add basic tensor operations
-- [ ] Implement simple neural network components from scratch
-- [ ] Add SGD and basic optimization tools
-- [ ] Validate gradients with small deterministic examples
+- [x] Build a minimal scalar autograd engine
+- [x] Add basic tensor operations
+- [x] Implement simple neural network components from scratch
+- [x] Add SGD and basic optimization tools
+- [x] Validate gradients with small deterministic examples
 
 ### Stage 2: Small Models
 
@@ -80,7 +80,8 @@ ref_nanogpt/    # nanoGPT reference implementation
 ref_tinygrad/   # tinygrad reference implementation
 data/           # datasets and dataloaders
 
-engine.py    # tensors, autograd, operations
+engine.py    # scalar autograd core
+tensor.py    # tensor container and non-autograd tensor operations
 nn.py        # layers, losses, activations
 optim.py     # SGD, Adam, etc.
 model.py     # general model definitions built from nn.py

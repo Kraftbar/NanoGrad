@@ -1,0 +1,200 @@
+"""Small tensor container and shape-checked math helpers.
+
+This module is intentionally non-autograd for now. It gives NanoGrad a clear
+place to work out shape, indexing, and matrix math before connecting tensor
+operations to the scalar autograd engine.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+
+Number = int | float
+
+
+class Tensor:
+    """A dense 1D or 2D tensor backed by flat row-major data."""
+
+    def __init__(self, data: Sequence[Number], shape: tuple[int, ...]) -> None:
+        if len(shape) not in (1, 2):
+            raise ValueError("Tensor currently supports only 1D or 2D shapes")
+        if any(dim <= 0 for dim in shape):
+            raise ValueError("shape dimensions must be positive")
+        if len(data) != _numel(shape):
+            raise ValueError("data length does not match shape")
+
+        self.data = [float(value) for value in data]
+        self.shape = shape
+
+    def __repr__(self) -> str:
+        return f"Tensor(shape={self.shape}, data={self.tolist()})"
+
+    def __len__(self) -> int:
+        return self.shape[0]
+
+    def __getitem__(self, index: int | tuple[int, int]) -> float:
+        if len(self.shape) == 1:
+            if not isinstance(index, int):
+                raise IndexError("1D tensors use one integer index")
+            return self.data[_normalize_index(index, self.shape[0])]
+
+        if not isinstance(index, tuple) or len(index) != 2:
+            raise IndexError("2D tensors use row and column indices")
+
+        row = _normalize_index(index[0], self.shape[0])
+        col = _normalize_index(index[1], self.shape[1])
+        return self.data[row * self.shape[1] + col]
+
+    def tolist(self) -> list[float] | list[list[float]]:
+        if len(self.shape) == 1:
+            return self.data[:]
+
+        rows, cols = self.shape
+        return [
+            self.data[row * cols : (row + 1) * cols]
+            for row in range(rows)
+        ]
+
+    @classmethod
+    def zeros(cls, shape: tuple[int, ...]) -> "Tensor":
+        return cls([0.0] * _numel(shape), shape)
+
+    @classmethod
+    def from_list(cls, values: Sequence[Number] | Sequence[Sequence[Number]]) -> "Tensor":
+        if not values:
+            raise ValueError("values must not be empty")
+
+        first = values[0]
+        if isinstance(first, Sequence):
+            rows = values
+            width = len(first)
+            if width == 0:
+                raise ValueError("rows must not be empty")
+            if any(not isinstance(row, Sequence) or len(row) != width for row in rows):
+                raise ValueError("2D input must be rectangular")
+
+            data = [
+                value
+                for row in rows
+                for value in row
+            ]
+            return cls(data, (len(rows), width))
+
+        return cls(values, (len(values),))
+
+    def __add__(self, other: Number | "Tensor") -> "Tensor":
+        return add(self, other)
+
+    def __radd__(self, other: Number | "Tensor") -> "Tensor":
+        return add(self, other)
+
+    def __sub__(self, other: Number | "Tensor") -> "Tensor":
+        return add(self, -other if isinstance(other, (int, float)) else other * -1)
+
+    def __rsub__(self, other: Number | "Tensor") -> "Tensor":
+        return add(-self, other)
+
+    def __neg__(self) -> "Tensor":
+        return self * -1
+
+    def __mul__(self, other: Number | "Tensor") -> "Tensor":
+        return multiply(self, other)
+
+    def __rmul__(self, other: Number | "Tensor") -> "Tensor":
+        return multiply(self, other)
+
+
+def add(left: Tensor, right: Number | Tensor) -> Tensor:
+    """Elementwise addition with scalar broadcasting."""
+
+    if isinstance(right, (int, float)):
+        return Tensor([value + right for value in left.data], left.shape)
+
+    _require_same_shape(left, right)
+    return Tensor(
+        [
+            a + b
+            for a, b in zip(left.data, right.data)
+        ],
+        left.shape,
+    )
+
+
+def multiply(left: Tensor, right: Number | Tensor) -> Tensor:
+    """Elementwise multiplication with scalar broadcasting."""
+
+    if isinstance(right, (int, float)):
+        return Tensor([value * right for value in left.data], left.shape)
+
+    _require_same_shape(left, right)
+    return Tensor(
+        [
+            a * b
+            for a, b in zip(left.data, right.data)
+        ],
+        left.shape,
+    )
+
+
+def matmul(left: Tensor, right: Tensor) -> Tensor:
+    """Matrix/vector multiplication for 1D and 2D tensors."""
+
+    if len(left.shape) == 1 and len(right.shape) == 1:
+        if left.shape[0] != right.shape[0]:
+            raise ValueError("vector dot product shapes must match")
+        total = sum(
+            a * b
+            for a, b in zip(left.data, right.data)
+        )
+        return Tensor([total], (1,))
+
+    if len(left.shape) == 2 and len(right.shape) == 1:
+        rows, shared = left.shape
+        if shared != right.shape[0]:
+            raise ValueError("matrix-vector inner dimensions must match")
+
+        data = []
+        for row in range(rows):
+            total = 0.0
+            for col in range(shared):
+                total += left[row, col] * right[col]
+            data.append(total)
+        return Tensor(data, (rows,))
+
+    if len(left.shape) == 2 and len(right.shape) == 2:
+        rows, shared = left.shape
+        right_rows, cols = right.shape
+        if shared != right_rows:
+            raise ValueError("matrix-matrix inner dimensions must match")
+
+        data = []
+        for row in range(rows):
+            for col in range(cols):
+                total = 0.0
+                for inner in range(shared):
+                    total += left[row, inner] * right[inner, col]
+                data.append(total)
+        return Tensor(data, (rows, cols))
+
+    raise ValueError("matmul does not support vector-matrix multiplication yet")
+
+
+def _numel(shape: tuple[int, ...]) -> int:
+    total = 1
+    for dim in shape:
+        total *= dim
+    return total
+
+
+def _normalize_index(index: int, size: int) -> int:
+    if index < 0:
+        index += size
+    if index < 0 or index >= size:
+        raise IndexError("tensor index out of range")
+    return index
+
+
+def _require_same_shape(left: Tensor, right: Tensor) -> None:
+    if left.shape != right.shape:
+        raise ValueError("tensor shapes must match")
