@@ -137,6 +137,10 @@ NanoGrad benchmarks implementations using:
 - SLAM trajectory error
 - Visual odometry drift
 
+Early benchmarks are human-readable sanity checks, not leaderboard targets.
+See [BENCHMARKS.md](./BENCHMARKS.md) for the current learning checks and the
+benchmarking intent.
+
 ## Quick Checks
 
 Run the scalar-autograd demo:
