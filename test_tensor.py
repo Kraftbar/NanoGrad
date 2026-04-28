@@ -1,6 +1,17 @@
+import math
 import unittest
 
-from tensor import Tensor, matmul, tensor_mean, tensor_sum, transpose
+from tensor import (
+    Tensor,
+    matmul,
+    tensor_exp,
+    tensor_log,
+    tensor_mean,
+    tensor_relu,
+    tensor_sigmoid,
+    tensor_sum,
+    transpose,
+)
 
 
 class TensorTests(unittest.TestCase):
@@ -149,6 +160,44 @@ class TensorTests(unittest.TestCase):
         self.assertEqual(x.mean().tolist(), [2.0])
         self.assertEqual(x.mean(axis=0).tolist(), [2.0])
 
+    def test_exp_and_log(self) -> None:
+        x = Tensor.from_list([
+            [1.0, math.e],
+            [math.e**2, math.e**3],
+        ])
+
+        self.assertEqual(tensor_log(x).shape, x.shape)
+        self.assertAlmostEqual(x.log()[0, 0], 0.0)
+        self.assertAlmostEqual(x.log()[0, 1], 1.0)
+        self.assertAlmostEqual(x.log()[1, 0], 2.0)
+        self.assertAlmostEqual(x.log()[1, 1], 3.0)
+        self.assertAlmostEqual(tensor_exp(Tensor.from_list([0.0]))[0], 1.0)
+
+    def test_relu(self) -> None:
+        x = Tensor.from_list([
+            [-2, -1, 0],
+            [1, 2, 3],
+        ])
+
+        self.assertEqual(
+            tensor_relu(x).tolist(),
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 2.0, 3.0],
+            ],
+        )
+        self.assertEqual(x.relu().tolist(), tensor_relu(x).tolist())
+
+    def test_sigmoid(self) -> None:
+        x = Tensor.from_list([-2.0, 0.0, 2.0])
+        y = tensor_sigmoid(x)
+
+        self.assertEqual(y.shape, x.shape)
+        self.assertAlmostEqual(y[0], 1 / (1 + math.exp(2.0)))
+        self.assertAlmostEqual(y[1], 0.5)
+        self.assertAlmostEqual(y[2], 1 / (1 + math.exp(-2.0)))
+        self.assertEqual(x.sigmoid().tolist(), y.tolist())
+
     def test_shape_errors(self) -> None:
         with self.assertRaises(ValueError):
             Tensor.from_list([
@@ -170,6 +219,9 @@ class TensorTests(unittest.TestCase):
                 [1, 2],
                 [3, 4],
             ]).sum(axis=2)
+
+        with self.assertRaises(ValueError):
+            Tensor.from_list([1, 0, -1]).log()
 
 
 if __name__ == "__main__":

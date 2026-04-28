@@ -7,6 +7,7 @@ operations to the scalar autograd engine.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 
@@ -113,6 +114,18 @@ class Tensor:
 
     def mean(self, axis: int | None = None) -> "Tensor":
         return tensor_mean(self, axis=axis)
+
+    def exp(self) -> "Tensor":
+        return tensor_exp(self)
+
+    def log(self) -> "Tensor":
+        return tensor_log(self)
+
+    def relu(self) -> "Tensor":
+        return tensor_relu(self)
+
+    def sigmoid(self) -> "Tensor":
+        return tensor_sigmoid(self)
 
 
 def add(left: Tensor, right: Number | Tensor) -> Tensor:
@@ -257,6 +270,32 @@ def tensor_mean(tensor: Tensor, axis: int | None = None) -> Tensor:
     raise ValueError("2D tensors only support axis=0 or axis=1")
 
 
+def tensor_exp(tensor: Tensor) -> Tensor:
+    """Elementwise exponential."""
+
+    return _map(tensor, math.exp)
+
+
+def tensor_log(tensor: Tensor) -> Tensor:
+    """Elementwise natural logarithm."""
+
+    if any(value <= 0 for value in tensor.data):
+        raise ValueError("log is only defined for positive values")
+    return _map(tensor, math.log)
+
+
+def tensor_relu(tensor: Tensor) -> Tensor:
+    """Elementwise rectified linear unit."""
+
+    return _map(tensor, lambda value: max(0.0, value))
+
+
+def tensor_sigmoid(tensor: Tensor) -> Tensor:
+    """Elementwise sigmoid."""
+
+    return _map(tensor, lambda value: 1 / (1 + math.exp(-value)))
+
+
 def _numel(shape: tuple[int, ...]) -> int:
     total = 1
     for dim in shape:
@@ -275,3 +314,7 @@ def _normalize_index(index: int, size: int) -> int:
 def _require_same_shape(left: Tensor, right: Tensor) -> None:
     if left.shape != right.shape:
         raise ValueError("tensor shapes must match")
+
+
+def _map(tensor: Tensor, fn) -> Tensor:
+    return Tensor([fn(value) for value in tensor.data], tensor.shape)
