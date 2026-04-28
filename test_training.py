@@ -75,6 +75,40 @@ class TrainingTests(unittest.TestCase):
         self.assertLess(history[-1], history[0])
         self.assertLess(history[-1], 0.2)
 
+    def test_xor_classifier_learns_non_linear_pattern(self) -> None:
+        random.seed(0)
+
+        xs = [
+            [0.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+        ]
+        ys = [
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+        ]
+
+        model = MLP(inputs=2, layers=[4, 1])
+        history = train_binary_classifier(model, xs, ys, steps=1000, lr=0.2)
+
+        probabilities = []
+        for x in xs:
+            logit = model(x)
+            self.assertIsInstance(logit, Value)
+            probabilities.append(logit.sigmoid().data)
+
+        predictions = [
+            1.0 if probability >= 0.5 else 0.0
+            for probability in probabilities
+        ]
+
+        self.assertLess(history[-1], history[0])
+        self.assertLess(history[-1], 0.2)
+        self.assertEqual(predictions, ys)
+
 
 if __name__ == "__main__":
     unittest.main()
