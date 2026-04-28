@@ -19,6 +19,8 @@ class TensorDemoTests(unittest.TestCase):
         self.assertIn("accuracy:    0.750", text)
         self.assertIn("Tensor matrix-vector multiply", text)
         self.assertIn("output:  [140.0, 320.0]", text)
+        self.assertIn("Tensor linear layer", text)
+        self.assertIn("output: [[15.0, 31.0], [141.0, 319.0]]", text)
 
 
 if __name__ == "__main__":

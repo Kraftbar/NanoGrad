@@ -78,15 +78,20 @@ committing half-finished experiments or every tiny edit.
 ref_micrograd/  # micrograd reference implementation
 ref_nanogpt/    # nanoGPT reference implementation
 ref_tinygrad/   # tinygrad reference implementation
-data/           # datasets and dataloaders
+data/            # datasets and dataloaders
 
-engine.py    # scalar autograd core
-tensor.py    # tensor container and non-autograd tensor operations
-nn.py        # layers, losses, activations
-optim.py     # SGD, Adam, etc.
-model.py     # general model definitions built from nn.py
-train.py     # training loops, checkpoints, logging
-demo.py      # entry point for experiments and visualizations
+datasets.py      # tiny synthetic datasets
+engine.py        # scalar autograd core
+tensor.py        # tensor container and non-autograd tensor operations
+tensor_nn.py     # non-autograd tensor neural-network helpers
+losses.py        # tensor loss functions
+metrics.py       # accuracy and related metrics
+nn.py            # scalar neural-network layers and activations
+optim.py         # SGD, Adam, etc.
+model.py         # scalar model definitions built from nn.py
+train.py         # scalar training loops
+demo.py          # scalar autograd training demo
+tensor_demo.py   # non-autograd tensor math demo
 ```
 
 ## Reference Implementations

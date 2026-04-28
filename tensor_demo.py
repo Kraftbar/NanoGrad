@@ -5,6 +5,7 @@ from __future__ import annotations
 from losses import binary_cross_entropy, mse_loss
 from metrics import tensor_binary_accuracy
 from tensor import Tensor, matmul
+from tensor_nn import linear
 
 
 def regression_loss_demo() -> None:
@@ -45,10 +46,30 @@ def matrix_multiply_demo() -> None:
     print(f"output:  {outputs.tolist()}")
 
 
+def linear_layer_demo() -> None:
+    inputs = Tensor.from_list([
+        [1, 2, 3],
+        [10, 20, 30],
+    ])
+    weight = Tensor.from_list([
+        [1, 2, 3],
+        [4, 5, 6],
+    ])
+    bias = Tensor.from_list([1, -1])
+    outputs = linear(inputs, weight, bias)
+
+    print("\nTensor linear layer")
+    print(f"inputs: {inputs.tolist()}")
+    print(f"weight: {weight.tolist()}")
+    print(f"bias:   {bias.tolist()}")
+    print(f"output: {outputs.tolist()}")
+
+
 def main() -> None:
     regression_loss_demo()
     binary_classification_demo()
     matrix_multiply_demo()
+    linear_layer_demo()
 
 
 if __name__ == "__main__":
