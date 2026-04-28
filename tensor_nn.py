@@ -26,18 +26,9 @@ def linear(inputs: Tensor, weight: Tensor, bias: Tensor) -> Tensor:
         outputs = matmul(inputs, weight.T)
         if outputs.shape[1] != bias.shape[0]:
             raise ValueError("bias shape must match linear output columns")
-        return _add_row_bias(outputs, bias)
+        return outputs + bias
 
     raise ValueError("linear expects 1D or 2D inputs")
-
-
-def _add_row_bias(outputs: Tensor, bias: Tensor) -> Tensor:
-    rows, cols = outputs.shape
-    data = []
-    for row in range(rows):
-        for col in range(cols):
-            data.append(outputs[row, col] + bias[col])
-    return Tensor(data, outputs.shape)
 
 
 def _require_vector(name: str, tensor: Tensor) -> None:

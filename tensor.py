@@ -129,32 +129,42 @@ class Tensor:
 
 
 def add(left: Tensor, right: Number | Tensor) -> Tensor:
-    """Elementwise addition with scalar broadcasting."""
+    """Elementwise addition with scalar and row-vector broadcasting."""
 
     if isinstance(right, (int, float)):
         return Tensor([value + right for value in left.data], left.shape)
 
-    _require_same_shape(left, right)
+    if _can_row_broadcast(left, right):
+        return _row_broadcast(left, right, lambda a, b: a + b)
+
+    if _can_row_broadcast(right, left):
+        return _row_broadcast(right, left, lambda a, b: b + a)
+
     return Tensor(
         [
             a + b
-            for a, b in zip(left.data, right.data)
+            for a, b in zip(_same_shape_data(left, right), right.data)
         ],
         left.shape,
     )
 
 
 def multiply(left: Tensor, right: Number | Tensor) -> Tensor:
-    """Elementwise multiplication with scalar broadcasting."""
+    """Elementwise multiplication with scalar and row-vector broadcasting."""
 
     if isinstance(right, (int, float)):
         return Tensor([value * right for value in left.data], left.shape)
 
-    _require_same_shape(left, right)
+    if _can_row_broadcast(left, right):
+        return _row_broadcast(left, right, lambda a, b: a * b)
+
+    if _can_row_broadcast(right, left):
+        return _row_broadcast(right, left, lambda a, b: b * a)
+
     return Tensor(
         [
             a * b
-            for a, b in zip(left.data, right.data)
+            for a, b in zip(_same_shape_data(left, right), right.data)
         ],
         left.shape,
     )
@@ -314,6 +324,28 @@ def _normalize_index(index: int, size: int) -> int:
 def _require_same_shape(left: Tensor, right: Tensor) -> None:
     if left.shape != right.shape:
         raise ValueError("tensor shapes must match")
+
+
+def _same_shape_data(left: Tensor, right: Tensor) -> list[float]:
+    _require_same_shape(left, right)
+    return left.data
+
+
+def _can_row_broadcast(matrix: Tensor, row: Tensor) -> bool:
+    return (
+        len(matrix.shape) == 2
+        and len(row.shape) == 1
+        and matrix.shape[1] == row.shape[0]
+    )
+
+
+def _row_broadcast(matrix: Tensor, row: Tensor, fn) -> Tensor:
+    rows, cols = matrix.shape
+    data = []
+    for i in range(rows):
+        for j in range(cols):
+            data.append(fn(matrix[i, j], row[j]))
+    return Tensor(data, matrix.shape)
 
 
 def _map(tensor: Tensor, fn) -> Tensor:

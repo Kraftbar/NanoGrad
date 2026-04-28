@@ -82,6 +82,43 @@ class TensorTests(unittest.TestCase):
         self.assertEqual((x - 1).tolist(), [0.0, 1.0, 2.0])
         self.assertEqual((10 - x).tolist(), [9.0, 8.0, 7.0])
 
+    def test_row_vector_broadcast(self) -> None:
+        x = Tensor.from_list([
+            [1, 2, 3],
+            [4, 5, 6],
+        ])
+        row = Tensor.from_list([10, 20, 30])
+
+        self.assertEqual(
+            (x + row).tolist(),
+            [
+                [11.0, 22.0, 33.0],
+                [14.0, 25.0, 36.0],
+            ],
+        )
+        self.assertEqual((row + x).tolist(), (x + row).tolist())
+        self.assertEqual(
+            (x - row).tolist(),
+            [
+                [-9.0, -18.0, -27.0],
+                [-6.0, -15.0, -24.0],
+            ],
+        )
+        self.assertEqual(
+            (row - x).tolist(),
+            [
+                [9.0, 18.0, 27.0],
+                [6.0, 15.0, 24.0],
+            ],
+        )
+        self.assertEqual(
+            (x * row).tolist(),
+            [
+                [10.0, 40.0, 90.0],
+                [40.0, 100.0, 180.0],
+            ],
+        )
+
     def test_vector_dot_product(self) -> None:
         a = Tensor.from_list([1, 2, 3])
         b = Tensor.from_list([4, 5, 6])
@@ -207,6 +244,12 @@ class TensorTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             Tensor.from_list([1, 2]) + Tensor.from_list([1, 2, 3])
+
+        with self.assertRaises(ValueError):
+            Tensor.from_list([
+                [1, 2],
+                [3, 4],
+            ]) + Tensor.from_list([1, 2, 3])
 
         with self.assertRaises(ValueError):
             matmul(Tensor.from_list([1, 2]), Tensor.from_list([1, 2, 3]))
