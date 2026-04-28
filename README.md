@@ -67,6 +67,13 @@ The project favors:
 
 The project does **not** optimize only for lowest lines of code. Code should stay understandable, testable, and flexible enough to experiment with new ideas.
 
+## Development Workflow
+
+When working with an LLM assistant, prefer small logical commits at clean,
+verified checkpoints. The assistant should suggest a commit after tests or demos
+pass and the working tree represents a coherent step, rather than committing
+half-finished experiments.
+
 ## Project Structure
 
 ```text
