@@ -164,6 +164,12 @@ Run the scalar-autograd demo:
 python3 demo.py
 ```
 
+Run the non-autograd tensor math demo:
+
+```bash
+python3 tensor_demo.py
+```
+
 Run the current test suite:
 
 ```bash
