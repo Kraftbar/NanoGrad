@@ -114,6 +114,12 @@ NanoGrad uses the following projects as reference points:
 | Line fitting | Scalar regression check for learning `y = ax + b` | ok |
 | Sign separator | Binary classification check for separating negative and positive scalar inputs | ok |
 | XOR logic gate | Non-linear binary classification check for hidden-layer MLPs | ok |
+| AND / OR gates | Linear logic gate sanity checks | planned |
+| Noisy line fitting | Regression check with imperfect data | planned |
+| Tiny 2D clusters | Binary classification check with two input dimensions | planned |
+
+Status key: `ok` means demo and test coverage exist; `partial` means the
+check exists but is not fully verified; `planned` means not implemented yet.
 
 ### Language Modeling
 - **Tiny Shakespeare**: Small smoke-test dataset.
