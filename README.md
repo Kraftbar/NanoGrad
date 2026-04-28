@@ -107,34 +107,41 @@ NanoGrad uses the following projects as reference points:
 
 ## Datasets
 
+Checked items have a working demo or test coverage in the current codebase.
+
 ### Synthetic / Toy
 
-| Dataset / Check | Purpose | Status |
-| --- | --- | --- |
-| Line fitting | Scalar regression check for learning `y = ax + b` | ok |
-| Sign separator | Binary classification check for separating negative and positive scalar inputs | ok |
-| XOR logic gate | Non-linear binary classification check for hidden-layer MLPs | ok |
-| AND / OR gates | Linear logic gate sanity checks | planned |
-| Noisy line fitting | Regression check with imperfect data | planned |
-| Tiny 2D clusters | Binary classification check with two input dimensions | planned |
+Current checks:
 
-Status key: `ok` means demo and test coverage exist; `partial` means the
-check exists but is not fully verified; `planned` means not implemented yet.
+- [x] **Line fitting**: Scalar regression check for learning `y = ax + b`.
+- [x] **Sign separator**: Binary classification check for separating negative
+  and positive scalar inputs.
+- [x] **XOR logic gate**: Non-linear binary classification check for
+  hidden-layer MLPs.
+
+Possible next checks:
+
+- [ ] **AND / OR gates**: Linear logic gate sanity checks.
+- [ ] **Noisy line fitting**: Regression check with imperfect data.
+- [ ] **Tiny 2D clusters**: Binary classification check with two input
+  dimensions.
 
 ### Language Modeling
-- **Tiny Shakespeare**: Small smoke-test dataset.
-- **TinyStories**: Small-model language learning dataset.
-- **WikiText-2 / WikiText-103**: Clean language-modeling datasets.
-- **OpenWebText**: GPT-2-style web text corpus.
-- **Enwik8 / Enwik9**: Character-level Wikipedia benchmarks.
+
+- [ ] **Tiny Shakespeare**: Small smoke-test dataset.
+- [ ] **TinyStories**: Small-model language learning dataset.
+- [ ] **WikiText-2 / WikiText-103**: Clean language-modeling datasets.
+- [ ] **OpenWebText**: GPT-2-style web text corpus.
+- [ ] **Enwik8 / Enwik9**: Character-level Wikipedia benchmarks.
 
 ### Vision / SLAM
-- **MNIST / Fashion-MNIST**: Basic model testing.
-- **CIFAR-10 / CIFAR-100**: Small image benchmarks.
-- **STL-10**: Unsupervised visual feature learning.
-- **KITTI**: Autonomous driving / visual odometry benchmark.
-- **TUM RGB-D**: RGB-D SLAM benchmark.
-- **EuRoC MAV**: Visual-inertial SLAM benchmark.
+
+- [ ] **MNIST / Fashion-MNIST**: Basic model testing.
+- [ ] **CIFAR-10 / CIFAR-100**: Small image benchmarks.
+- [ ] **STL-10**: Unsupervised visual feature learning.
+- [ ] **KITTI**: Autonomous driving / visual odometry benchmark.
+- [ ] **TUM RGB-D**: RGB-D SLAM benchmark.
+- [ ] **EuRoC MAV**: Visual-inertial SLAM benchmark.
 
 ## Benchmarking
 
