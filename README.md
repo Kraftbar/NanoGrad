@@ -61,6 +61,9 @@ The project favors:
 - Benchmarks on simple core components first
 - Gradual expansion into LLM and SLAM experiments
 - Reasonable LOC growth without forcing extreme code golf
+- A **math-on-paper** code style: readable equations, matrices laid out as grids
+  where practical, one conceptual operation per line, and explicit intermediate
+  names over dense clever expressions
 
 The project does **not** optimize only for lowest lines of code. Code should stay understandable, testable, and flexible enough to experiment with new ideas.
 
@@ -125,6 +128,20 @@ NanoGrad benchmarks implementations using:
 - Dataset preprocessing time
 - SLAM trajectory error
 - Visual odometry drift
+
+## Quick Checks
+
+Run the scalar-autograd demo:
+
+```bash
+python3 demo.py
+```
+
+Run the current test suite:
+
+```bash
+python3 -m unittest discover
+```
 
 ## Status
 
