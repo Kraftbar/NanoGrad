@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from losses import binary_cross_entropy, mse_loss
 from metrics import tensor_binary_accuracy
+from optim import TensorSGD
 from tensor import Tensor, avg_pool2d, matmul
 from tensor_nn import TensorConv2D, TensorMLP, binary_mlp, linear
 from train import train_tensor_binary_classifier
@@ -91,6 +92,53 @@ def convolution_demo() -> None:
     print(f"pooled:   {pooled.tolist()}")
 
 
+def conv_training_demo() -> None:
+    layer, history = train_conv_pattern()
+
+    print("\nTensor conv training")
+    print(f"initial loss: {history[0]:.6f}")
+    print(f"final loss:   {history[-1]:.6f}")
+    print(f"kernel:       {layer.kernel.tolist()}")
+    print(f"bias:         {layer.bias.tolist()}")
+
+
+def train_conv_pattern(
+    *,
+    steps: int = 1000,
+    lr: float = 0.0005,
+) -> tuple[TensorConv2D, list[float]]:
+    image = Tensor.from_list([
+        [1, 2, 3, 4],
+        [5, 6, 7, 8],
+        [9, 10, 11, 12],
+        [13, 14, 15, 16],
+    ])
+    target = Tensor.from_list([
+        [-5, -5, -5],
+        [-5, -5, -5],
+        [-5, -5, -5],
+    ])
+    layer = TensorConv2D(
+        (2, 2),
+        kernel=Tensor.zeros((2, 2), requires_grad=True),
+        bias=Tensor.zeros((1,), requires_grad=True),
+    )
+    optimizer = TensorSGD(layer.parameters(), lr=lr)
+    history = []
+
+    for _ in range(steps):
+        prediction = layer(image)
+        loss = mse_loss(prediction, target)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        history.append(loss[0])
+
+    return layer, history
+
+
 def binary_mlp_demo() -> None:
     inputs = Tensor.from_list([
         [0, 0],
@@ -173,6 +221,7 @@ def main() -> None:
     matrix_multiply_demo()
     linear_layer_demo()
     convolution_demo()
+    conv_training_demo()
     binary_mlp_demo()
     tensor_training_demo()
 

@@ -24,6 +24,13 @@ class TensorDemoTests(unittest.TestCase):
         self.assertIn("Tensor convolution and pooling", text)
         self.assertIn("features: [[-5.0, -5.0, -5.0]", text)
         self.assertIn("pooled:   [[-5.0]]", text)
+        self.assertIn("Tensor conv training", text)
+
+    def test_conv_training_demo_learns_pattern(self) -> None:
+        _layer, history = tensor_demo.train_conv_pattern()
+
+        self.assertLess(history[-1], history[0])
+        self.assertLess(history[-1], 0.05)
 
 
 if __name__ == "__main__":
