@@ -45,6 +45,7 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Train tensor classifiers on AND, OR, and XOR logic gates
 - [x] Add local MNIST IDX dataset loading
 - [x] Add tensor multiclass loss, accuracy, and training helper
+- [x] Add local-file MNIST MLP demo entry point
 
 ### Next Small Checks
 
@@ -52,7 +53,7 @@ modules should prove that the core works on increasingly realistic checks.
 
 ### First Real Datasets
 
-- [ ] Train an MNIST MLP as the first image benchmark
+- [ ] Run and tune MNIST MLP on local data
 - [ ] Add convolution and pooling tensor operations
 - [ ] Train a LeNet-style MNIST model
 - [ ] Try a small CIFAR CNN after the MNIST path is stable
@@ -113,6 +114,7 @@ model.py         # scalar model definitions built from nn.py
 train.py         # scalar and tensor training loops
 demo.py          # scalar autograd training demo
 tensor_demo.py   # tensor math and tensor-autograd demos
+mnist_demo.py    # local-file MNIST MLP demo
 ```
 
 ## Reference Implementations
@@ -141,6 +143,12 @@ python3 tensor_demo.py
 
 Use the test suite as the main correctness check. The demos are small examples
 for inspecting the scalar-autograd and tensor paths by eye.
+
+Run the MNIST demo after placing the standard IDX gzip files under `data/mnist/`:
+
+```bash
+python3 mnist_demo.py
+```
 
 ## Status
 

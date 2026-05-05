@@ -1,9 +1,13 @@
 import unittest
 
-from datasets import and_gate, or_gate, xor_gate
+from datasets import TinyDataset, and_gate, or_gate, xor_gate
 from tensor import Tensor, matmul
 from tensor_nn import TensorLinear, TensorMLP
-from train import train_tensor_binary_classifier, train_tensor_multiclass_classifier
+from train import (
+    train_tensor_binary_classifier,
+    train_tensor_multiclass_classifier,
+    train_tensor_multiclass_dataset,
+)
 
 
 class TensorAutogradTests(unittest.TestCase):
@@ -218,6 +222,53 @@ class TensorAutogradTests(unittest.TestCase):
         self.assertLess(summary.final_loss, summary.initial_loss)
         self.assertLess(summary.final_loss, 0.01)
         self.assertEqual(summary.accuracy, 1.0)
+
+    def test_tensor_multiclass_dataset_training_uses_batches(self) -> None:
+        dataset = TinyDataset(
+            xs=[
+                [2.0, 0.0],
+                [3.0, 0.0],
+                [0.0, 2.0],
+                [0.0, 3.0],
+                [-2.0, -2.0],
+                [-3.0, -2.0],
+            ],
+            ys=[
+                0,
+                0,
+                1,
+                1,
+                2,
+                2,
+            ],
+        )
+        model = TensorLinear(
+            inputs=2,
+            outputs=3,
+            weight=Tensor.zeros((3, 2), requires_grad=True),
+            bias=Tensor.zeros((3,), requires_grad=True),
+        )
+
+        summary = train_tensor_multiclass_dataset(
+            model,
+            dataset,
+            epochs=100,
+            batch_size=2,
+            lr=0.2,
+            shuffle=True,
+            seed=0,
+        )
+
+        self.assertLess(summary.final_loss, summary.initial_loss)
+        self.assertEqual(summary.accuracy, 1.0)
+
+    def test_tensor_multiclass_dataset_training_epoch_error(self) -> None:
+        with self.assertRaises(ValueError):
+            train_tensor_multiclass_dataset(
+                TensorLinear(inputs=1, outputs=2),
+                TinyDataset([[0.0]], [0.0]),
+                epochs=0,
+            )
 
     def assert_grad_close(self, tensor: Tensor, loss_fn) -> None:
         self.assertIsNotNone(tensor.grad)

@@ -15,6 +15,7 @@ from metrics import binary_accuracy, tensor_binary_accuracy, tensor_multiclass_a
 from nn import Module
 from optim import SGD, TensorSGD
 from tensor import Tensor
+from datasets import TinyDataset
 
 
 @dataclass(frozen=True)
@@ -239,6 +240,49 @@ def train_tensor_multiclass_classifier(
     )
 
 
+def train_tensor_multiclass_dataset(
+    model,
+    dataset: TinyDataset,
+    *,
+    epochs: int = 1,
+    batch_size: int = 32,
+    lr: float = 0.05,
+    shuffle: bool = True,
+    seed: int | None = None,
+) -> TrainingSummary:
+    """Train a tensor multiclass model on TinyDataset batches."""
+
+    if epochs <= 0:
+        raise ValueError("epochs must be positive")
+
+    optimizer = TensorSGD(model.parameters(), lr=lr)
+    history = []
+    start = perf_counter()
+
+    for epoch in range(epochs):
+        batch_seed = None if seed is None else seed + epoch
+        for xs, ys in dataset.batches(batch_size, shuffle=shuffle, seed=batch_seed):
+            inputs = Tensor.from_list(xs)
+            targets = Tensor.from_list(ys)
+            logits = model(inputs)
+            loss = softmax_cross_entropy(logits, targets)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            history.append(loss[0])
+
+    elapsed_seconds = perf_counter() - start
+    accuracy = _tensor_multiclass_dataset_accuracy(model, dataset)
+
+    return TrainingSummary(
+        history=history,
+        elapsed_seconds=elapsed_seconds,
+        accuracy=accuracy,
+    )
+
+
 def binary_probabilities(model: Module, xs: list[list[float]]) -> list[float]:
     """Return sigmoid probabilities for a scalar-logit binary model."""
 
@@ -249,3 +293,9 @@ def binary_probabilities(model: Module, xs: list[list[float]]) -> list[float]:
             raise TypeError("binary probability prediction expects one scalar Value")
         probabilities.append(logit.sigmoid().data)
     return probabilities
+
+
+def _tensor_multiclass_dataset_accuracy(model, dataset: TinyDataset) -> float:
+    inputs = Tensor.from_list(dataset.xs)
+    targets = Tensor.from_list(dataset.ys)
+    return tensor_multiclass_accuracy(model(inputs), targets)
