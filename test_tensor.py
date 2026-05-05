@@ -9,6 +9,7 @@ from tensor import (
     matmul,
     permute,
     reshape,
+    stack,
     tensor_exp,
     tensor_log,
     tensor_mean,
@@ -101,6 +102,74 @@ class TensorTests(unittest.TestCase):
                 ],
             ],
         )
+
+    def test_stack_adds_a_new_axis(self) -> None:
+        a = Tensor.from_list([1.0, 2.0, 3.0])
+        b = Tensor.from_list([4.0, 5.0, 6.0])
+
+        self.assertEqual(stack([a, b]).shape, (2, 3))
+        self.assertEqual(
+            stack([a, b]).tolist(),
+            [
+                [1.0, 2.0, 3.0],
+                [4.0, 5.0, 6.0],
+            ],
+        )
+        self.assertEqual(stack([a, b], axis=1).shape, (3, 2))
+        self.assertEqual(
+            stack([a, b], axis=1).tolist(),
+            [
+                [1.0, 4.0],
+                [2.0, 5.0],
+                [3.0, 6.0],
+            ],
+        )
+
+    def test_stack_supports_nd_tensors_and_negative_axes(self) -> None:
+        a = Tensor.from_list([
+            [1.0, 2.0],
+            [3.0, 4.0],
+        ])
+        b = Tensor.from_list([
+            [5.0, 6.0],
+            [7.0, 8.0],
+        ])
+
+        self.assertEqual(Tensor.stack([a, b], axis=0).shape, (2, 2, 2))
+        self.assertEqual(
+            Tensor.stack([a, b], axis=0).tolist(),
+            [
+                [
+                    [1.0, 2.0],
+                    [3.0, 4.0],
+                ],
+                [
+                    [5.0, 6.0],
+                    [7.0, 8.0],
+                ],
+            ],
+        )
+        self.assertEqual(
+            stack([a, b], axis=-1).tolist(),
+            [
+                [
+                    [1.0, 5.0],
+                    [2.0, 6.0],
+                ],
+                [
+                    [3.0, 7.0],
+                    [4.0, 8.0],
+                ],
+            ],
+        )
+
+    def test_stack_validates_inputs(self) -> None:
+        with self.assertRaises(ValueError):
+            stack([])
+        with self.assertRaises(ValueError):
+            stack([Tensor.from_list([1.0]), Tensor.from_list([[2.0]])])
+        with self.assertRaises(ValueError):
+            stack([Tensor.from_list([1.0])], axis=2)
 
     def test_elementwise_add_and_multiply(self) -> None:
         a = Tensor.from_list([

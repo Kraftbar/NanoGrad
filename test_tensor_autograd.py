@@ -1,7 +1,7 @@
 import unittest
 
 from datasets import TinyDataset, and_gate, or_gate, xor_gate
-from tensor import Tensor, avg_pool2d, conv2d_valid, matmul
+from tensor import Tensor, avg_pool2d, conv2d_valid, matmul, stack
 from tensor_nn import TensorLinear, TensorMLP
 from train import (
     evaluate_tensor_multiclass_dataset,
@@ -145,6 +145,32 @@ class TensorAutogradTests(unittest.TestCase):
         loss.backward()
 
         self.assertEqual(x.grad, weights.data)
+
+    def test_stack_gradient_routes_to_each_input(self) -> None:
+        a = Tensor.from_list([
+            [1.0, 2.0],
+            [3.0, 4.0],
+        ], requires_grad=True)
+        b = Tensor.from_list([
+            [5.0, 6.0],
+            [7.0, 8.0],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            [
+                [0.5, -1.0],
+                [2.0, 3.0],
+            ],
+            [
+                [1.5, -0.5],
+                [0.25, 4.0],
+            ],
+        ])
+        loss = (stack([a, b], axis=0) * weights).sum()
+
+        loss.backward()
+
+        self.assertEqual(a.grad, weights.data[:4])
+        self.assertEqual(b.grad, weights.data[4:])
 
     def test_conv2d_valid_gradients_match_finite_difference(self) -> None:
         image = Tensor.from_list([

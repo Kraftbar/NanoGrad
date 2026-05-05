@@ -84,6 +84,10 @@ class Tensor:
         shape = _infer_shape(values)
         return cls(_flatten_nested(values), shape, requires_grad=requires_grad)
 
+    @classmethod
+    def stack(cls, tensors: Sequence["Tensor"], axis: int = 0) -> "Tensor":
+        return stack(tensors, axis=axis)
+
     def __add__(self, other: Number | "Tensor") -> "Tensor":
         return add(self, other)
 
@@ -473,6 +477,54 @@ def flatten(tensor: Tensor) -> Tensor:
     """Return all tensor values as one row-major vector."""
 
     return reshape(tensor, (tensor.numel,))
+
+
+def stack(tensors: Sequence[Tensor], axis: int = 0) -> Tensor:
+    """Join same-shaped tensors along a new axis."""
+
+    if not tensors:
+        raise ValueError("stack expects at least one tensor")
+
+    base_shape = tensors[0].shape
+    for tensor in tensors:
+        if tensor.shape != base_shape:
+            raise ValueError("stack expects all tensor shapes to match")
+
+    axis = _normalize_insert_axis(axis, len(base_shape))
+    out_shape = base_shape[:axis] + (len(tensors),) + base_shape[axis:]
+    data = []
+    for out_flat_index in range(_numel(out_shape)):
+        out_index = _unravel_index(out_flat_index, out_shape)
+        tensor_index = out_index[axis]
+        source_index = out_index[:axis] + out_index[axis + 1 :]
+        data.append(tensors[tensor_index].data[_flat_index(source_index, base_shape)])
+
+    out = Tensor(
+        data,
+        out_shape,
+        requires_grad=any(tensor.requires_grad for tensor in tensors),
+        _children=tuple(tensors),
+        _op="stack",
+    )
+
+    def _backward() -> None:
+        grad = _grad_data(out)
+        tensor_grads = [
+            [0.0] * tensor.numel
+            for tensor in tensors
+        ]
+        for out_flat_index, value in enumerate(grad):
+            out_index = _unravel_index(out_flat_index, out_shape)
+            tensor_index = out_index[axis]
+            source_index = out_index[:axis] + out_index[axis + 1 :]
+            tensor_grads[tensor_index][_flat_index(source_index, base_shape)] += value
+
+        for tensor, tensor_grad in zip(tensors, tensor_grads):
+            if tensor.requires_grad:
+                _add_grad(tensor, tensor_grad)
+
+    out._backward = _backward
+    return out
 
 
 def permute(tensor: Tensor, axes: tuple[int, ...]) -> Tensor:
@@ -988,6 +1040,14 @@ def _normalize_axis(axis: int, ndim: int) -> int:
     if axis < 0:
         axis += ndim
     if axis < 0 or axis >= ndim:
+        raise ValueError("axis out of range")
+    return axis
+
+
+def _normalize_insert_axis(axis: int, ndim: int) -> int:
+    if axis < 0:
+        axis += ndim + 1
+    if axis < 0 or axis > ndim:
         raise ValueError("axis out of range")
     return axis
 
