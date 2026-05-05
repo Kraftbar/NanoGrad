@@ -472,6 +472,38 @@ class TensorTests(unittest.TestCase):
             ],
         )
 
+    def test_conv2d_valid_channel_stack(self) -> None:
+        image = Tensor.from_list([
+            [
+                [1, 2, 3],
+                [4, 5, 6],
+                [7, 8, 9],
+            ],
+            [
+                [10, 20, 30],
+                [40, 50, 60],
+                [70, 80, 90],
+            ],
+        ])
+        kernel = Tensor.from_list([
+            [
+                [1, 0],
+                [0, -1],
+            ],
+            [
+                [0.5, 0],
+                [0, -0.5],
+            ],
+        ])
+
+        self.assertEqual(
+            conv2d_valid(image, kernel).tolist(),
+            [
+                [-24.0, -24.0],
+                [-24.0, -24.0],
+            ],
+        )
+
     def test_avg_pool2d(self) -> None:
         image = Tensor.from_list([
             [1, 2, 3, 4],
@@ -697,6 +729,18 @@ class TensorTests(unittest.TestCase):
                     [1, 2],
                     [3, 4],
                 ]),
+            )
+
+        with self.assertRaises(ValueError):
+            conv2d_valid(
+                Tensor.zeros((2, 3, 3)),
+                Tensor.zeros((1, 2, 2)),
+            )
+
+        with self.assertRaises(ValueError):
+            conv2d_valid(
+                Tensor.zeros((2, 3, 3)),
+                Tensor.zeros((2, 2)),
             )
 
         with self.assertRaises(ValueError):

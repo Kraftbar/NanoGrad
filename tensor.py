@@ -514,17 +514,24 @@ def permute(tensor: Tensor, axes: tuple[int, ...]) -> Tensor:
 
 
 def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
-    """Apply a single 2D valid convolution-style filter.
+    """Apply a valid convolution-style filter.
 
     This uses the cross-correlation convention common in neural networks:
     the kernel is slid over the image without flipping it.
     """
 
-    if len(image.shape) != 2 or len(kernel.shape) != 2:
-        raise ValueError("conv2d_valid expects 2D image and kernel tensors")
+    if image.ndim == 2 and kernel.ndim == 2:
+        channels = 1
+        image_rows, image_cols = image.shape
+        kernel_rows, kernel_cols = kernel.shape
+    elif image.ndim == 3 and kernel.ndim == 3:
+        channels, image_rows, image_cols = image.shape
+        kernel_channels, kernel_rows, kernel_cols = kernel.shape
+        if channels != kernel_channels:
+            raise ValueError("conv2d_valid image and kernel channels must match")
+    else:
+        raise ValueError("conv2d_valid expects matching 2D or 3D tensors")
 
-    image_rows, image_cols = image.shape
-    kernel_rows, kernel_cols = kernel.shape
     if kernel_rows > image_rows or kernel_cols > image_cols:
         raise ValueError("conv2d_valid kernel must fit inside the image")
 
@@ -534,12 +541,18 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
     for out_row in range(out_rows):
         for out_col in range(out_cols):
             total = 0.0
-            for kernel_row in range(kernel_rows):
-                for kernel_col in range(kernel_cols):
-                    total += (
-                        image[out_row + kernel_row, out_col + kernel_col]
-                        * kernel[kernel_row, kernel_col]
-                    )
+            for channel in range(channels):
+                for kernel_row in range(kernel_rows):
+                    for kernel_col in range(kernel_cols):
+                        total += (
+                            _conv2d_value(
+                                image,
+                                channel,
+                                out_row + kernel_row,
+                                out_col + kernel_col,
+                            )
+                            * _conv2d_value(kernel, channel, kernel_row, kernel_col)
+                        )
             data.append(total)
 
     out = Tensor(
@@ -557,34 +570,71 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
             for out_row in range(out_rows):
                 for out_col in range(out_cols):
                     out_grad = grad[out_row * out_cols + out_col]
-                    for kernel_row in range(kernel_rows):
-                        for kernel_col in range(kernel_cols):
-                            image_index = (
-                                (out_row + kernel_row) * image_cols
-                                + out_col
-                                + kernel_col
-                            )
-                            image_grad[image_index] += (
-                                out_grad * kernel[kernel_row, kernel_col]
-                            )
+                    for channel in range(channels):
+                        for kernel_row in range(kernel_rows):
+                            for kernel_col in range(kernel_cols):
+                                image_index = _conv2d_flat_index(
+                                    image.shape,
+                                    channel,
+                                    out_row + kernel_row,
+                                    out_col + kernel_col,
+                                )
+                                image_grad[image_index] += (
+                                    out_grad
+                                    * _conv2d_value(
+                                        kernel,
+                                        channel,
+                                        kernel_row,
+                                        kernel_col,
+                                    )
+                                )
             _add_grad(image, image_grad)
         if kernel.requires_grad:
             kernel_grad = [0.0] * len(kernel.data)
-            for kernel_row in range(kernel_rows):
-                for kernel_col in range(kernel_cols):
-                    total = 0.0
-                    for out_row in range(out_rows):
-                        for out_col in range(out_cols):
-                            out_grad = grad[out_row * out_cols + out_col]
-                            total += (
-                                out_grad
-                                * image[out_row + kernel_row, out_col + kernel_col]
-                            )
-                    kernel_grad[kernel_row * kernel_cols + kernel_col] += total
+            for channel in range(channels):
+                for kernel_row in range(kernel_rows):
+                    for kernel_col in range(kernel_cols):
+                        total = 0.0
+                        for out_row in range(out_rows):
+                            for out_col in range(out_cols):
+                                out_grad = grad[out_row * out_cols + out_col]
+                                total += (
+                                    out_grad
+                                    * _conv2d_value(
+                                        image,
+                                        channel,
+                                        out_row + kernel_row,
+                                        out_col + kernel_col,
+                                    )
+                                )
+                        kernel_index = _conv2d_flat_index(
+                            kernel.shape,
+                            channel,
+                            kernel_row,
+                            kernel_col,
+                        )
+                        kernel_grad[kernel_index] += total
             _add_grad(kernel, kernel_grad)
 
     out._backward = _backward
     return out
+
+
+def _conv2d_value(tensor: Tensor, channel: int, row: int, col: int) -> float:
+    if tensor.ndim == 2:
+        return tensor[row, col]
+    return tensor[channel, row, col]
+
+
+def _conv2d_flat_index(
+    shape: tuple[int, ...],
+    channel: int,
+    row: int,
+    col: int,
+) -> int:
+    if len(shape) == 2:
+        return _flat_index((row, col), shape)
+    return _flat_index((channel, row, col), shape)
 
 
 def avg_pool2d(
