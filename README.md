@@ -40,10 +40,11 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Add simple dataset and dataloader utilities
 - [x] Track loss, accuracy, and basic runtime on small examples
 - [x] Add a tensor binary MLP forward pass
+- [x] Add tensor autograd for core tensor math
+- [x] Train tensor classifiers on AND, OR, and XOR logic gates
 
 ### Next Small Checks
 
-- [ ] Train tensor MLPs on logic gates once the tensor training path exists
 - [ ] Keep implementations readable rather than over-compressed
 
 ### First Real Datasets
@@ -99,16 +100,16 @@ data/            # datasets and dataloaders
 
 datasets.py      # tiny synthetic datasets and batch helpers
 engine.py        # scalar autograd core
-tensor.py        # tensor container and non-autograd tensor operations
-tensor_nn.py     # non-autograd tensor neural-network helpers
+tensor.py        # tensor container, tensor operations, and tensor autograd
+tensor_nn.py     # tensor neural-network helpers
 losses.py        # tensor loss functions
 metrics.py       # accuracy and related metrics
 nn.py            # scalar neural-network layers and activations
 optim.py         # SGD, Adam, etc.
 model.py         # scalar model definitions built from nn.py
-train.py         # scalar training loops
+train.py         # scalar and tensor training loops
 demo.py          # scalar autograd training demo
-tensor_demo.py   # non-autograd tensor math demo
+tensor_demo.py   # tensor math and tensor-autograd demos
 ```
 
 ## Reference Implementations

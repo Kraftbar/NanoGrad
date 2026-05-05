@@ -1,4 +1,4 @@
-"""Run a tiny non-autograd tensor math demo."""
+"""Run tiny tensor math and tensor-autograd demos."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from losses import binary_cross_entropy, mse_loss
 from metrics import tensor_binary_accuracy
 from tensor import Tensor, matmul
 from tensor_nn import binary_mlp, linear
+from train import train_tensor_binary_classifier
 
 
 def regression_loss_demo() -> None:
@@ -104,12 +105,60 @@ def binary_mlp_demo() -> None:
     print(f"accuracy:    {accuracy:.3f}")
 
 
+def tensor_training_demo() -> None:
+    inputs = Tensor.from_list([
+        [0, 0],
+        [0, 1],
+        [1, 0],
+        [1, 1],
+    ])
+    targets = Tensor.from_list([
+        [0],
+        [1],
+        [1],
+        [0],
+    ])
+    hidden_weight = Tensor.from_list([
+        [1.0, -1.0],
+        [-1.0, 1.0],
+    ], requires_grad=True)
+    hidden_bias = Tensor.from_list([0.0, 0.0], requires_grad=True)
+    output_weight = Tensor.from_list([[0.1, 0.1]], requires_grad=True)
+    output_bias = Tensor.from_list([0.0], requires_grad=True)
+
+    summary = train_tensor_binary_classifier(
+        lambda: binary_mlp(
+            inputs,
+            hidden_weight,
+            hidden_bias,
+            output_weight,
+            output_bias,
+        ),
+        targets,
+        [
+            hidden_weight,
+            hidden_bias,
+            output_weight,
+            output_bias,
+        ],
+        steps=2000,
+        lr=0.5,
+    )
+
+    print("\nTensor binary MLP training")
+    print(f"initial loss: {summary.initial_loss:.6f}")
+    print(f"final loss:   {summary.final_loss:.6f}")
+    print(f"accuracy:     {summary.accuracy:.3f}")
+    print(f"runtime:      {summary.elapsed_seconds:.4f}s")
+
+
 def main() -> None:
     regression_loss_demo()
     binary_classification_demo()
     matrix_multiply_demo()
     linear_layer_demo()
     binary_mlp_demo()
+    tensor_training_demo()
 
 
 if __name__ == "__main__":

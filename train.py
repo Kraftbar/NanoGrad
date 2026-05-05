@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from time import perf_counter
 
 from engine import Value
-from metrics import binary_accuracy
+from losses import binary_cross_entropy as tensor_binary_cross_entropy
+from metrics import binary_accuracy, tensor_binary_accuracy
 from nn import Module
-from optim import SGD
+from optim import SGD, TensorSGD
+from tensor import Tensor
 
 
 @dataclass(frozen=True)
@@ -157,6 +160,40 @@ def train_binary_classifier_summary(
     history = train_binary_classifier(model, xs, ys, steps=steps, lr=lr)
     elapsed_seconds = perf_counter() - start
     accuracy = binary_accuracy(binary_probabilities(model, xs), ys)
+
+    return TrainingSummary(
+        history=history,
+        elapsed_seconds=elapsed_seconds,
+        accuracy=accuracy,
+    )
+
+
+def train_tensor_binary_classifier(
+    forward: Callable[[], Tensor],
+    targets: Tensor,
+    parameters: list[Tensor],
+    *,
+    steps: int = 100,
+    lr: float = 0.05,
+) -> TrainingSummary:
+    """Train a tensor binary classifier from a closure over inputs and weights."""
+
+    optimizer = TensorSGD(parameters, lr=lr)
+    history = []
+    start = perf_counter()
+
+    for _ in range(steps):
+        probabilities = forward()
+        loss = tensor_binary_cross_entropy(probabilities, targets)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        history.append(loss[0])
+
+    elapsed_seconds = perf_counter() - start
+    accuracy = tensor_binary_accuracy(forward(), targets)
 
     return TrainingSummary(
         history=history,
