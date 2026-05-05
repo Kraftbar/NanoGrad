@@ -85,6 +85,7 @@ class MNISTDemoTests(unittest.TestCase):
             "model.json",
             "--load-model",
             "model-in.json",
+            "--show-confusion",
             "--check-data",
         ])
 
@@ -99,6 +100,7 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertEqual(args.report_every, 2)
         self.assertEqual(args.save_model, Path("model.json"))
         self.assertEqual(args.load_model, Path("model-in.json"))
+        self.assertTrue(args.show_confusion)
         self.assertTrue(args.check_data)
 
     def test_run_trains_on_tiny_idx_fixture(self) -> None:
@@ -123,6 +125,7 @@ class MNISTDemoTests(unittest.TestCase):
                 "0.1",
                 "--report-every",
                 "1",
+                "--show-confusion",
             ])
 
             output = io.StringIO()
@@ -141,6 +144,7 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertIn("epoch 1/2", text)
         self.assertIn("val_loss=", text)
         self.assertIn("val_acc=", text)
+        self.assertIn("confusion:", text)
 
     def test_run_check_data_on_tiny_idx_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

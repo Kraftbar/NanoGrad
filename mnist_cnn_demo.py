@@ -6,7 +6,12 @@ import argparse
 from pathlib import Path
 
 from datasets import load_mnist
-from mnist_demo import DATA_DIR, find_mnist_files, print_epoch_report
+from mnist_demo import (
+    DATA_DIR,
+    find_mnist_files,
+    print_confusion_matrix,
+    print_epoch_report,
+)
 from tensor import Tensor, avg_pool2d
 from tensor_nn import TensorConv2D, TensorLinear, TensorModule
 from train import train_tensor_multiclass_dataset
@@ -272,6 +277,8 @@ def run(args: argparse.Namespace) -> None:
     print(f"runtime:      {summary.elapsed_seconds:.4f}s")
     if summary.examples_per_second is not None:
         print(f"samples/s:    {summary.examples_per_second:.1f}")
+    if args.show_confusion and summary.confusion_matrix is not None:
+        print_confusion_matrix(summary.confusion_matrix)
 
     if args.save_model is not None:
         model.save(args.save_model)
@@ -297,6 +304,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--report-every", type=int, default=0)
     parser.add_argument("--save-model", type=Path)
     parser.add_argument("--load-model", type=Path)
+    parser.add_argument(
+        "--show-confusion",
+        action="store_true",
+        help="Print the train-set confusion matrix after evaluation.",
+    )
     parser.add_argument(
         "--check-data",
         action="store_true",

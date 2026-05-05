@@ -98,6 +98,8 @@ def run(args: argparse.Namespace) -> None:
     print(f"runtime:      {summary.elapsed_seconds:.4f}s")
     if summary.examples_per_second is not None:
         print(f"samples/s:    {summary.examples_per_second:.1f}")
+    if args.show_confusion and summary.confusion_matrix is not None:
+        print_confusion_matrix(summary.confusion_matrix)
 
     if args.save_model is not None:
         model.save(args.save_model)
@@ -206,11 +208,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--save-model", type=Path)
     parser.add_argument("--load-model", type=Path)
     parser.add_argument(
+        "--show-confusion",
+        action="store_true",
+        help="Print the train-set confusion matrix after evaluation.",
+    )
+    parser.add_argument(
         "--check-data",
         action="store_true",
         help="Verify local MNIST files and print shapes without training.",
     )
     return parser.parse_args(argv)
+
+
+def print_confusion_matrix(matrix: list[list[int]]) -> None:
+    print("confusion:")
+    for row in matrix:
+        print("  " + " ".join(str(value) for value in row))
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -55,6 +55,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
             "model.json",
             "--load-model",
             "model-in.json",
+            "--show-confusion",
             "--check-data",
         ])
 
@@ -75,6 +76,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertEqual(args.report_every, 2)
         self.assertEqual(args.save_model, Path("model.json"))
         self.assertEqual(args.load_model, Path("model-in.json"))
+        self.assertTrue(args.show_confusion)
         self.assertTrue(args.check_data)
 
     def test_cnn_preset_supplies_default_shape_values(self) -> None:
@@ -252,6 +254,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
                 "0.1",
                 "--report-every",
                 "1",
+                "--show-confusion",
             ])
 
             output = io.StringIO()
@@ -272,6 +275,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertIn("val loss:", text)
         self.assertIn("val accuracy:", text)
         self.assertIn("epoch 1/2", text)
+        self.assertIn("confusion:", text)
 
     def test_run_check_data_on_tiny_idx_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -34,6 +34,7 @@ class TrainingSummary:
     evaluation_loss: float | None = None
     validation_loss: float | None = None
     examples_seen: int | None = None
+    confusion_matrix: list[list[int]] | None = None
 
     @property
     def initial_loss(self) -> float:
@@ -341,6 +342,7 @@ def train_tensor_multiclass_dataset(
                     else validation_eval.loss
                 ),
                 examples_seen=len(dataset) * (epoch + 1),
+                confusion_matrix=train_eval.confusion_matrix,
             )
             epoch_callback(epoch + 1, epoch_summary)
 
@@ -376,6 +378,7 @@ def train_tensor_multiclass_dataset(
             else validation_eval.loss
         ),
         examples_seen=len(dataset) * epochs,
+        confusion_matrix=train_eval.confusion_matrix,
     )
 
 
