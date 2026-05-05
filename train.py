@@ -28,6 +28,7 @@ class TrainingSummary:
     validation_accuracy: float | None = None
     evaluation_loss: float | None = None
     validation_loss: float | None = None
+    examples_seen: int | None = None
 
     @property
     def initial_loss(self) -> float:
@@ -36,6 +37,14 @@ class TrainingSummary:
     @property
     def final_loss(self) -> float:
         return self.history[-1]
+
+    @property
+    def examples_per_second(self) -> float | None:
+        if self.examples_seen is None:
+            return None
+        if self.elapsed_seconds <= 0.0:
+            return 0.0
+        return self.examples_seen / self.elapsed_seconds
 
 
 @dataclass(frozen=True)
@@ -318,6 +327,7 @@ def train_tensor_multiclass_dataset(
                     if validation_eval is None
                     else validation_eval.loss
                 ),
+                examples_seen=len(dataset) * (epoch + 1),
             )
             epoch_callback(epoch + 1, epoch_summary)
 
@@ -352,6 +362,7 @@ def train_tensor_multiclass_dataset(
             if validation_eval is None
             else validation_eval.loss
         ),
+        examples_seen=len(dataset) * epochs,
     )
 
 

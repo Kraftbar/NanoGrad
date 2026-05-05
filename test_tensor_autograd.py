@@ -778,6 +778,8 @@ class TensorAutogradTests(unittest.TestCase):
         self.assertIsNotNone(summary.validation_loss)
         self.assertGreater(summary.evaluation_loss, 0.0)
         self.assertGreater(summary.validation_loss, 0.0)
+        self.assertEqual(summary.examples_seen, len(dataset) * 100)
+        self.assertIsNotNone(summary.examples_per_second)
 
     def test_tensor_multiclass_dataset_evaluation_uses_batches(self) -> None:
         dataset = TinyDataset(
@@ -850,13 +852,14 @@ class TensorAutogradTests(unittest.TestCase):
             lr=0.2,
             shuffle=False,
             epoch_callback=lambda epoch, summary: reports.append(
-                (epoch, summary.evaluation_loss, summary.accuracy)
+                (epoch, summary.evaluation_loss, summary.accuracy, summary.examples_seen)
             ),
         )
 
         self.assertEqual([report[0] for report in reports], [1, 2, 3])
         self.assertTrue(all(report[1] > 0.0 for report in reports))
         self.assertTrue(all(report[2] is not None for report in reports))
+        self.assertEqual([report[3] for report in reports], [2, 4, 6])
 
     def test_tensor_multiclass_dataset_training_epoch_error(self) -> None:
         with self.assertRaises(ValueError):

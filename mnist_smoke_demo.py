@@ -95,6 +95,8 @@ def main() -> None:
     print(f"final loss:   {summary.final_loss:.6f}")
     print(f"accuracy:     {summary.accuracy:.3f}")
     print(f"runtime:      {summary.elapsed_seconds:.4f}s")
+    if summary.examples_per_second is not None:
+        print(f"samples/s:    {summary.examples_per_second:.1f}")
 
 
 if __name__ == "__main__":

@@ -270,6 +270,8 @@ def run(args: argparse.Namespace) -> None:
     if summary.validation_accuracy is not None:
         print(f"val accuracy: {summary.validation_accuracy:.3f}")
     print(f"runtime:      {summary.elapsed_seconds:.4f}s")
+    if summary.examples_per_second is not None:
+        print(f"samples/s:    {summary.examples_per_second:.1f}")
 
     if args.save_model is not None:
         model.save(args.save_model)

@@ -14,6 +14,7 @@ from engine import Value
 from metrics import binary_accuracy
 from model import MLP
 from train import (
+    TrainingSummary,
     binary_cross_entropy,
     binary_probabilities,
     train_binary_classifier,
@@ -46,6 +47,23 @@ class TrainingTests(unittest.TestCase):
         self.assertLess(summary.final_loss, summary.initial_loss)
         self.assertGreaterEqual(summary.elapsed_seconds, 0.0)
         self.assertIsNone(summary.accuracy)
+        self.assertIsNone(summary.examples_seen)
+        self.assertIsNone(summary.examples_per_second)
+
+    def test_training_summary_reports_examples_per_second(self) -> None:
+        summary = TrainingSummary(
+            history=[1.0],
+            elapsed_seconds=2.0,
+            examples_seen=10,
+        )
+        zero_time = TrainingSummary(
+            history=[1.0],
+            elapsed_seconds=0.0,
+            examples_seen=10,
+        )
+
+        self.assertEqual(summary.examples_per_second, 5.0)
+        self.assertEqual(zero_time.examples_per_second, 0.0)
 
     def test_noisy_regression_loss_decreases(self) -> None:
         random.seed(0)
