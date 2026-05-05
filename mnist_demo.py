@@ -93,6 +93,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"inputs:       {inputs}")
     print(f"classes:      {classes}")
     print(f"activation:   {args.activation}")
+    print(f"parameters:   {model.num_parameters()}")
     print(f"initial loss: {summary.initial_loss:.6f}")
     print(f"final batch:  {summary.final_loss:.6f}")
     if summary.evaluation_loss is not None:

@@ -179,6 +179,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
 
         self.assertEqual(logits.shape, (2, 10))
         self.assertEqual(len(model.parameters()), 6)
+        self.assertEqual(model.num_parameters(), 5142)
 
     def test_build_model_uses_requested_architecture(self) -> None:
         simple_args = _apply_preset(parse_args(["--preset", "tiny"]))
@@ -270,6 +271,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertIn("architecture: simple", text)
         self.assertIn("activation:   relu", text)
         self.assertIn("filters:      2", text)
+        self.assertIn("parameters:   16", text)
         self.assertIn("final batch:", text)
         self.assertIn("train loss:", text)
         self.assertIn("val loss:", text)

@@ -16,6 +16,9 @@ class TensorModule:
     def parameters(self) -> list[Tensor]:
         return []
 
+    def num_parameters(self) -> int:
+        return sum(parameter.numel for parameter in self.parameters())
+
     def zero_grad(self) -> None:
         for parameter in self.parameters():
             parameter.zero_grad()

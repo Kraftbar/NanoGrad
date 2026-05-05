@@ -14,6 +14,9 @@ class Module:
     def parameters(self) -> list[Value]:
         return []
 
+    def num_parameters(self) -> int:
+        return len(self.parameters())
+
     def zero_grad(self) -> None:
         for parameter in self.parameters():
             parameter.grad = 0.0

@@ -141,6 +141,7 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertIn("inputs:       4", text)
         self.assertIn("classes:      2", text)
         self.assertIn("activation:   tanh", text)
+        self.assertIn("parameters:   23", text)
         self.assertIn("final batch:", text)
         self.assertIn("train loss:", text)
         self.assertIn("val loss:", text)

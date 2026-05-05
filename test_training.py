@@ -164,6 +164,13 @@ class TrainingTests(unittest.TestCase):
                 self.assertLess(history[-1], 0.2)
                 self.assertEqual(binary_accuracy(probabilities, ys), 1.0)
 
+    def test_scalar_model_counts_parameters(self) -> None:
+        random.seed(0)
+
+        model = MLP(inputs=2, layers=[4, 1])
+
+        self.assertEqual(model.num_parameters(), 17)
+
     def test_xor_classifier_learns_non_linear_pattern(self) -> None:
         random.seed(0)
 

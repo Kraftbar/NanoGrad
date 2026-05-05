@@ -436,6 +436,7 @@ class TensorNNTests(unittest.TestCase):
 
         self.assertEqual(outputs.shape, (2, 1))
         self.assertEqual(len(model.parameters()), 4)
+        self.assertEqual(model.num_parameters(), 13)
         self.assertEqual(model.state_dict(), repeat.state_dict())
 
     def test_tensor_mlp_accepts_tanh_activation(self) -> None:
