@@ -24,6 +24,30 @@ class TensorAutogradTests(unittest.TestCase):
             ],
         )
 
+    def test_subtraction_and_scalar_reverse_gradients(self) -> None:
+        x = Tensor.from_list([1.0, -2.0, 3.0], requires_grad=True)
+        y = Tensor.from_list([0.5, 4.0, -1.0], requires_grad=True)
+        loss = ((10 - x) + (y - 3) - (x - y)).sum()
+
+        loss.backward()
+
+        self.assertEqual(x.grad, [-2.0, -2.0, -2.0])
+        self.assertEqual(y.grad, [2.0, 2.0, 2.0])
+
+    def test_backward_with_explicit_gradient(self) -> None:
+        x = Tensor.from_list([1.0, 2.0, 3.0], requires_grad=True)
+        y = x * x
+
+        y.backward([1.0, 0.5, -1.0])
+
+        self.assertEqual(x.grad, [2.0, 2.0, -6.0])
+
+    def test_non_scalar_backward_requires_explicit_gradient(self) -> None:
+        x = Tensor.from_list([1.0, 2.0], requires_grad=True)
+
+        with self.assertRaises(ValueError):
+            x.backward()
+
     def test_matmul_gradients_match_finite_difference(self) -> None:
         weight = Tensor.from_list([
             [1.0, -2.0],
@@ -43,6 +67,43 @@ class TensorAutogradTests(unittest.TestCase):
         self.assert_grad_close(weight, loss_fn)
         self.assert_grad_close(inputs, loss_fn)
 
+    def test_transpose_gradient_matches_finite_difference(self) -> None:
+        x = Tensor.from_list([
+            [1.0, -2.0, 3.0],
+            [0.5, 4.0, -1.0],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            [2.0, -1.0],
+            [0.5, 3.0],
+        ])
+        loss = matmul(x.T, weights).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            return matmul(x.T, weights).sum()[0]
+
+        self.assert_grad_close(x, loss_fn)
+
+    def test_axis_reduction_gradients(self) -> None:
+        x = Tensor.from_list([
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+        ], requires_grad=True)
+        row_weights = Tensor.from_list([2.0, -1.0])
+        col_weights = Tensor.from_list([0.5, 1.5, -2.0])
+        loss = (x.sum(axis=1) * row_weights).sum()
+        loss = loss + (x.mean(axis=0) * col_weights).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            row_loss = (x.sum(axis=1) * row_weights).sum()
+            col_loss = (x.mean(axis=0) * col_weights).sum()
+            return (row_loss + col_loss)[0]
+
+        self.assert_grad_close(x, loss_fn)
+
     def test_row_broadcast_bias_gradient(self) -> None:
         inputs = Tensor.from_list([
             [1.0, 2.0],
@@ -54,6 +115,19 @@ class TensorAutogradTests(unittest.TestCase):
         loss.backward()
 
         self.assertEqual(bias.grad, [2.0, 2.0])
+
+    def test_row_broadcast_multiply_gradient(self) -> None:
+        inputs = Tensor.from_list([
+            [1.0, 2.0],
+            [3.0, 4.0],
+        ], requires_grad=True)
+        row = Tensor.from_list([10.0, -2.0], requires_grad=True)
+        loss = (inputs * row).sum()
+
+        loss.backward()
+
+        self.assertEqual(inputs.grad, [10.0, -2.0, 10.0, -2.0])
+        self.assertEqual(row.grad, [4.0, 6.0])
 
     def test_log_sigmoid_gradient_matches_finite_difference(self) -> None:
         x = Tensor.from_list([0.25, -0.5], requires_grad=True)
