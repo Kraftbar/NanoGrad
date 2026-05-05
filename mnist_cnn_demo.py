@@ -8,11 +8,11 @@ from pathlib import Path
 from datasets import load_mnist
 from mnist_demo import DATA_DIR, find_mnist_files, print_epoch_report
 from tensor import Tensor, avg_pool2d
-from tensor_nn import TensorConv2D, TensorLinear
+from tensor_nn import TensorConv2D, TensorLinear, TensorModule
 from train import train_tensor_multiclass_dataset
 
 
-class MNISTCNN:
+class MNISTCNN(TensorModule):
     """Small channel-first CNN for local MNIST experiments."""
 
     def __init__(
@@ -74,6 +74,16 @@ class MNISTCNN:
             *self.classifier.parameters(),
         ]
 
+    def state_dict(self) -> dict:
+        return {
+            "conv": self.conv.state_dict(),
+            "classifier": self.classifier.state_dict(),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        self.conv.load_state_dict(state["conv"])
+        self.classifier.load_state_dict(state["classifier"])
+
 
 def run(args: argparse.Namespace) -> None:
     images_path, labels_path = find_mnist_files(args.data_dir)
@@ -104,6 +114,9 @@ def run(args: argparse.Namespace) -> None:
         pool_size=args.pool_size,
         seed=args.seed,
     )
+    if args.load_model is not None:
+        model.load(args.load_model)
+
     summary = train_tensor_multiclass_dataset(
         model,
         dataset,
@@ -143,6 +156,10 @@ def run(args: argparse.Namespace) -> None:
         print(f"val accuracy: {summary.validation_accuracy:.3f}")
     print(f"runtime:      {summary.elapsed_seconds:.4f}s")
 
+    if args.save_model is not None:
+        model.save(args.save_model)
+        print(f"saved model:  {args.save_model}")
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -157,6 +174,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pool-size", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--report-every", type=int, default=0)
+    parser.add_argument("--save-model", type=Path)
+    parser.add_argument("--load-model", type=Path)
     return parser.parse_args(argv)
 
 

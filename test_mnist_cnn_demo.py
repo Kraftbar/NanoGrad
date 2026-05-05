@@ -35,6 +35,10 @@ class MNISTCNNDemoTests(unittest.TestCase):
             "9",
             "--report-every",
             "2",
+            "--save-model",
+            "model.json",
+            "--load-model",
+            "model-in.json",
         ])
 
         self.assertEqual(args.data_dir, Path("custom"))
@@ -48,6 +52,8 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertEqual(args.pool_size, 1)
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.report_every, 2)
+        self.assertEqual(args.save_model, Path("model.json"))
+        self.assertEqual(args.load_model, Path("model-in.json"))
 
     def test_mnist_cnn_forward_shape(self) -> None:
         model = MNISTCNN(
@@ -136,6 +142,62 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertIn("val loss:", text)
         self.assertIn("val accuracy:", text)
         self.assertIn("epoch 1/2", text)
+
+    def test_run_saves_and_loads_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            save_path = data_dir / "mnist-cnn.json"
+            reload_path = data_dir / "mnist-cnn-reloaded.json"
+            _write_mnist_images(data_dir / "train-images-idx3-ubyte.gz")
+            _write_mnist_labels(data_dir / "train-labels-idx1-ubyte.gz")
+            args = parse_args([
+                "--data-dir",
+                str(data_dir),
+                "--limit",
+                "4",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "2",
+                "--filters",
+                "2",
+                "--kernel-size",
+                "2",
+                "--pool-size",
+                "1",
+                "--save-model",
+                str(save_path),
+            ])
+            with redirect_stdout(io.StringIO()):
+                run(args)
+
+            reload_args = parse_args([
+                "--data-dir",
+                str(data_dir),
+                "--limit",
+                "4",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "2",
+                "--filters",
+                "2",
+                "--kernel-size",
+                "2",
+                "--pool-size",
+                "1",
+                "--load-model",
+                str(save_path),
+                "--save-model",
+                str(reload_path),
+            ])
+            output = io.StringIO()
+            with redirect_stdout(output):
+                run(reload_args)
+
+            self.assertTrue(save_path.exists())
+            self.assertTrue(reload_path.exists())
+            self.assertIn("saved model:", output.getvalue())
 
 
 def _write_mnist_images(path: Path) -> None:
