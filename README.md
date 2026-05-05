@@ -8,7 +8,25 @@ The project starts with a minimal autograd core and builds small, visible
 learning checks on top of it before moving toward MNIST, LeNet-style vision,
 and tiny language models.
 
-## Roadmap
+## Architecture
+
+NanoGrad is organized in two layers: a reusable core, then model and experiment
+implementations built on top of that core.
+
+```text
++-------------------------------------------------------------+
+| Models / Experiments                                        |
+| logic gates | MLPs | CNNs | tiny LMs | vision / SLAM        |
++-------------------------------------------------------------+
+| Core                                                        |
+| autograd | tensors | ops | losses | metrics | optimizers   |
++-------------------------------------------------------------+
+```
+
+Core modules should make many experiments possible. Model and experiment
+modules should prove that the core works on increasingly realistic checks.
+
+## Milestones
 
 ### Current Foundation
 
