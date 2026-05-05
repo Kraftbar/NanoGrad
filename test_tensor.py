@@ -654,6 +654,64 @@ class TensorTests(unittest.TestCase):
             ],
         )
 
+    def test_conv2d_valid_batched_channel_filters(self) -> None:
+        images = Tensor.from_list([
+            [
+                [
+                    [1, 2, 3],
+                    [4, 5, 6],
+                    [7, 8, 9],
+                ],
+            ],
+            [
+                [
+                    [2, 0, 1],
+                    [1, 3, 2],
+                    [0, 1, 4],
+                ],
+            ],
+        ])
+        kernels = Tensor.from_list([
+            [
+                [
+                    [1, 0],
+                    [0, 1],
+                ],
+            ],
+            [
+                [
+                    [1, 1],
+                    [1, 1],
+                ],
+            ],
+        ])
+
+        self.assertEqual(
+            conv2d_valid(images, kernels).tolist(),
+            [
+                [
+                    [
+                        [6.0, 8.0],
+                        [12.0, 14.0],
+                    ],
+                    [
+                        [12.0, 16.0],
+                        [24.0, 28.0],
+                    ],
+                ],
+                [
+                    [
+                        [5.0, 2.0],
+                        [2.0, 7.0],
+                    ],
+                    [
+                        [6.0, 6.0],
+                        [5.0, 10.0],
+                    ],
+                ],
+            ],
+        )
+
     def test_avg_pool2d(self) -> None:
         image = Tensor.from_list([
             [1, 2, 3, 4],
@@ -926,6 +984,18 @@ class TensorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             conv2d_valid(
                 Tensor.zeros((3, 3)),
+                Tensor.zeros((1, 1, 2, 2)),
+            )
+
+        with self.assertRaises(ValueError):
+            conv2d_valid(
+                Tensor.zeros((1, 1, 3, 3)),
+                Tensor.zeros((1, 2, 2)),
+            )
+
+        with self.assertRaises(ValueError):
+            conv2d_valid(
+                Tensor.zeros((1, 2, 3, 3)),
                 Tensor.zeros((1, 1, 2, 2)),
             )
 

@@ -573,6 +573,8 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
     """
 
     if image.ndim == 2:
+        batches = 1
+        image_has_batch_axis = False
         input_channels = 1
         image_rows, image_cols = image.shape
         if kernel.ndim == 2:
@@ -587,6 +589,8 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
         else:
             raise ValueError("conv2d_valid kernel shape does not match image shape")
     elif image.ndim == 3:
+        batches = 1
+        image_has_batch_axis = False
         input_channels, image_rows, image_cols = image.shape
         if kernel.ndim == 3:
             output_channels = 1
@@ -600,44 +604,59 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
 
         if input_channels != kernel_channels:
             raise ValueError("conv2d_valid image and kernel channels must match")
+    elif image.ndim == 4:
+        batches, input_channels, image_rows, image_cols = image.shape
+        image_has_batch_axis = True
+        if kernel.ndim != 4:
+            raise ValueError("conv2d_valid kernel shape does not match image shape")
+        output_channels, kernel_channels, kernel_rows, kernel_cols = kernel.shape
+        kernel_has_output_axis = True
+
+        if input_channels != kernel_channels:
+            raise ValueError("conv2d_valid image and kernel channels must match")
     else:
-        raise ValueError("conv2d_valid expects a 2D or 3D image tensor")
+        raise ValueError("conv2d_valid expects a 2D, 3D, or 4D image tensor")
 
     if kernel_rows > image_rows or kernel_cols > image_cols:
         raise ValueError("conv2d_valid kernel must fit inside the image")
 
     out_rows = image_rows - kernel_rows + 1
     out_cols = image_cols - kernel_cols + 1
-    out_shape = (
-        (out_rows, out_cols)
-        if output_channels == 1
-        else (output_channels, out_rows, out_cols)
-    )
+    if image_has_batch_axis:
+        out_shape = (batches, output_channels, out_rows, out_cols)
+    elif output_channels == 1:
+        out_shape = (out_rows, out_cols)
+    else:
+        out_shape = (output_channels, out_rows, out_cols)
+
     data = []
-    for output_channel in range(output_channels):
-        for out_row in range(out_rows):
-            for out_col in range(out_cols):
-                total = 0.0
-                for input_channel in range(input_channels):
-                    for kernel_row in range(kernel_rows):
-                        for kernel_col in range(kernel_cols):
-                            total += (
-                                _conv2d_value(
-                                    image,
-                                    input_channel,
-                                    out_row + kernel_row,
-                                    out_col + kernel_col,
+    for batch in range(batches):
+        for output_channel in range(output_channels):
+            for out_row in range(out_rows):
+                for out_col in range(out_cols):
+                    total = 0.0
+                    for input_channel in range(input_channels):
+                        for kernel_row in range(kernel_rows):
+                            for kernel_col in range(kernel_cols):
+                                total += (
+                                    _conv2d_image_value(
+                                        image,
+                                        image_has_batch_axis,
+                                        batch,
+                                        input_channel,
+                                        out_row + kernel_row,
+                                        out_col + kernel_col,
+                                    )
+                                    * _conv2d_kernel_value(
+                                        kernel,
+                                        kernel_has_output_axis,
+                                        output_channel,
+                                        input_channel,
+                                        kernel_row,
+                                        kernel_col,
+                                    )
                                 )
-                                * _conv2d_kernel_value(
-                                    kernel,
-                                    kernel_has_output_axis,
-                                    output_channel,
-                                    input_channel,
-                                    kernel_row,
-                                    kernel_col,
-                                )
-                            )
-                data.append(total)
+                    data.append(total)
 
     out = Tensor(
         data,
@@ -651,37 +670,41 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
         grad = _grad_data(out)
         if image.requires_grad:
             image_grad = [0.0] * len(image.data)
-            for output_channel in range(output_channels):
-                for out_row in range(out_rows):
-                    for out_col in range(out_cols):
-                        out_grad = grad[
-                            _conv2d_output_flat_index(
-                                out_shape,
-                                output_channel,
-                                out_row,
-                                out_col,
-                            )
-                        ]
-                        for input_channel in range(input_channels):
-                            for kernel_row in range(kernel_rows):
-                                for kernel_col in range(kernel_cols):
-                                    image_index = _conv2d_flat_index(
-                                        image.shape,
-                                        input_channel,
-                                        out_row + kernel_row,
-                                        out_col + kernel_col,
-                                    )
-                                    image_grad[image_index] += (
-                                        out_grad
-                                        * _conv2d_kernel_value(
-                                            kernel,
-                                            kernel_has_output_axis,
-                                            output_channel,
+            for batch in range(batches):
+                for output_channel in range(output_channels):
+                    for out_row in range(out_rows):
+                        for out_col in range(out_cols):
+                            out_grad = grad[
+                                _conv2d_output_flat_index(
+                                    out_shape,
+                                    batch,
+                                    output_channel,
+                                    out_row,
+                                    out_col,
+                                )
+                            ]
+                            for input_channel in range(input_channels):
+                                for kernel_row in range(kernel_rows):
+                                    for kernel_col in range(kernel_cols):
+                                        image_index = _conv2d_flat_index(
+                                            image.shape,
+                                            image_has_batch_axis,
+                                            batch,
                                             input_channel,
-                                            kernel_row,
-                                            kernel_col,
+                                            out_row + kernel_row,
+                                            out_col + kernel_col,
                                         )
-                                    )
+                                        image_grad[image_index] += (
+                                            out_grad
+                                            * _conv2d_kernel_value(
+                                                kernel,
+                                                kernel_has_output_axis,
+                                                output_channel,
+                                                input_channel,
+                                                kernel_row,
+                                                kernel_col,
+                                            )
+                                        )
             _add_grad(image, image_grad)
         if kernel.requires_grad:
             kernel_grad = [0.0] * len(kernel.data)
@@ -690,25 +713,29 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
                     for kernel_row in range(kernel_rows):
                         for kernel_col in range(kernel_cols):
                             total = 0.0
-                            for out_row in range(out_rows):
-                                for out_col in range(out_cols):
-                                    out_grad = grad[
-                                        _conv2d_output_flat_index(
-                                            out_shape,
-                                            output_channel,
-                                            out_row,
-                                            out_col,
+                            for batch in range(batches):
+                                for out_row in range(out_rows):
+                                    for out_col in range(out_cols):
+                                        out_grad = grad[
+                                            _conv2d_output_flat_index(
+                                                out_shape,
+                                                batch,
+                                                output_channel,
+                                                out_row,
+                                                out_col,
+                                            )
+                                        ]
+                                        total += (
+                                            out_grad
+                                            * _conv2d_image_value(
+                                                image,
+                                                image_has_batch_axis,
+                                                batch,
+                                                input_channel,
+                                                out_row + kernel_row,
+                                                out_col + kernel_col,
+                                            )
                                         )
-                                    ]
-                                    total += (
-                                        out_grad
-                                        * _conv2d_value(
-                                            image,
-                                            input_channel,
-                                            out_row + kernel_row,
-                                            out_col + kernel_col,
-                                        )
-                                    )
                             kernel_index = _conv2d_kernel_flat_index(
                                 kernel.shape,
                                 kernel_has_output_axis,
@@ -722,6 +749,19 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
 
     out._backward = _backward
     return out
+
+
+def _conv2d_image_value(
+    tensor: Tensor,
+    has_batch_axis: bool,
+    batch: int,
+    channel: int,
+    row: int,
+    col: int,
+) -> float:
+    if has_batch_axis:
+        return tensor[batch, channel, row, col]
+    return _conv2d_value(tensor, channel, row, col)
 
 
 def _conv2d_value(tensor: Tensor, channel: int, row: int, col: int) -> float:
@@ -749,10 +789,14 @@ def _conv2d_kernel_value(
 
 def _conv2d_flat_index(
     shape: tuple[int, ...],
+    has_batch_axis: bool,
+    batch: int,
     channel: int,
     row: int,
     col: int,
 ) -> int:
+    if has_batch_axis:
+        return _flat_index((batch, channel, row, col), shape)
     if len(shape) == 2:
         return _flat_index((row, col), shape)
     return _flat_index((channel, row, col), shape)
@@ -777,12 +821,15 @@ def _conv2d_kernel_flat_index(
 
 def _conv2d_output_flat_index(
     shape: tuple[int, ...],
+    batch: int,
     output_channel: int,
     row: int,
     col: int,
 ) -> int:
     if len(shape) == 2:
         return _flat_index((row, col), shape)
+    if len(shape) == 4:
+        return _flat_index((batch, output_channel, row, col), shape)
     return _flat_index((output_channel, row, col), shape)
 
 
@@ -876,7 +923,7 @@ def avg_pool2d(
                     out_grad = grad[out_index] * scale
                     for window_row in range(window_rows):
                         for window_col in range(window_cols):
-                            image_index = _conv2d_flat_index(
+                            image_index = _pool2d_flat_index(
                                 image.shape,
                                 channel,
                                 row_start + window_row,
