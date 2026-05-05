@@ -77,6 +77,8 @@ class MNISTDemoTests(unittest.TestCase):
             "0.1",
             "--hidden",
             "5",
+            "--activation",
+            "tanh",
             "--seed",
             "9",
             "--report-every",
@@ -96,6 +98,7 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
         self.assertEqual(args.hidden, 5)
+        self.assertEqual(args.activation, "tanh")
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.report_every, 2)
         self.assertEqual(args.save_model, Path("model.json"))
@@ -137,6 +140,7 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertIn("samples:      4", text)
         self.assertIn("inputs:       4", text)
         self.assertIn("classes:      2", text)
+        self.assertIn("activation:   tanh", text)
         self.assertIn("final batch:", text)
         self.assertIn("train loss:", text)
         self.assertIn("val loss:", text)

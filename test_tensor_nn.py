@@ -468,6 +468,13 @@ class TensorNNTests(unittest.TestCase):
 
         self.assertEqual(target.state_dict(), source.state_dict())
 
+    def test_tensor_mlp_load_rejects_activation_mismatch(self) -> None:
+        source = TensorMLP(inputs=2, layers=[2, 1], hidden_activation="tanh")
+        target = TensorMLP(inputs=2, layers=[2, 1], hidden_activation="relu")
+
+        with self.assertRaises(ValueError):
+            target.load_state_dict(source.state_dict())
+
     def test_tensor_mlp_save_and_load(self) -> None:
         source = TensorMLP(inputs=2, layers=[2, 1])
         source.layers[0].weight.data = [1.0, 2.0, 3.0, 4.0]

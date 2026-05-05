@@ -185,6 +185,16 @@ class TensorMLP(TensorModule):
         layers = state.get("layers")
         if not isinstance(layers, list) or len(layers) != len(self.layers):
             raise ValueError("state layer count does not match TensorMLP")
+        _require_matching_state_value(
+            state,
+            "hidden_activation",
+            self.hidden_activation,
+        )
+        _require_matching_state_value(
+            state,
+            "output_activation",
+            self.output_activation,
+        )
 
         for layer, layer_state in zip(self.layers, layers):
             layer.load_state_dict(layer_state)
@@ -324,6 +334,12 @@ def _state_data(state: dict, name: str, shape: tuple[int, ...]) -> list[float]:
     if not isinstance(data, list) or len(data) != _numel(shape):
         raise ValueError(f"state data for {name} does not match module shape")
     return [float(item) for item in data]
+
+
+def _require_matching_state_value(state: dict, name: str, expected: str) -> None:
+    value = state.get(name, expected)
+    if value != expected:
+        raise ValueError(f"state {name} does not match TensorMLP")
 
 
 def _numel(shape: tuple[int, ...]) -> int:

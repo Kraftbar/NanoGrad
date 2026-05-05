@@ -11,6 +11,7 @@ from train import train_tensor_multiclass_dataset
 
 
 DATA_DIR = Path("data/mnist")
+DEFAULT_ACTIVATION = "tanh"
 TRAIN_IMAGE_NAMES = (
     "train-images-idx3-ubyte.gz",
     "train-images-idx3-ubyte",
@@ -55,7 +56,12 @@ def run(args: argparse.Namespace) -> None:
 
     inputs = len(dataset.xs[0])
     classes = int(max(dataset.ys)) + 1
-    model = TensorMLP(inputs=inputs, layers=[args.hidden, classes], seed=args.seed)
+    model = TensorMLP(
+        inputs=inputs,
+        layers=[args.hidden, classes],
+        hidden_activation=args.activation,
+        seed=args.seed,
+    )
     if args.load_model is not None:
         model.load(args.load_model)
 
@@ -86,6 +92,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"samples:      {len(dataset)}")
     print(f"inputs:       {inputs}")
     print(f"classes:      {classes}")
+    print(f"activation:   {args.activation}")
     print(f"initial loss: {summary.initial_loss:.6f}")
     print(f"final batch:  {summary.final_loss:.6f}")
     if summary.evaluation_loss is not None:
@@ -203,6 +210,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--hidden", type=int, default=32)
+    parser.add_argument(
+        "--activation",
+        choices=("relu", "tanh", "sigmoid"),
+        default=DEFAULT_ACTIVATION,
+        help="Hidden-layer activation for the MLP.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--report-every", type=int, default=0)
     parser.add_argument("--save-model", type=Path)
