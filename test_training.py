@@ -13,7 +13,14 @@ from datasets import (
 from engine import Value
 from metrics import binary_accuracy
 from model import MLP
-from train import binary_cross_entropy, train_binary_classifier, train_mse
+from train import (
+    binary_cross_entropy,
+    binary_probabilities,
+    train_binary_classifier,
+    train_binary_classifier_summary,
+    train_mse,
+    train_mse_summary,
+)
 
 
 class TrainingTests(unittest.TestCase):
@@ -26,6 +33,19 @@ class TrainingTests(unittest.TestCase):
 
         self.assertLess(history[-1], history[0])
         self.assertLess(history[-1], 0.01)
+
+    def test_training_summary_tracks_loss_and_runtime(self) -> None:
+        random.seed(0)
+
+        xs, ys = line_fitting()
+        model = MLP(inputs=1, layers=[1])
+        summary = train_mse_summary(model, xs, ys, steps=40, lr=0.05)
+
+        self.assertEqual(summary.history[0], summary.initial_loss)
+        self.assertEqual(summary.history[-1], summary.final_loss)
+        self.assertLess(summary.final_loss, summary.initial_loss)
+        self.assertGreaterEqual(summary.elapsed_seconds, 0.0)
+        self.assertIsNone(summary.accuracy)
 
     def test_noisy_regression_loss_decreases(self) -> None:
         random.seed(0)
@@ -89,6 +109,17 @@ class TrainingTests(unittest.TestCase):
         self.assertLess(history[-1], history[0])
         self.assertLess(history[-1], 0.2)
 
+    def test_binary_training_summary_tracks_accuracy(self) -> None:
+        random.seed(0)
+
+        xs, ys = sign_separator()
+        model = MLP(inputs=1, layers=[1])
+        summary = train_binary_classifier_summary(model, xs, ys, steps=60, lr=0.1)
+
+        self.assertLess(summary.final_loss, summary.initial_loss)
+        self.assertGreaterEqual(summary.elapsed_seconds, 0.0)
+        self.assertEqual(summary.accuracy, 1.0)
+
     def test_tiny_2d_clusters_learn(self) -> None:
         random.seed(0)
 
@@ -127,16 +158,6 @@ class TrainingTests(unittest.TestCase):
         self.assertLess(history[-1], history[0])
         self.assertLess(history[-1], 0.2)
         self.assertEqual(binary_accuracy(probabilities, ys), 1.0)
-
-
-def binary_probabilities(model: MLP, xs: list[list[float]]) -> list[float]:
-    probabilities = []
-    for x in xs:
-        logit = model(x)
-        if not isinstance(logit, Value):
-            raise TypeError("expected the model to return one scalar Value")
-        probabilities.append(logit.sigmoid().data)
-    return probabilities
 
 
 if __name__ == "__main__":

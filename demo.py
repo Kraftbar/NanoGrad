@@ -13,54 +13,48 @@ from datasets import (
     tiny_2d_clusters,
     xor_gate,
 )
-from engine import Value
-from metrics import binary_accuracy
 from model import MLP
-from train import train_binary_classifier, train_mse
+from train import (
+    binary_probabilities,
+    train_binary_classifier_summary,
+    train_mse_summary,
+)
 
 
 def regression_demo() -> None:
     xs, ys = line_fitting()
     model = MLP(inputs=1, layers=[1])
-    history = train_mse(model, xs, ys, steps=80, lr=0.05)
+    summary = train_mse_summary(model, xs, ys, steps=80, lr=0.05)
 
     print("Regression demo")
-    print(f"initial loss: {history[0]:.6f}")
-    print(f"final loss:   {history[-1]:.6f}")
+    print_summary(summary)
 
 
 def noisy_regression_demo() -> None:
     xs, ys = noisy_line_fitting()
     model = MLP(inputs=1, layers=[1])
-    history = train_mse(model, xs, ys, steps=80, lr=0.03)
+    summary = train_mse_summary(model, xs, ys, steps=80, lr=0.03)
 
     print("\nNoisy regression demo")
-    print(f"initial loss: {history[0]:.6f}")
-    print(f"final loss:   {history[-1]:.6f}")
+    print_summary(summary)
 
 
 def classification_demo() -> None:
     xs, ys = sign_separator()
     model = MLP(inputs=1, layers=[1])
-    history = train_binary_classifier(model, xs, ys, steps=80, lr=0.1)
-    probabilities = binary_probabilities(model, xs)
+    summary = train_binary_classifier_summary(model, xs, ys, steps=80, lr=0.1)
 
     print("\nBinary classification demo")
-    print(f"initial loss: {history[0]:.6f}")
-    print(f"final loss:   {history[-1]:.6f}")
-    print(f"accuracy:     {binary_accuracy(probabilities, ys):.3f}")
+    print_summary(summary)
 
 
 def cluster_demo() -> None:
     xs, ys = tiny_2d_clusters()
     model = MLP(inputs=2, layers=[1])
-    history = train_binary_classifier(model, xs, ys, steps=80, lr=0.1)
-    probabilities = binary_probabilities(model, xs)
+    summary = train_binary_classifier_summary(model, xs, ys, steps=80, lr=0.1)
 
     print("\nTiny 2D cluster demo")
-    print(f"initial loss: {history[0]:.6f}")
-    print(f"final loss:   {history[-1]:.6f}")
-    print(f"accuracy:     {binary_accuracy(probabilities, ys):.3f}")
+    print_summary(summary)
 
 
 def logic_gate_demo() -> None:
@@ -72,36 +66,32 @@ def logic_gate_demo() -> None:
     ):
         xs, ys = dataset()
         model = MLP(inputs=2, layers=[1])
-        history = train_binary_classifier(model, xs, ys, steps=300, lr=0.2)
-        probabilities = binary_probabilities(model, xs)
+        summary = train_binary_classifier_summary(model, xs, ys, steps=300, lr=0.2)
 
-        print(f"{name} final loss: {history[-1]:.6f}")
-        print(f"{name} accuracy:   {binary_accuracy(probabilities, ys):.3f}")
+        print(f"{name} final loss: {summary.final_loss:.6f}")
+        print(f"{name} accuracy:   {summary.accuracy:.3f}")
+        print(f"{name} runtime:    {summary.elapsed_seconds:.4f}s")
 
 
 def xor_demo() -> None:
     xs, ys = xor_gate()
     model = MLP(inputs=2, layers=[4, 1])
-    history = train_binary_classifier(model, xs, ys, steps=1000, lr=0.2)
+    summary = train_binary_classifier_summary(model, xs, ys, steps=1000, lr=0.2)
     probabilities = binary_probabilities(model, xs)
 
     print("\nXOR demo")
-    print(f"initial loss: {history[0]:.6f}")
-    print(f"final loss:   {history[-1]:.6f}")
-    print(f"accuracy:     {binary_accuracy(probabilities, ys):.3f}")
+    print_summary(summary)
 
     for x, probability in zip(xs, probabilities):
         print(f"{x} -> {probability:.3f}")
 
 
-def binary_probabilities(model: MLP, xs: list[list[float]]) -> list[float]:
-    probabilities = []
-    for x in xs:
-        logit = model(x)
-        if not isinstance(logit, Value):
-            raise TypeError("binary demos expect the model to return one scalar Value")
-        probabilities.append(logit.sigmoid().data)
-    return probabilities
+def print_summary(summary) -> None:
+    print(f"initial loss: {summary.initial_loss:.6f}")
+    print(f"final loss:   {summary.final_loss:.6f}")
+    if summary.accuracy is not None:
+        print(f"accuracy:     {summary.accuracy:.3f}")
+    print(f"runtime:      {summary.elapsed_seconds:.4f}s")
 
 
 def main() -> None:

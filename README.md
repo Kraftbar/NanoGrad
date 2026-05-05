@@ -38,12 +38,12 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Train scalar MLPs on line fitting, noisy line fitting, sign separator,
   tiny 2D clusters, AND, OR, and XOR checks
 - [x] Add simple dataset and dataloader utilities
+- [x] Track loss, accuracy, and basic runtime on small examples
 - [x] Add a tensor binary MLP forward pass
 
 ### Next Small Checks
 
 - [ ] Train tensor MLPs on logic gates once the tensor training path exists
-- [ ] Track loss, accuracy, and basic runtime on small examples
 - [ ] Keep implementations readable rather than over-compressed
 
 ### First Real Datasets
