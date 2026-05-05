@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import random
 
-from datasets import line_fitting, sign_separator, xor_gate
+from datasets import (
+    and_gate,
+    line_fitting,
+    noisy_line_fitting,
+    or_gate,
+    sign_separator,
+    tiny_2d_clusters,
+    xor_gate,
+)
 from engine import Value
 from metrics import binary_accuracy
 from model import MLP
@@ -21,6 +29,16 @@ def regression_demo() -> None:
     print(f"final loss:   {history[-1]:.6f}")
 
 
+def noisy_regression_demo() -> None:
+    xs, ys = noisy_line_fitting()
+    model = MLP(inputs=1, layers=[1])
+    history = train_mse(model, xs, ys, steps=80, lr=0.03)
+
+    print("\nNoisy regression demo")
+    print(f"initial loss: {history[0]:.6f}")
+    print(f"final loss:   {history[-1]:.6f}")
+
+
 def classification_demo() -> None:
     xs, ys = sign_separator()
     model = MLP(inputs=1, layers=[1])
@@ -31,6 +49,34 @@ def classification_demo() -> None:
     print(f"initial loss: {history[0]:.6f}")
     print(f"final loss:   {history[-1]:.6f}")
     print(f"accuracy:     {binary_accuracy(probabilities, ys):.3f}")
+
+
+def cluster_demo() -> None:
+    xs, ys = tiny_2d_clusters()
+    model = MLP(inputs=2, layers=[1])
+    history = train_binary_classifier(model, xs, ys, steps=80, lr=0.1)
+    probabilities = binary_probabilities(model, xs)
+
+    print("\nTiny 2D cluster demo")
+    print(f"initial loss: {history[0]:.6f}")
+    print(f"final loss:   {history[-1]:.6f}")
+    print(f"accuracy:     {binary_accuracy(probabilities, ys):.3f}")
+
+
+def logic_gate_demo() -> None:
+    print("\nLogic gate demos")
+
+    for name, dataset in (
+        ("AND", and_gate),
+        ("OR", or_gate),
+    ):
+        xs, ys = dataset()
+        model = MLP(inputs=2, layers=[1])
+        history = train_binary_classifier(model, xs, ys, steps=300, lr=0.2)
+        probabilities = binary_probabilities(model, xs)
+
+        print(f"{name} final loss: {history[-1]:.6f}")
+        print(f"{name} accuracy:   {binary_accuracy(probabilities, ys):.3f}")
 
 
 def xor_demo() -> None:
@@ -62,7 +108,10 @@ def main() -> None:
     random.seed(0)
 
     regression_demo()
+    noisy_regression_demo()
     classification_demo()
+    cluster_demo()
+    logic_gate_demo()
     xor_demo()
 
 

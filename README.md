@@ -35,14 +35,14 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Implement simple neural network components from scratch
 - [x] Add SGD and basic optimization tools
 - [x] Validate gradients with small deterministic examples
-- [x] Train scalar MLPs on line fitting, sign separator, and XOR checks
+- [x] Train scalar MLPs on line fitting, noisy line fitting, sign separator,
+  tiny 2D clusters, AND, OR, and XOR checks
+- [x] Add simple dataset and dataloader utilities
 - [x] Add a tensor binary MLP forward pass
 
 ### Next Small Checks
 
-- [ ] Train tensor MLPs on AND / OR / XOR logic gates
-- [ ] Add noisy line fitting and tiny 2D cluster checks
-- [ ] Add simple dataset and dataloader utilities
+- [ ] Train tensor MLPs on logic gates once the tensor training path exists
 - [ ] Track loss, accuracy, and basic runtime on small examples
 - [ ] Keep implementations readable rather than over-compressed
 
@@ -97,7 +97,7 @@ ref_nanogpt/    # nanoGPT reference implementation
 ref_tinygrad/   # tinygrad reference implementation
 data/            # datasets and dataloaders
 
-datasets.py      # tiny synthetic datasets
+datasets.py      # tiny synthetic datasets and batch helpers
 engine.py        # scalar autograd core
 tensor.py        # tensor container and non-autograd tensor operations
 tensor_nn.py     # non-autograd tensor neural-network helpers
