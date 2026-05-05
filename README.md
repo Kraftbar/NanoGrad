@@ -84,6 +84,8 @@ The project favors:
 - Benchmarks on simple core components first
 - Gradual expansion into LLM and SLAM experiments
 - Reasonable LOC growth without forcing extreme code golf
+- Keep the top-level README as a map, with detailed dataset and experiment
+  notes living near the files they describe
 - A **math-on-paper** code style: readable equations, matrices laid out as grids
   where practical, one conceptual operation per line, and explicit intermediate
   names over dense clever expressions
@@ -147,11 +149,7 @@ python3 mnist_smoke_demo.py
 Use the test suite as the main correctness check. The demos are small examples
 for inspecting the scalar-autograd and tensor paths by eye.
 
-Run the MNIST demo after placing the standard IDX gzip files under `data/mnist/`:
-
-```bash
-python3 mnist_demo.py --limit 512 --epochs 2 --batch-size 32
-```
+For local MNIST files, see [data/mnist](./data/mnist).
 
 ## Status
 
