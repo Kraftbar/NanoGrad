@@ -154,8 +154,8 @@ def train_tiny_cnn_classifier(
     lr: float = 0.1,
 ) -> tuple[TensorConv2D, TensorLinear, list[float], float]:
     samples = tiny_cnn_samples()
-    conv = TensorConv2D((2, 2), seed=0)
-    classifier = TensorLinear(inputs=4, outputs=1, seed=1)
+    conv = TensorConv2D((2, 2, 2), seed=0)
+    classifier = TensorLinear(inputs=8, outputs=1, seed=1)
     optimizer = TensorSGD([*conv.parameters(), *classifier.parameters()], lr=lr)
     history = []
 
@@ -190,7 +190,7 @@ def tiny_cnn_forward(
 ) -> Tensor:
     features = conv(image).relu()
     pooled = avg_pool2d(features, (2, 2), stride=(1, 1))
-    return classifier(pooled.reshape((4,))).sigmoid()
+    return classifier(pooled.flatten()).sigmoid()
 
 
 def tiny_cnn_samples() -> list[tuple[Tensor, float]]:
