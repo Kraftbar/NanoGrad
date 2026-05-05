@@ -6,6 +6,7 @@ from tensor import (
     avg_pool2d,
     conv2d_valid,
     matmul,
+    permute,
     reshape,
     tensor_exp,
     tensor_log,
@@ -368,6 +369,38 @@ class TensorTests(unittest.TestCase):
         )
         self.assertEqual(x.T.tolist(), transpose(x).tolist())
 
+    def test_permute(self) -> None:
+        x = Tensor.from_list([
+            [
+                [1, 2, 3],
+                [4, 5, 6],
+            ],
+            [
+                [7, 8, 9],
+                [10, 11, 12],
+            ],
+        ])
+
+        self.assertEqual(permute(x, (2, 0, 1)).shape, (3, 2, 2))
+        self.assertEqual(
+            x.permute((2, 0, 1)).tolist(),
+            [
+                [
+                    [1.0, 4.0],
+                    [7.0, 10.0],
+                ],
+                [
+                    [2.0, 5.0],
+                    [8.0, 11.0],
+                ],
+                [
+                    [3.0, 6.0],
+                    [9.0, 12.0],
+                ],
+            ],
+        )
+        self.assertEqual(x.permute((-1, 0, 1)).tolist(), x.permute((2, 0, 1)).tolist())
+
     def test_reshape(self) -> None:
         x = Tensor.from_list([1, 2, 3, 4, 5, 6])
 
@@ -625,6 +658,15 @@ class TensorTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             Tensor.from_list([1, 2, 3]).reshape((2, 2))
+
+        with self.assertRaises(ValueError):
+            Tensor.from_list([1, 2, 3]).permute((0, 1))
+
+        with self.assertRaises(ValueError):
+            Tensor.from_list([
+                [1, 2],
+                [3, 4],
+            ]).permute((0, 0))
 
         with self.assertRaises(ValueError):
             conv2d_valid(Tensor.from_list([1, 2]), Tensor.from_list([[1]]))

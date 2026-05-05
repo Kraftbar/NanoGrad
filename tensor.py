@@ -120,6 +120,9 @@ class Tensor:
     def reshape(self, shape: tuple[int, ...]) -> "Tensor":
         return reshape(self, shape)
 
+    def permute(self, axes: tuple[int, ...]) -> "Tensor":
+        return permute(self, axes)
+
     def conv2d_valid(self, kernel: "Tensor") -> "Tensor":
         return conv2d_valid(self, kernel)
 
@@ -463,6 +466,44 @@ def reshape(tensor: Tensor, shape: tuple[int, ...]) -> Tensor:
     return out
 
 
+def permute(tensor: Tensor, axes: tuple[int, ...]) -> Tensor:
+    """Return a tensor with axes reordered."""
+
+    axes = _normalize_axes(axes, tensor.ndim)
+    out_shape = tuple(tensor.shape[axis] for axis in axes)
+    data = []
+    for out_flat_index in range(_numel(out_shape)):
+        out_index = _unravel_index(out_flat_index, out_shape)
+        source_index = [0] * tensor.ndim
+        for out_axis, source_axis in enumerate(axes):
+            source_index[source_axis] = out_index[out_axis]
+        data.append(tensor[tuple(source_index)])
+
+    out = Tensor(
+        data,
+        out_shape,
+        requires_grad=tensor.requires_grad,
+        _children=(tensor,),
+        _op="permute",
+    )
+
+    def _backward() -> None:
+        if not tensor.requires_grad:
+            return
+        grad = _grad_data(out)
+        tensor_grad = [0.0] * tensor.numel
+        for out_flat_index, value in enumerate(grad):
+            out_index = _unravel_index(out_flat_index, out_shape)
+            source_index = [0] * tensor.ndim
+            for out_axis, source_axis in enumerate(axes):
+                source_index[source_axis] = out_index[out_axis]
+            tensor_grad[_flat_index(tuple(source_index), tensor.shape)] += value
+        _add_grad(tensor, tensor_grad)
+
+    out._backward = _backward
+    return out
+
+
 def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
     """Apply a single 2D valid convolution-style filter.
 
@@ -614,32 +655,7 @@ def transpose(tensor: Tensor) -> Tensor:
 
     if len(tensor.shape) != 2:
         raise ValueError("transpose expects a 2D tensor")
-
-    rows, cols = tensor.shape
-    data = []
-    for col in range(cols):
-        for row in range(rows):
-            data.append(tensor[row, col])
-    out = Tensor(
-        data,
-        (cols, rows),
-        requires_grad=tensor.requires_grad,
-        _children=(tensor,),
-        _op="transpose",
-    )
-
-    def _backward() -> None:
-        if not tensor.requires_grad:
-            return
-        grad = _grad_data(out)
-        tensor_grad = [0.0] * len(tensor.data)
-        for col in range(cols):
-            for row in range(rows):
-                tensor_grad[row * cols + col] += grad[col * rows + row]
-        _add_grad(tensor, tensor_grad)
-
-    out._backward = _backward
-    return out
+    return permute(tensor, (1, 0))
 
 
 def tensor_sum(tensor: Tensor, axis: int | None = None) -> Tensor:
@@ -787,6 +803,16 @@ def _normalize_axis(axis: int, ndim: int) -> int:
     if axis < 0 or axis >= ndim:
         raise ValueError("axis out of range")
     return axis
+
+
+def _normalize_axes(axes: tuple[int, ...], ndim: int) -> tuple[int, ...]:
+    if len(axes) != ndim:
+        raise ValueError("axes length must match tensor dimensions")
+
+    normalized = tuple(_normalize_axis(axis, ndim) for axis in axes)
+    if sorted(normalized) != list(range(ndim)):
+        raise ValueError("axes must be a permutation of tensor dimensions")
+    return normalized
 
 
 def _reduced_shape(shape: tuple[int, ...], axis: int) -> tuple[int, ...]:

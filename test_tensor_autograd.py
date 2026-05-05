@@ -177,6 +177,40 @@ class TensorAutogradTests(unittest.TestCase):
 
         self.assert_grad_close(x, loss_fn)
 
+    def test_permute_gradient_matches_finite_difference(self) -> None:
+        x = Tensor.from_list([
+            [
+                [1.0, 2.0, 3.0],
+                [4.0, 5.0, 6.0],
+            ],
+            [
+                [7.0, 8.0, 9.0],
+                [10.0, 11.0, 12.0],
+            ],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            [
+                [0.5, -1.0],
+                [2.0, 3.0],
+            ],
+            [
+                [1.5, -0.5],
+                [0.25, 4.0],
+            ],
+            [
+                [-2.0, 0.75],
+                [1.25, -3.0],
+            ],
+        ])
+        loss = (x.permute((2, 0, 1)) * weights).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            return (x.permute((2, 0, 1)) * weights).sum()[0]
+
+        self.assert_grad_close(x, loss_fn)
+
     def test_axis_reduction_gradients(self) -> None:
         x = Tensor.from_list([
             [1.0, 2.0, 3.0],
