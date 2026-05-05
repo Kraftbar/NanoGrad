@@ -129,25 +129,14 @@ NanoGrad uses the following projects as reference points:
 
 ## Quick Checks
 
-Run the scalar-autograd demo:
-
 ```bash
+python3 -m unittest discover
 python3 demo.py
-```
-
-Run the non-autograd tensor math demo:
-
-```bash
 python3 tensor_demo.py
 ```
 
-Run the current test suite:
-
-```bash
-python3 -m unittest discover
-```
-
-The current demos use tiny synthetic datasets as human-readable learning checks.
+Use the test suite as the main correctness check. The demos are small examples
+for inspecting the scalar-autograd and tensor paths by eye.
 
 ## Status
 
