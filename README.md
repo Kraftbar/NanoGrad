@@ -147,7 +147,7 @@ for inspecting the scalar-autograd and tensor paths by eye.
 Run the MNIST demo after placing the standard IDX gzip files under `data/mnist/`:
 
 ```bash
-python3 mnist_demo.py
+python3 mnist_demo.py --limit 512 --epochs 2 --batch-size 32
 ```
 
 ## Status
