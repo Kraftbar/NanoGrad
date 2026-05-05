@@ -46,6 +46,7 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Add local MNIST IDX dataset loading
 - [x] Add tensor multiclass loss, accuracy, and training helper
 - [x] Add local-file MNIST MLP demo entry point
+- [x] Add no-download MNIST-style smoke demo
 
 ### Next Small Checks
 
@@ -115,6 +116,7 @@ train.py         # scalar and tensor training loops
 demo.py          # scalar autograd training demo
 tensor_demo.py   # tensor math and tensor-autograd demos
 mnist_demo.py    # local-file MNIST MLP demo
+mnist_smoke_demo.py # no-download MNIST-style smoke demo
 ```
 
 ## Reference Implementations
@@ -139,6 +141,7 @@ NanoGrad uses the following projects as reference points:
 python3 -m unittest discover
 python3 demo.py
 python3 tensor_demo.py
+python3 mnist_smoke_demo.py
 ```
 
 Use the test suite as the main correctness check. The demos are small examples
