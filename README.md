@@ -46,7 +46,8 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Add local MNIST IDX dataset loading
 - [x] Add tensor multiclass loss, accuracy, and training helper
 - [x] Add local-file MNIST MLP demo entry point
-- [x] Add no-download MNIST-style smoke demo
+- [x] Add no-download channel-first MNIST-style CNN smoke demo
+- [x] Add local-file MNIST CNN demo entry point
 - [x] Add basic convolution and pooling tensor operations
 
 ### Next Small Checks
@@ -118,7 +119,8 @@ train.py         # scalar and tensor training loops
 demo.py          # scalar autograd training demo
 tensor_demo.py   # tensor math and tensor-autograd demos
 mnist_demo.py    # local-file MNIST MLP demo
-mnist_smoke_demo.py # no-download MNIST-style smoke demo
+mnist_cnn_demo.py # local-file MNIST CNN demo
+mnist_smoke_demo.py # no-download MNIST-style CNN smoke demo
 ```
 
 ## Reference Implementations
