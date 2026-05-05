@@ -31,9 +31,55 @@ class DatasetTests(unittest.TestCase):
         x[0] = 99
 
         self.assertEqual(len(dataset), 2)
+        self.assertEqual(dataset.feature_shape, (2,))
         self.assertEqual(dataset[0], ([1.0, 2.0], 0.0))
         self.assertEqual(dataset[1], ([3.0, 4.0], 1.0))
         self.assertEqual(y, 0.0)
+
+    def test_tiny_dataset_preserves_nested_feature_samples(self) -> None:
+        dataset = TinyDataset(
+            xs=[
+                [
+                    [
+                        [1, 2],
+                        [3, 4],
+                    ],
+                ],
+                [
+                    [
+                        [5, 6],
+                        [7, 8],
+                    ],
+                ],
+            ],
+            ys=[
+                0,
+                1,
+            ],
+        )
+
+        sample, _target = dataset[0]
+        sample[0][0][0] = 99
+        batch_xs, batch_ys = next(dataset.batches(batch_size=2))
+        batch_xs[0][0][0][0] = 88
+
+        self.assertEqual(dataset.feature_shape, (1, 2, 2))
+        self.assertEqual(
+            dataset[0],
+            (
+                [
+                    [
+                        [1.0, 2.0],
+                        [3.0, 4.0],
+                    ],
+                ],
+                0.0,
+            ),
+        )
+        self.assertEqual(
+            batch_ys,
+            [0.0, 1.0],
+        )
 
     def test_batches_preserve_order_and_keep_remainder(self) -> None:
         xs, ys = tiny_2d_clusters()
@@ -70,6 +116,9 @@ class DatasetTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             TinyDataset([[1], [1, 2]], [0, 1])
+
+        with self.assertRaises(ValueError):
+            TinyDataset([[[1], [2]], [[3, 4]]], [0, 1])
 
         with self.assertRaises(ValueError):
             list(make_batches([[1]], [0], batch_size=0))

@@ -6,31 +6,31 @@ import random
 import gzip
 import struct
 from collections.abc import Iterator
+from collections.abc import Sequence
 from pathlib import Path
 
 
-Batch = tuple[list[list[float]], list[float]]
-Sample = tuple[list[float], float]
+Feature = list
+Batch = tuple[list[Feature], list[float]]
+Sample = tuple[Feature, float]
 
 
 class TinyDataset:
     """Small in-memory dataset for toy training checks."""
 
-    def __init__(self, xs: list[list[float]], ys: list[float]) -> None:
+    def __init__(self, xs: list, ys: list[float]) -> None:
         if not xs:
             raise ValueError("dataset must not be empty")
         if len(xs) != len(ys):
             raise ValueError("features and targets must have the same length")
 
-        width = len(xs[0])
-        if width == 0:
-            raise ValueError("feature rows must not be empty")
-        if any(len(row) != width for row in xs):
-            raise ValueError("feature rows must have the same length")
+        self.feature_shape = _feature_shape(xs[0])
+        if any(_feature_shape(sample) != self.feature_shape for sample in xs):
+            raise ValueError("feature samples must have the same shape")
 
         self.xs = [
-            [float(value) for value in row]
-            for row in xs
+            _copy_feature(sample)
+            for sample in xs
         ]
         self.ys = [float(value) for value in ys]
 
@@ -38,7 +38,7 @@ class TinyDataset:
         return len(self.ys)
 
     def __getitem__(self, index: int) -> Sample:
-        return self.xs[index][:], self.ys[index]
+        return _copy_feature(self.xs[index]), self.ys[index]
 
     def batches(
         self,
@@ -60,7 +60,7 @@ class TinyDataset:
             batch_indices = indices[start : start + batch_size]
             yield (
                 [
-                    self.xs[index][:]
+                    _copy_feature(self.xs[index])
                     for index in batch_indices
                 ],
                 [
@@ -71,7 +71,7 @@ class TinyDataset:
 
 
 def make_batches(
-    xs: list[list[float]],
+    xs: list,
     ys: list[float],
     batch_size: int,
     *,
@@ -85,6 +85,38 @@ def make_batches(
         shuffle=shuffle,
         seed=seed,
     )
+
+
+def _feature_shape(feature) -> tuple[int, ...]:
+    if not _is_sequence(feature):
+        raise ValueError("feature samples must be non-empty sequences")
+    if not feature:
+        raise ValueError("feature samples must not be empty")
+
+    first = feature[0]
+    if _is_sequence(first):
+        child_shape = _feature_shape(first)
+        for value in feature:
+            if not _is_sequence(value) or _feature_shape(value) != child_shape:
+                raise ValueError("feature samples must be rectangular")
+        return (len(feature), *child_shape)
+
+    if any(_is_sequence(value) for value in feature):
+        raise ValueError("feature samples must be rectangular")
+    return (len(feature),)
+
+
+def _copy_feature(feature):
+    if _is_sequence(feature):
+        return [
+            _copy_feature(value)
+            for value in feature
+        ]
+    return float(feature)
+
+
+def _is_sequence(value) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
 
 
 def load_mnist(
