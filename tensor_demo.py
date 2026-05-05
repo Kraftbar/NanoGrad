@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from losses import binary_cross_entropy, mse_loss
-from metrics import tensor_binary_accuracy
+from metrics import binary_accuracy, tensor_binary_accuracy
 from optim import TensorSGD
 from tensor import Tensor, avg_pool2d, matmul
-from tensor_nn import TensorConv2D, TensorMLP, binary_mlp, linear
+from tensor_nn import TensorConv2D, TensorLinear, TensorMLP, binary_mlp, linear
 from train import train_tensor_binary_classifier
 
 
@@ -139,6 +139,101 @@ def train_conv_pattern(
     return layer, history
 
 
+def tiny_cnn_classifier_demo() -> None:
+    _conv, _classifier, history, accuracy = train_tiny_cnn_classifier()
+
+    print("\nTiny CNN classifier training")
+    print(f"initial loss: {history[0]:.6f}")
+    print(f"final loss:   {history[-1]:.6f}")
+    print(f"accuracy:     {accuracy:.3f}")
+
+
+def train_tiny_cnn_classifier(
+    *,
+    epochs: int = 400,
+    lr: float = 0.1,
+) -> tuple[TensorConv2D, TensorLinear, list[float], float]:
+    samples = tiny_cnn_samples()
+    conv = TensorConv2D((2, 2), seed=0)
+    classifier = TensorLinear(inputs=4, outputs=1, seed=1)
+    optimizer = TensorSGD([*conv.parameters(), *classifier.parameters()], lr=lr)
+    history = []
+
+    for _ in range(epochs):
+        total_loss = 0.0
+        for image, label in samples:
+            probability = tiny_cnn_forward(conv, classifier, image)
+            loss = binary_cross_entropy(probability, Tensor.from_list([label]))
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss[0]
+        history.append(total_loss / len(samples))
+
+    probabilities = [
+        tiny_cnn_forward(conv, classifier, image)[0]
+        for image, _label in samples
+    ]
+    targets = [
+        label
+        for _image, label in samples
+    ]
+    return conv, classifier, history, binary_accuracy(probabilities, targets)
+
+
+def tiny_cnn_forward(
+    conv: TensorConv2D,
+    classifier: TensorLinear,
+    image: Tensor,
+) -> Tensor:
+    features = conv(image).relu()
+    pooled = avg_pool2d(features, (2, 2), stride=(1, 1))
+    return classifier(pooled.reshape((4,))).sigmoid()
+
+
+def tiny_cnn_samples() -> list[tuple[Tensor, float]]:
+    return [
+        (
+            Tensor.from_list([
+                [0, 1, 1, 0],
+                [0, 1, 1, 0],
+                [0, 1, 1, 0],
+                [0, 1, 1, 0],
+            ]),
+            1.0,
+        ),
+        (
+            Tensor.from_list([
+                [1, 0, 0, 1],
+                [1, 0, 0, 1],
+                [1, 0, 0, 1],
+                [1, 0, 0, 1],
+            ]),
+            1.0,
+        ),
+        (
+            Tensor.from_list([
+                [0, 0, 0, 0],
+                [1, 1, 1, 1],
+                [1, 1, 1, 1],
+                [0, 0, 0, 0],
+            ]),
+            0.0,
+        ),
+        (
+            Tensor.from_list([
+                [1, 1, 1, 1],
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+                [1, 1, 1, 1],
+            ]),
+            0.0,
+        ),
+    ]
+
+
 def binary_mlp_demo() -> None:
     inputs = Tensor.from_list([
         [0, 0],
@@ -222,6 +317,7 @@ def main() -> None:
     linear_layer_demo()
     convolution_demo()
     conv_training_demo()
+    tiny_cnn_classifier_demo()
     binary_mlp_demo()
     tensor_training_demo()
 

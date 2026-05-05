@@ -25,12 +25,20 @@ class TensorDemoTests(unittest.TestCase):
         self.assertIn("features: [[-5.0, -5.0, -5.0]", text)
         self.assertIn("pooled:   [[-5.0]]", text)
         self.assertIn("Tensor conv training", text)
+        self.assertIn("Tiny CNN classifier training", text)
 
     def test_conv_training_demo_learns_pattern(self) -> None:
         _layer, history = tensor_demo.train_conv_pattern()
 
         self.assertLess(history[-1], history[0])
         self.assertLess(history[-1], 0.05)
+
+    def test_tiny_cnn_classifier_learns_synthetic_images(self) -> None:
+        _conv, _classifier, history, accuracy = tensor_demo.train_tiny_cnn_classifier()
+
+        self.assertLess(history[-1], history[0])
+        self.assertLess(history[-1], 0.05)
+        self.assertEqual(accuracy, 1.0)
 
 
 if __name__ == "__main__":
