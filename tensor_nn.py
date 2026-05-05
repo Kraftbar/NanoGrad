@@ -83,7 +83,7 @@ class TensorLinear(TensorModule):
 
 
 class TensorConv2D(TensorModule):
-    """Single-filter convolution layer for early vision experiments."""
+    """Convolution layer for early vision experiments."""
 
     def __init__(
         self,

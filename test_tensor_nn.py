@@ -250,6 +250,79 @@ class TensorNNTests(unittest.TestCase):
             ],
         )
 
+    def test_tensor_conv2d_module_accepts_batched_inputs(self) -> None:
+        layer = TensorConv2D(
+            (2, 1, 2, 2),
+            kernel=Tensor.from_list([
+                [
+                    [
+                        [1, 0],
+                        [0, 1],
+                    ],
+                ],
+                [
+                    [
+                        [1, 1],
+                        [1, 1],
+                    ],
+                ],
+            ], requires_grad=True),
+            bias=Tensor.from_list([
+                [[10]],
+                [[-1]],
+            ], requires_grad=True),
+        )
+        inputs = Tensor.from_list([
+            [
+                [
+                    [1, 2, 3],
+                    [4, 5, 6],
+                    [7, 8, 9],
+                ],
+            ],
+            [
+                [
+                    [2, 0, 1],
+                    [1, 3, 2],
+                    [0, 1, 4],
+                ],
+            ],
+        ])
+
+        outputs = layer(inputs)
+
+        self.assertEqual(outputs.shape, (2, 2, 2, 2))
+        self.assertEqual(
+            outputs.tolist(),
+            [
+                [
+                    [
+                        [16.0, 18.0],
+                        [22.0, 24.0],
+                    ],
+                    [
+                        [11.0, 15.0],
+                        [23.0, 27.0],
+                    ],
+                ],
+                [
+                    [
+                        [15.0, 12.0],
+                        [12.0, 17.0],
+                    ],
+                    [
+                        [5.0, 5.0],
+                        [4.0, 9.0],
+                    ],
+                ],
+            ],
+        )
+
+        outputs.sum().backward()
+
+        self.assertEqual(layer.bias.grad, [8.0, 8.0])
+        self.assertTrue(any(grad != 0.0 for grad in layer.kernel.grad or []))
+
     def test_tensor_conv2d_multi_filter_default_bias(self) -> None:
         layer = TensorConv2D((2, 1, 2, 2), seed=0)
 
