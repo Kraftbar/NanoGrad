@@ -142,6 +142,14 @@ class Tensor:
     def conv2d_valid(self, kernel: "Tensor") -> "Tensor":
         return conv2d_valid(self, kernel)
 
+    def avg_pool2d(
+        self,
+        window: tuple[int, int],
+        *,
+        stride: tuple[int, int] | None = None,
+    ) -> "Tensor":
+        return avg_pool2d(self, window, stride=stride)
+
     @property
     def T(self) -> "Tensor":
         return transpose(self)
@@ -607,6 +615,78 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
                             )
                     kernel_grad[kernel_row * kernel_cols + kernel_col] += total
             _add_grad(kernel, kernel_grad)
+
+    out._backward = _backward
+    return out
+
+
+def avg_pool2d(
+    image: Tensor,
+    window: tuple[int, int],
+    *,
+    stride: tuple[int, int] | None = None,
+) -> Tensor:
+    """Average-pool a 2D tensor with a fixed window and stride."""
+
+    if len(image.shape) != 2:
+        raise ValueError("avg_pool2d expects a 2D tensor")
+
+    window_rows, window_cols = window
+    if window_rows <= 0 or window_cols <= 0:
+        raise ValueError("avg_pool2d window dimensions must be positive")
+
+    if stride is None:
+        stride_rows, stride_cols = window
+    else:
+        stride_rows, stride_cols = stride
+        if stride_rows <= 0 or stride_cols <= 0:
+            raise ValueError("avg_pool2d stride dimensions must be positive")
+
+    image_rows, image_cols = image.shape
+    if window_rows > image_rows or window_cols > image_cols:
+        raise ValueError("avg_pool2d window must fit inside the image")
+
+    out_rows = ((image_rows - window_rows) // stride_rows) + 1
+    out_cols = ((image_cols - window_cols) // stride_cols) + 1
+    scale = 1 / (window_rows * window_cols)
+    data = []
+    for out_row in range(out_rows):
+        for out_col in range(out_cols):
+            row_start = out_row * stride_rows
+            col_start = out_col * stride_cols
+            total = 0.0
+            for window_row in range(window_rows):
+                for window_col in range(window_cols):
+                    total += image[row_start + window_row, col_start + window_col]
+            data.append(total * scale)
+
+    out = Tensor(
+        data,
+        (out_rows, out_cols),
+        requires_grad=image.requires_grad,
+        _children=(image,),
+        _op="avg_pool2d",
+    )
+
+    def _backward() -> None:
+        if not image.requires_grad:
+            return
+        grad = _grad_data(out)
+        image_grad = [0.0] * len(image.data)
+        for out_row in range(out_rows):
+            for out_col in range(out_cols):
+                row_start = out_row * stride_rows
+                col_start = out_col * stride_cols
+                out_grad = grad[out_row * out_cols + out_col] * scale
+                for window_row in range(window_rows):
+                    for window_col in range(window_cols):
+                        image_index = (
+                            (row_start + window_row) * image_cols
+                            + col_start
+                            + window_col
+                        )
+                        image_grad[image_index] += out_grad
+        _add_grad(image, image_grad)
 
     out._backward = _backward
     return out

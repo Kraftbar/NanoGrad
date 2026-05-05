@@ -1,7 +1,7 @@
 import unittest
 
 from datasets import TinyDataset, and_gate, or_gate, xor_gate
-from tensor import Tensor, conv2d_valid, matmul
+from tensor import Tensor, avg_pool2d, conv2d_valid, matmul
 from tensor_nn import TensorLinear, TensorMLP
 from train import (
     evaluate_tensor_multiclass_dataset,
@@ -120,6 +120,26 @@ class TensorAutogradTests(unittest.TestCase):
 
         self.assert_grad_close(image, loss_fn)
         self.assert_grad_close(kernel, loss_fn)
+
+    def test_avg_pool2d_gradient_matches_finite_difference(self) -> None:
+        image = Tensor.from_list([
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            [7.0, 8.0, 9.0],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            [1.0, -2.0],
+            [0.5, 3.0],
+        ])
+        loss = (avg_pool2d(image, (2, 2), stride=(1, 1)) * weights).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            pooled = avg_pool2d(image, (2, 2), stride=(1, 1))
+            return (pooled * weights).sum()[0]
+
+        self.assert_grad_close(image, loss_fn)
 
     def test_transpose_gradient_matches_finite_difference(self) -> None:
         x = Tensor.from_list([

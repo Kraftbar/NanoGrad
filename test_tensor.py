@@ -3,6 +3,7 @@ import unittest
 
 from tensor import (
     Tensor,
+    avg_pool2d,
     conv2d_valid,
     matmul,
     reshape,
@@ -241,6 +242,30 @@ class TensorTests(unittest.TestCase):
             ],
         )
 
+    def test_avg_pool2d(self) -> None:
+        image = Tensor.from_list([
+            [1, 2, 3, 4],
+            [5, 6, 7, 8],
+            [9, 10, 11, 12],
+            [13, 14, 15, 16],
+        ])
+
+        self.assertEqual(
+            avg_pool2d(image, (2, 2)).tolist(),
+            [
+                [3.5, 5.5],
+                [11.5, 13.5],
+            ],
+        )
+        self.assertEqual(
+            image.avg_pool2d((2, 2), stride=(1, 2)).tolist(),
+            [
+                [3.5, 5.5],
+                [7.5, 9.5],
+                [11.5, 13.5],
+            ],
+        )
+
     def test_sum_reductions(self) -> None:
         x = Tensor.from_list([
             [1, 2, 3],
@@ -365,6 +390,18 @@ class TensorTests(unittest.TestCase):
                     [3, 4],
                 ]),
             )
+
+        with self.assertRaises(ValueError):
+            avg_pool2d(Tensor.from_list([1, 2]), (1, 1))
+
+        with self.assertRaises(ValueError):
+            avg_pool2d(Tensor.from_list([[1, 2]]), (0, 1))
+
+        with self.assertRaises(ValueError):
+            avg_pool2d(Tensor.from_list([[1, 2]]), (1, 1), stride=(0, 1))
+
+        with self.assertRaises(ValueError):
+            avg_pool2d(Tensor.from_list([[1, 2]]), (2, 1))
 
         with self.assertRaises(ValueError):
             Tensor.from_list([1, 0, -1]).log()
