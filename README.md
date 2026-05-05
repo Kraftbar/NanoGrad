@@ -1,58 +1,53 @@
 # NanoGrad
 
-NanoGrad is a small-scale machine learning research framework for exploring automatic differentiation, tensor operations, **self-supervised language modeling**, and **vision / SLAM-related learning components** from the ground up.
+NanoGrad is a small-scale machine learning research framework for exploring
+automatic differentiation, tensor operations, small neural networks, and later
+language and vision experiments from the ground up.
 
-The project starts with a minimal autograd core and builds small experiments on top of it, including transformer-based language modeling and vision/SLAM experiments.
+The project starts with a minimal autograd core and builds small, visible
+learning checks on top of it before moving toward MNIST, LeNet-style vision,
+and tiny language models.
 
-## Project Goals
+## Roadmap
 
-### Stage 1: Core Learning Engine
+### Current Foundation
 
 - [x] Build a minimal scalar autograd engine
 - [x] Add basic tensor operations
 - [x] Implement simple neural network components from scratch
 - [x] Add SGD and basic optimization tools
 - [x] Validate gradients with small deterministic examples
+- [x] Train scalar MLPs on line fitting, sign separator, and XOR checks
+- [x] Add a tensor binary MLP forward pass
 
-### Stage 2: Small Models
+### Next Small Checks
 
-- [ ] Train tiny MLP-style models on logic gates and tiny clusters
+- [ ] Train tensor MLPs on AND / OR / XOR logic gates
+- [ ] Add noisy line fitting and tiny 2D cluster checks
 - [ ] Add simple dataset and dataloader utilities
-- [ ] Benchmark loss, speed, and memory on small examples
+- [ ] Track loss, accuracy, and basic runtime on small examples
 - [ ] Keep implementations readable rather than over-compressed
 
-### Stage 3: Language Modeling
-
-- [ ] Train a tiny character-level language model
-- [ ] Add Tiny Shakespeare as the first language dataset
-- [ ] Add transformer/GPT-style components later
-- [ ] Compare structure and training behavior against nanoGPT
-
-### Stage 4: Vision / SLAM Exploration
+### First Real Datasets
 
 - [ ] Train an MNIST MLP as the first image benchmark
 - [ ] Add convolution and pooling tensor operations
 - [ ] Train a LeNet-style MNIST model
+- [ ] Try a small CIFAR CNN after the MNIST path is stable
+
+### Later Branches
+
 - [ ] Explore a small AlexNet-inspired CIFAR model after convolution basics work
-- [ ] Add basic vision utilities
+- [ ] Train a tiny character-level language model
+- [ ] Add Tiny Shakespeare as the first language dataset
+- [ ] Add transformer/GPT-style components later
+- [ ] Compare tiny language-model structure and behavior against nanoGPT
 - [ ] Explore camera geometry and pose estimation
-- [ ] Add small visual odometry experiments
-- [ ] Compare ideas against ORB-SLAM3 and DROID-SLAM as references
+- [ ] Keep ORB-SLAM3 and DROID-SLAM as distant reference points
 
-### Stage 5: Benchmarking
-
-- [ ] Benchmark core operations
-- [ ] Benchmark training loss and validation loss
-- [ ] Track tokens per second where relevant
-- [ ] Track memory usage
-- [ ] Track SLAM trajectory error when SLAM experiments exist
-
-
-Benchmarking starts with the basics. Early benchmarks should focus on whether the core engine works correctly and performs reasonably on small examples.
-
-NanoGrad does not aim to maximize benchmark scores by hiding complexity, over-tuning parameters, or making the code unreadable. Benchmarks should help guide design decisions, not replace them.
-
-
+NanoGrad does not aim to maximize benchmark scores by hiding complexity,
+over-tuning parameters, or making the code unreadable. Benchmarks should help
+guide design decisions, not replace them.
 
 ## Development Philosophy
 
@@ -113,77 +108,6 @@ NanoGrad uses the following projects as reference points:
 ### SLAM / Robotics
 - **ORB-SLAM3**: Classical visual SLAM reference.
 - **DROID-SLAM**: Neural visual SLAM reference.
-
-## Datasets
-
-Checked items have a working demo or test coverage in the current codebase.
-
-### Synthetic / Toy
-
-Current checks:
-
-- [x] **Line fitting**: Scalar regression check for learning `y = ax + b`.
-- [x] **Sign separator**: Binary classification check for separating negative
-  and positive scalar inputs.
-- [x] **XOR logic gate**: Non-linear binary classification check for
-  hidden-layer MLPs.
-
-Possible next checks:
-
-- [ ] **AND / OR gates**: Linear logic gate sanity checks.
-- [ ] **Noisy line fitting**: Regression check with imperfect data.
-- [ ] **Tiny 2D clusters**: Binary classification check with two input
-  dimensions.
-
-### Language Modeling
-
-- [ ] **Tiny Shakespeare**: Small smoke-test dataset.
-- [ ] **TinyStories**: Small-model language learning dataset.
-- [ ] **WikiText-2 / WikiText-103**: Clean language-modeling datasets.
-- [ ] **OpenWebText**: GPT-2-style web text corpus.
-- [ ] **Enwik8 / Enwik9**: Character-level Wikipedia benchmarks.
-
-### Vision / SLAM
-
-- [ ] **MNIST / Fashion-MNIST**: Basic model testing.
-- [ ] **CIFAR-10 / CIFAR-100**: Small image benchmarks.
-- [ ] **STL-10**: Unsupervised visual feature learning.
-- [ ] **KITTI**: Autonomous driving / visual odometry benchmark.
-- [ ] **TUM RGB-D**: RGB-D SLAM benchmark.
-- [ ] **EuRoC MAV**: Visual-inertial SLAM benchmark.
-
-## Model Milestones
-
-Model milestones are ordered to keep progress visible. Synthetic checks come
-first because they make failures easy to understand before moving to image or
-language datasets.
-
-- [x] **Scalar MLP on toy problems**: Line fitting, sign separator, and XOR
-  checks with the scalar autograd engine.
-- [x] **Tensor binary MLP forward pass**: Fixed-weight XOR-style forward pass
-  using tensor linear layers and activations.
-- [ ] **Tensor MLP training loop**: Learn AND, OR, XOR, and tiny 2D clusters
-  using the tensor helpers.
-- [ ] **MNIST MLP**: First real image benchmark without convolution.
-- [ ] **LeNet-style MNIST CNN**: First convolutional model milestone.
-- [ ] **Small CIFAR CNN**: More realistic color-image benchmark.
-- [ ] **AlexNet-inspired CIFAR model**: Larger vision milestone after the
-  convolution and pooling path is already tested.
-- [ ] **Tiny character language model**: First sequence-modeling milestone.
-- [ ] **Mini GPT block**: Embeddings, attention, residuals, and layer norm.
-
-## Benchmarking
-
-NanoGrad benchmarks implementations using:
-
-- Training loss
-- Validation loss
-- Tokens per second
-- Memory usage
-- Model size
-- Dataset preprocessing time
-- SLAM trajectory error
-- Visual odometry drift
 
 ## Quick Checks
 
