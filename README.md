@@ -16,7 +16,7 @@ The project starts with a minimal autograd core and builds small experiments on 
 
 ### Stage 2: Small Models
 
-- [ ] Train tiny MLP-style models
+- [ ] Train tiny MLP-style models on logic gates and tiny clusters
 - [ ] Add simple dataset and dataloader utilities
 - [ ] Benchmark loss, speed, and memory on small examples
 - [ ] Keep implementations readable rather than over-compressed
@@ -30,6 +30,10 @@ The project starts with a minimal autograd core and builds small experiments on 
 
 ### Stage 4: Vision / SLAM Exploration
 
+- [ ] Train an MNIST MLP as the first image benchmark
+- [ ] Add convolution and pooling tensor operations
+- [ ] Train a LeNet-style MNIST model
+- [ ] Explore a small AlexNet-inspired CIFAR model after convolution basics work
 - [ ] Add basic vision utilities
 - [ ] Explore camera geometry and pose estimation
 - [ ] Add small visual odometry experiments
@@ -147,6 +151,26 @@ Possible next checks:
 - [ ] **KITTI**: Autonomous driving / visual odometry benchmark.
 - [ ] **TUM RGB-D**: RGB-D SLAM benchmark.
 - [ ] **EuRoC MAV**: Visual-inertial SLAM benchmark.
+
+## Model Milestones
+
+Model milestones are ordered to keep progress visible. Synthetic checks come
+first because they make failures easy to understand before moving to image or
+language datasets.
+
+- [x] **Scalar MLP on toy problems**: Line fitting, sign separator, and XOR
+  checks with the scalar autograd engine.
+- [x] **Tensor binary MLP forward pass**: Fixed-weight XOR-style forward pass
+  using tensor linear layers and activations.
+- [ ] **Tensor MLP training loop**: Learn AND, OR, XOR, and tiny 2D clusters
+  using the tensor helpers.
+- [ ] **MNIST MLP**: First real image benchmark without convolution.
+- [ ] **LeNet-style MNIST CNN**: First convolutional model milestone.
+- [ ] **Small CIFAR CNN**: More realistic color-image benchmark.
+- [ ] **AlexNet-inspired CIFAR model**: Larger vision milestone after the
+  convolution and pooling path is already tested.
+- [ ] **Tiny character language model**: First sequence-modeling milestone.
+- [ ] **Mini GPT block**: Embeddings, attention, residuals, and layer norm.
 
 ## Benchmarking
 

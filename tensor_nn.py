@@ -5,6 +5,25 @@ from __future__ import annotations
 from tensor import Tensor, matmul
 
 
+def binary_mlp(
+    inputs: Tensor,
+    hidden_weight: Tensor,
+    hidden_bias: Tensor,
+    output_weight: Tensor,
+    output_bias: Tensor,
+) -> Tensor:
+    """Run a one-hidden-layer MLP for binary classification.
+
+    Shapes:
+    - vector input: inputs=(in,) -> (1,)
+    - batch input: inputs=(batch, in) -> (batch, 1)
+    """
+
+    hidden = linear(inputs, hidden_weight, hidden_bias).relu()
+    logits = linear(hidden, output_weight, output_bias)
+    return logits.sigmoid()
+
+
 def linear(inputs: Tensor, weight: Tensor, bias: Tensor) -> Tensor:
     """Apply a dense linear layer.
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from losses import binary_cross_entropy, mse_loss
 from metrics import tensor_binary_accuracy
 from tensor import Tensor, matmul
-from tensor_nn import linear
+from tensor_nn import binary_mlp, linear
 
 
 def regression_loss_demo() -> None:
@@ -65,11 +65,51 @@ def linear_layer_demo() -> None:
     print(f"output: {outputs.tolist()}")
 
 
+def binary_mlp_demo() -> None:
+    inputs = Tensor.from_list([
+        [0, 0],
+        [0, 1],
+        [1, 0],
+        [1, 1],
+    ])
+    targets = Tensor.from_list([
+        [0],
+        [1],
+        [1],
+        [0],
+    ])
+    hidden_weight = Tensor.from_list([
+        [1, -1],
+        [-1, 1],
+    ])
+    hidden_bias = Tensor.from_list([0, 0])
+    output_weight = Tensor.from_list([[10, 10]])
+    output_bias = Tensor.from_list([-5])
+
+    probabilities = binary_mlp(
+        inputs,
+        hidden_weight,
+        hidden_bias,
+        output_weight,
+        output_bias,
+    )
+    loss = binary_cross_entropy(probabilities, targets)
+    accuracy = tensor_binary_accuracy(probabilities, targets)
+
+    print("\nTensor binary MLP")
+    print(f"inputs:      {inputs.tolist()}")
+    print(f"targets:     {targets.tolist()}")
+    print(f"probability: {probabilities.tolist()}")
+    print(f"bce:         {loss[0]:.6f}")
+    print(f"accuracy:    {accuracy:.3f}")
+
+
 def main() -> None:
     regression_loss_demo()
     binary_classification_demo()
     matrix_multiply_demo()
     linear_layer_demo()
+    binary_mlp_demo()
 
 
 if __name__ == "__main__":
