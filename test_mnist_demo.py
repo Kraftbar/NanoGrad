@@ -79,6 +79,7 @@ class MNISTDemoTests(unittest.TestCase):
             "5",
             "--seed",
             "9",
+            "--check-data",
         ])
 
         self.assertEqual(args.data_dir, Path("custom"))
@@ -89,6 +90,7 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertEqual(args.lr, 0.1)
         self.assertEqual(args.hidden, 5)
         self.assertEqual(args.seed, 9)
+        self.assertTrue(args.check_data)
 
     def test_run_trains_on_tiny_idx_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -122,6 +124,53 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertIn("inputs:       4", text)
         self.assertIn("classes:      2", text)
         self.assertIn("val accuracy:", text)
+
+    def test_run_check_data_on_tiny_idx_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            _write_mnist_images(data_dir / "train-images-idx3-ubyte.gz")
+            _write_mnist_labels(data_dir / "train-labels-idx1-ubyte.gz")
+            _write_mnist_images(data_dir / "t10k-images-idx3-ubyte.gz")
+            _write_mnist_labels(data_dir / "t10k-labels-idx1-ubyte.gz")
+            args = parse_args([
+                "--data-dir",
+                str(data_dir),
+                "--limit",
+                "2",
+                "--validation-limit",
+                "1",
+                "--check-data",
+            ])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                run(args)
+
+        text = output.getvalue()
+        self.assertIn("MNIST data check", text)
+        self.assertIn("train samples: 2", text)
+        self.assertIn("train inputs:  4", text)
+        self.assertIn("train labels:  [0]", text)
+        self.assertIn("test samples: 1", text)
+
+    def test_run_check_data_without_test_split(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            _write_mnist_images(data_dir / "train-images-idx3-ubyte.gz")
+            _write_mnist_labels(data_dir / "train-labels-idx1-ubyte.gz")
+            args = parse_args([
+                "--data-dir",
+                str(data_dir),
+                "--limit",
+                "1",
+                "--check-data",
+            ])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                run(args)
+
+        self.assertIn("test:         not found", output.getvalue())
 
 
 def _write_mnist_images(path: Path) -> None:

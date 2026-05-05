@@ -43,6 +43,16 @@ def run(args: argparse.Namespace) -> None:
         )
     )
 
+    if args.check_data:
+        print_data_check(
+            dataset,
+            images_path,
+            labels_path,
+            validation_dataset=validation_dataset,
+            validation_paths=validation_paths,
+        )
+        return
+
     inputs = len(dataset.xs[0])
     classes = int(max(dataset.ys)) + 1
     model = TensorMLP(inputs=inputs, layers=[args.hidden, classes])
@@ -69,6 +79,37 @@ def run(args: argparse.Namespace) -> None:
     if summary.validation_accuracy is not None:
         print(f"val accuracy: {summary.validation_accuracy:.3f}")
     print(f"runtime:      {summary.elapsed_seconds:.4f}s")
+
+
+def print_data_check(
+    dataset,
+    images_path: Path,
+    labels_path: Path,
+    *,
+    validation_dataset=None,
+    validation_paths: tuple[Path, Path] | None = None,
+) -> None:
+    """Print local MNIST file and shape information without training."""
+
+    print("MNIST data check")
+    print(f"train images: {images_path}")
+    print(f"train labels: {labels_path}")
+    print_dataset_summary("train", dataset)
+
+    if validation_dataset is None or validation_paths is None:
+        print("test:         not found")
+        return
+
+    print(f"test images:  {validation_paths[0]}")
+    print(f"test labels:  {validation_paths[1]}")
+    print_dataset_summary("test", validation_dataset)
+
+
+def print_dataset_summary(name: str, dataset) -> None:
+    labels = sorted({int(label) for label in dataset.ys})
+    print(f"{name} samples: {len(dataset)}")
+    print(f"{name} inputs:  {len(dataset.xs[0])}")
+    print(f"{name} labels:  {labels}")
 
 
 def find_mnist_files(
@@ -110,6 +151,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--hidden", type=int, default=32)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--check-data",
+        action="store_true",
+        help="Verify local MNIST files and print shapes without training.",
+    )
     return parser.parse_args(argv)
 
 

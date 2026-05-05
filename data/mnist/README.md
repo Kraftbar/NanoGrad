@@ -3,6 +3,9 @@
 Place the standard MNIST IDX files in this directory before running
 `mnist_demo.py`.
 
+The official MNIST page is
+[yann.lecun.org/exdb/mnist](https://yann.lecun.org/exdb/mnist/index.html).
+
 Expected training files:
 
 ```text
@@ -19,3 +22,9 @@ data/mnist/train-labels-idx1-ubyte
 
 The demo does not download data automatically. This keeps tests and normal
 demo runs deterministic and offline by default.
+
+Check local files without training:
+
+```bash
+python3 mnist_demo.py --check-data
+```
