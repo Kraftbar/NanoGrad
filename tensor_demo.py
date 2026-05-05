@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from losses import binary_cross_entropy, mse_loss
 from metrics import tensor_binary_accuracy
-from tensor import Tensor, matmul
-from tensor_nn import TensorMLP, binary_mlp, linear
+from tensor import Tensor, avg_pool2d, matmul
+from tensor_nn import TensorConv2D, TensorMLP, binary_mlp, linear
 from train import train_tensor_binary_classifier
 
 
@@ -64,6 +64,31 @@ def linear_layer_demo() -> None:
     print(f"weight: {weight.tolist()}")
     print(f"bias:   {bias.tolist()}")
     print(f"output: {outputs.tolist()}")
+
+
+def convolution_demo() -> None:
+    image = Tensor.from_list([
+        [1, 2, 3, 4],
+        [5, 6, 7, 8],
+        [9, 10, 11, 12],
+        [13, 14, 15, 16],
+    ])
+    layer = TensorConv2D(
+        (2, 2),
+        kernel=Tensor.from_list([
+            [1, 0],
+            [0, -1],
+        ], requires_grad=True),
+        bias=Tensor.from_list([0], requires_grad=True),
+    )
+    features = layer(image)
+    pooled = avg_pool2d(features, (2, 2))
+
+    print("\nTensor convolution and pooling")
+    print(f"image:    {image.tolist()}")
+    print(f"kernel:   {layer.kernel.tolist()}")
+    print(f"features: {features.tolist()}")
+    print(f"pooled:   {pooled.tolist()}")
 
 
 def binary_mlp_demo() -> None:
@@ -147,6 +172,7 @@ def main() -> None:
     binary_classification_demo()
     matrix_multiply_demo()
     linear_layer_demo()
+    convolution_demo()
     binary_mlp_demo()
     tensor_training_demo()
 

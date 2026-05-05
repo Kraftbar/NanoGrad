@@ -21,6 +21,9 @@ class TensorDemoTests(unittest.TestCase):
         self.assertIn("output:  [140.0, 320.0]", text)
         self.assertIn("Tensor linear layer", text)
         self.assertIn("output: [[15.0, 31.0], [141.0, 319.0]]", text)
+        self.assertIn("Tensor convolution and pooling", text)
+        self.assertIn("features: [[-5.0, -5.0, -5.0]", text)
+        self.assertIn("pooled:   [[-5.0]]", text)
 
 
 if __name__ == "__main__":
