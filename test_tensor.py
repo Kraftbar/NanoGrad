@@ -80,6 +80,7 @@ class TensorTests(unittest.TestCase):
 
     def test_scalar_broadcast_and_subtraction(self) -> None:
         x = Tensor.from_list([1, 2, 3])
+        scalar = Tensor.from_list([2])
 
         self.assertEqual((x + 10).tolist(), [11.0, 12.0, 13.0])
         self.assertEqual((10 + x).tolist(), [11.0, 12.0, 13.0])
@@ -87,6 +88,32 @@ class TensorTests(unittest.TestCase):
         self.assertEqual((10 - x).tolist(), [9.0, 8.0, 7.0])
         self.assertEqual((x / 2).tolist(), [0.5, 1.0, 1.5])
         self.assertEqual((12 / x).tolist(), [12.0, 6.0, 4.0])
+        self.assertEqual((x + scalar).tolist(), [3.0, 4.0, 5.0])
+        self.assertEqual((scalar + x).tolist(), [3.0, 4.0, 5.0])
+        self.assertEqual((x * scalar).tolist(), [2.0, 4.0, 6.0])
+        self.assertEqual((scalar * x).tolist(), [2.0, 4.0, 6.0])
+
+    def test_scalar_tensor_broadcast_to_matrix(self) -> None:
+        x = Tensor.from_list([
+            [1, 2],
+            [3, 4],
+        ])
+        scalar = Tensor.from_list([10])
+
+        self.assertEqual(
+            (x + scalar).tolist(),
+            [
+                [11.0, 12.0],
+                [13.0, 14.0],
+            ],
+        )
+        self.assertEqual(
+            (scalar * x).tolist(),
+            [
+                [10.0, 20.0],
+                [30.0, 40.0],
+            ],
+        )
 
     def test_row_vector_broadcast(self) -> None:
         x = Tensor.from_list([

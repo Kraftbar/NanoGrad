@@ -190,6 +190,21 @@ class TensorAutogradTests(unittest.TestCase):
 
         self.assertEqual(bias.grad, [2.0, 2.0])
 
+    def test_scalar_tensor_broadcast_gradient(self) -> None:
+        inputs = Tensor.from_list([
+            [1.0, 2.0],
+            [3.0, 4.0],
+        ], requires_grad=True)
+        bias = Tensor.from_list([10.0], requires_grad=True)
+        scale = Tensor.from_list([0.5], requires_grad=True)
+        loss = ((inputs + bias) * scale).sum()
+
+        loss.backward()
+
+        self.assertEqual(inputs.grad, [0.5, 0.5, 0.5, 0.5])
+        self.assertEqual(bias.grad, [2.0])
+        self.assertEqual(scale.grad, [50.0])
+
     def test_row_broadcast_multiply_gradient(self) -> None:
         inputs = Tensor.from_list([
             [1.0, 2.0],
