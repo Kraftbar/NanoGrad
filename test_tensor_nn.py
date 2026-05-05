@@ -3,7 +3,7 @@ import unittest
 import math
 from pathlib import Path
 
-from tensor import Tensor
+from tensor import Tensor, avg_pool2d
 from tensor_nn import (
     TensorConv2D,
     TensorLinear,
@@ -322,6 +322,67 @@ class TensorNNTests(unittest.TestCase):
 
         self.assertEqual(layer.bias.grad, [8.0, 8.0])
         self.assertTrue(any(grad != 0.0 for grad in layer.kernel.grad or []))
+
+    def test_batched_cnn_path_composes_with_linear_layer(self) -> None:
+        conv = TensorConv2D(
+            (2, 1, 2, 2),
+            kernel=Tensor.from_list([
+                [
+                    [
+                        [1, 0],
+                        [0, 1],
+                    ],
+                ],
+                [
+                    [
+                        [1, 1],
+                        [1, 1],
+                    ],
+                ],
+            ], requires_grad=True),
+        )
+        linear_layer = TensorLinear(
+            inputs=2,
+            outputs=1,
+            weight=Tensor.from_list([[0.5, -1.0]], requires_grad=True),
+            bias=Tensor.from_list([2.0], requires_grad=True),
+        )
+        inputs = Tensor.from_list([
+            [
+                [
+                    [1, 2, 3],
+                    [4, 5, 6],
+                    [7, 8, 9],
+                ],
+            ],
+            [
+                [
+                    [2, 0, 1],
+                    [1, 3, 2],
+                    [0, 1, 4],
+                ],
+            ],
+        ])
+
+        features = avg_pool2d(conv(inputs), (2, 2)).flatten(start_axis=1)
+        outputs = linear_layer(features)
+
+        self.assertEqual(features.shape, (2, 2))
+        self.assertEqual(
+            features.tolist(),
+            [
+                [10.0, 20.0],
+                [4.0, 6.75],
+            ],
+        )
+        self.assertEqual(outputs.shape, (2, 1))
+        self.assertEqual(outputs.tolist(), [[-13.0], [-2.75]])
+
+        outputs.sum().backward()
+
+        self.assertTrue(any(grad != 0.0 for grad in conv.kernel.grad or []))
+        self.assertTrue(any(grad != 0.0 for grad in linear_layer.weight.grad or []))
+        self.assertEqual(linear_layer.bias.grad, [2.0])
 
     def test_tensor_conv2d_multi_filter_default_bias(self) -> None:
         layer = TensorConv2D((2, 1, 2, 2), seed=0)
