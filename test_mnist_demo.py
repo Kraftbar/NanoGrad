@@ -1,12 +1,13 @@
 import gzip
 import io
+import argparse
 import struct
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from mnist_demo import find_mnist_files, parse_args, run
+from mnist_demo import find_mnist_files, parse_args, parse_hidden_layers, run
 
 
 class MNISTDemoTests(unittest.TestCase):
@@ -76,7 +77,7 @@ class MNISTDemoTests(unittest.TestCase):
             "--lr",
             "0.1",
             "--hidden",
-            "5",
+            "5,3",
             "--activation",
             "tanh",
             "--seed",
@@ -97,7 +98,7 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
-        self.assertEqual(args.hidden, 5)
+        self.assertEqual(args.hidden, [5, 3])
         self.assertEqual(args.activation, "tanh")
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.report_every, 2)
@@ -140,6 +141,7 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertIn("samples:      4", text)
         self.assertIn("inputs:       4", text)
         self.assertIn("classes:      2", text)
+        self.assertIn("hidden:       3", text)
         self.assertIn("activation:   tanh", text)
         self.assertIn("parameters:   23", text)
         self.assertIn("final batch:", text)
@@ -226,6 +228,13 @@ class MNISTDemoTests(unittest.TestCase):
             self.assertTrue(save_path.exists())
             self.assertTrue(reload_path.exists())
             self.assertIn("saved model:", output.getvalue())
+
+    def test_parse_hidden_layers(self) -> None:
+        self.assertEqual(parse_hidden_layers("32"), [32])
+        self.assertEqual(parse_hidden_layers("64,32"), [64, 32])
+
+        with self.assertRaises(argparse.ArgumentTypeError):
+            parse_hidden_layers("32,0")
 
     def test_run_check_data_without_test_split(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

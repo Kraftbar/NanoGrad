@@ -58,7 +58,7 @@ def run(args: argparse.Namespace) -> None:
     classes = int(max(dataset.ys)) + 1
     model = TensorMLP(
         inputs=inputs,
-        layers=[args.hidden, classes],
+        layers=[*args.hidden, classes],
         hidden_activation=args.activation,
         seed=args.seed,
     )
@@ -92,6 +92,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"samples:      {len(dataset)}")
     print(f"inputs:       {inputs}")
     print(f"classes:      {classes}")
+    print(f"hidden:       {_format_hidden_layers(args.hidden)}")
     print(f"activation:   {args.activation}")
     print(f"parameters:   {model.num_parameters()}")
     print(f"initial loss: {summary.initial_loss:.6f}")
@@ -210,7 +211,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=0.05)
-    parser.add_argument("--hidden", type=int, default=32)
+    parser.add_argument(
+        "--hidden",
+        type=parse_hidden_layers,
+        default=parse_hidden_layers("32"),
+        help="Comma-separated hidden layer sizes, for example 32 or 64,32.",
+    )
     parser.add_argument(
         "--activation",
         choices=("relu", "tanh", "sigmoid"),
@@ -253,6 +259,26 @@ def _first_existing(data_dir: Path, names: tuple[str, ...]) -> Path | None:
         if path.exists():
             return path
     return None
+
+
+def parse_hidden_layers(value: str) -> list[int]:
+    try:
+        layers = [
+            int(part)
+            for part in value.split(",")
+        ]
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "hidden layers must be comma-separated integers"
+        ) from error
+
+    if not layers or any(layer <= 0 for layer in layers):
+        raise argparse.ArgumentTypeError("hidden layers must be positive")
+    return layers
+
+
+def _format_hidden_layers(layers: list[int]) -> str:
+    return ",".join(str(layer) for layer in layers)
 
 
 if __name__ == "__main__":
