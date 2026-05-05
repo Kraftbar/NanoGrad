@@ -242,6 +242,18 @@ class TensorAutogradTests(unittest.TestCase):
                 2,
             ],
         )
+        validation_dataset = TinyDataset(
+            xs=[
+                [2.5, 0.0],
+                [0.0, 2.5],
+                [-2.5, -2.0],
+            ],
+            ys=[
+                0,
+                1,
+                2,
+            ],
+        )
         model = TensorLinear(
             inputs=2,
             outputs=3,
@@ -252,6 +264,7 @@ class TensorAutogradTests(unittest.TestCase):
         summary = train_tensor_multiclass_dataset(
             model,
             dataset,
+            validation_dataset=validation_dataset,
             epochs=100,
             batch_size=2,
             lr=0.2,
@@ -261,6 +274,7 @@ class TensorAutogradTests(unittest.TestCase):
 
         self.assertLess(summary.final_loss, summary.initial_loss)
         self.assertEqual(summary.accuracy, 1.0)
+        self.assertEqual(summary.validation_accuracy, 1.0)
 
     def test_tensor_multiclass_dataset_training_epoch_error(self) -> None:
         with self.assertRaises(ValueError):

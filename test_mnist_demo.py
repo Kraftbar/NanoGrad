@@ -32,6 +32,30 @@ class MNISTDemoTests(unittest.TestCase):
 
             self.assertEqual(find_mnist_files(data_dir), (images, labels))
 
+    def test_find_mnist_files_accepts_optional_test_split(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            images = data_dir / "t10k-images-idx3-ubyte"
+            labels = data_dir / "t10k-labels-idx1-ubyte"
+            images.write_bytes(b"")
+            labels.write_bytes(b"")
+
+            self.assertEqual(
+                find_mnist_files(data_dir, split="test", required=False),
+                (images, labels),
+            )
+
+    def test_find_mnist_files_optional_missing_split(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.assertIsNone(
+                find_mnist_files(Path(tmpdir), split="test", required=False)
+            )
+
+    def test_find_mnist_files_split_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError):
+                find_mnist_files(Path(tmpdir), split="validation")
+
     def test_find_mnist_files_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             with self.assertRaises(FileNotFoundError):
@@ -43,6 +67,8 @@ class MNISTDemoTests(unittest.TestCase):
             "custom",
             "--limit",
             "4",
+            "--validation-limit",
+            "3",
             "--epochs",
             "3",
             "--batch-size",
@@ -57,6 +83,7 @@ class MNISTDemoTests(unittest.TestCase):
 
         self.assertEqual(args.data_dir, Path("custom"))
         self.assertEqual(args.limit, 4)
+        self.assertEqual(args.validation_limit, 3)
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
@@ -68,6 +95,8 @@ class MNISTDemoTests(unittest.TestCase):
             data_dir = Path(tmpdir)
             _write_mnist_images(data_dir / "train-images-idx3-ubyte.gz")
             _write_mnist_labels(data_dir / "train-labels-idx1-ubyte.gz")
+            _write_mnist_images(data_dir / "t10k-images-idx3-ubyte.gz")
+            _write_mnist_labels(data_dir / "t10k-labels-idx1-ubyte.gz")
             args = parse_args([
                 "--data-dir",
                 str(data_dir),
@@ -92,6 +121,7 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertIn("samples:      4", text)
         self.assertIn("inputs:       4", text)
         self.assertIn("classes:      2", text)
+        self.assertIn("val accuracy:", text)
 
 
 def _write_mnist_images(path: Path) -> None:

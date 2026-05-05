@@ -25,6 +25,7 @@ class TrainingSummary:
     history: list[float]
     elapsed_seconds: float
     accuracy: float | None = None
+    validation_accuracy: float | None = None
 
     @property
     def initial_loss(self) -> float:
@@ -244,6 +245,7 @@ def train_tensor_multiclass_dataset(
     model,
     dataset: TinyDataset,
     *,
+    validation_dataset: TinyDataset | None = None,
     epochs: int = 1,
     batch_size: int = 32,
     lr: float = 0.05,
@@ -275,11 +277,17 @@ def train_tensor_multiclass_dataset(
 
     elapsed_seconds = perf_counter() - start
     accuracy = _tensor_multiclass_dataset_accuracy(model, dataset)
+    validation_accuracy = (
+        None
+        if validation_dataset is None
+        else _tensor_multiclass_dataset_accuracy(model, validation_dataset)
+    )
 
     return TrainingSummary(
         history=history,
         elapsed_seconds=elapsed_seconds,
         accuracy=accuracy,
+        validation_accuracy=validation_accuracy,
     )
 
 
