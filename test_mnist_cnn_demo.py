@@ -6,7 +6,15 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from mnist_cnn_demo import MNISTCNN, _activate, _apply_preset, parse_args, run
+from mnist_cnn_demo import (
+    LeNetishCNN,
+    MNISTCNN,
+    _activate,
+    _apply_preset,
+    build_model,
+    parse_args,
+    run,
+)
 from tensor import Tensor
 
 
@@ -27,10 +35,14 @@ class MNISTCNNDemoTests(unittest.TestCase):
             "0.1",
             "--preset",
             "lenet-ish",
+            "--architecture",
+            "simple",
             "--activation",
             "relu",
             "--filters",
             "5",
+            "--second-filters",
+            "7",
             "--kernel-size",
             "2",
             "--pool-size",
@@ -52,8 +64,10 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
         self.assertEqual(args.preset, "lenet-ish")
+        self.assertEqual(args.architecture, "simple")
         self.assertEqual(args.activation, "relu")
         self.assertEqual(args.filters, 5)
+        self.assertEqual(args.second_filters, 7)
         self.assertEqual(args.kernel_size, 2)
         self.assertEqual(args.pool_size, 1)
         self.assertEqual(args.seed, 9)
@@ -64,8 +78,10 @@ class MNISTCNNDemoTests(unittest.TestCase):
     def test_cnn_preset_supplies_default_shape_values(self) -> None:
         args = _apply_preset(parse_args(["--preset", "lenet-ish"]))
 
+        self.assertEqual(args.architecture, "lenet-ish")
         self.assertEqual(args.activation, "tanh")
         self.assertEqual(args.filters, 6)
+        self.assertEqual(args.second_filters, 16)
         self.assertEqual(args.kernel_size, 5)
         self.assertEqual(args.pool_size, 2)
 
@@ -73,18 +89,24 @@ class MNISTCNNDemoTests(unittest.TestCase):
         args = _apply_preset(parse_args([
             "--preset",
             "lenet-ish",
+            "--architecture",
+            "simple",
             "--activation",
             "relu",
             "--filters",
             "2",
+            "--second-filters",
+            "3",
             "--kernel-size",
             "3",
             "--pool-size",
             "1",
         ]))
 
+        self.assertEqual(args.architecture, "simple")
         self.assertEqual(args.activation, "relu")
         self.assertEqual(args.filters, 2)
+        self.assertEqual(args.second_filters, 3)
         self.assertEqual(args.kernel_size, 3)
         self.assertEqual(args.pool_size, 1)
 
@@ -137,6 +159,36 @@ class MNISTCNNDemoTests(unittest.TestCase):
 
         self.assertEqual(logits.shape, (1, 2))
 
+    def test_lenetish_cnn_forward_shape(self) -> None:
+        model = LeNetishCNN(
+            image_shape=(1, 28, 28),
+            classes=10,
+            filters=6,
+            second_filters=16,
+            kernel_size=5,
+            pool_size=2,
+            activation="tanh",
+            seed=0,
+        )
+
+        logits = model(Tensor.zeros((2, 1, 28, 28)))
+
+        self.assertEqual(logits.shape, (2, 10))
+        self.assertEqual(len(model.parameters()), 6)
+
+    def test_build_model_uses_requested_architecture(self) -> None:
+        simple_args = _apply_preset(parse_args(["--preset", "tiny"]))
+        lenet_args = _apply_preset(parse_args(["--preset", "lenet-ish"]))
+
+        self.assertIsInstance(
+            build_model(simple_args, image_shape=(1, 4, 4), classes=2),
+            MNISTCNN,
+        )
+        self.assertIsInstance(
+            build_model(lenet_args, image_shape=(1, 28, 28), classes=10),
+            LeNetishCNN,
+        )
+
     def test_mnist_cnn_shape_errors(self) -> None:
         with self.assertRaises(ValueError):
             MNISTCNN(image_shape=(2, 2), classes=2)
@@ -163,6 +215,14 @@ class MNISTCNNDemoTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             _activate(Tensor.from_list([1.0]), "sigmoid")
+
+        with self.assertRaises(ValueError):
+            LeNetishCNN(image_shape=(1, 12, 12), classes=10)
+
+        args = _apply_preset(parse_args(["--preset", "tiny"]))
+        args.architecture = "unknown"
+        with self.assertRaises(ValueError):
+            build_model(args, image_shape=(1, 4, 4), classes=2)
 
     def test_run_trains_on_tiny_idx_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -202,6 +262,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertIn("input shape:  (1, 2, 2)", text)
         self.assertIn("classes:      2", text)
         self.assertIn("preset:       tiny", text)
+        self.assertIn("architecture: simple", text)
         self.assertIn("activation:   relu", text)
         self.assertIn("filters:      2", text)
         self.assertIn("final batch:", text)
