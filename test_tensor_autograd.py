@@ -219,6 +219,39 @@ class TensorAutogradTests(unittest.TestCase):
 
         self.assert_grad_close(image, loss_fn)
 
+    def test_avg_pool2d_channel_gradient_matches_finite_difference(self) -> None:
+        image = Tensor.from_list([
+            [
+                [1.0, 2.0, 3.0],
+                [4.0, 5.0, 6.0],
+                [7.0, 8.0, 9.0],
+            ],
+            [
+                [0.5, -1.0, 2.0],
+                [3.0, 0.25, -2.0],
+                [1.0, -0.75, 4.0],
+            ],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            [
+                [1.0, -2.0],
+                [0.5, 3.0],
+            ],
+            [
+                [-0.5, 1.5],
+                [0.75, -2.0],
+            ],
+        ])
+        loss = (avg_pool2d(image, (2, 2), stride=(1, 1)) * weights).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            pooled = avg_pool2d(image, (2, 2), stride=(1, 1))
+            return (pooled * weights).sum()[0]
+
+        self.assert_grad_close(image, loss_fn)
+
     def test_transpose_gradient_matches_finite_difference(self) -> None:
         x = Tensor.from_list([
             [1.0, -2.0, 3.0],

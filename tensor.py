@@ -637,16 +637,34 @@ def _conv2d_flat_index(
     return _flat_index((channel, row, col), shape)
 
 
+def _pool2d_flat_index(
+    shape: tuple[int, ...],
+    channel: int,
+    row: int,
+    col: int,
+) -> int:
+    if len(shape) == 2:
+        return _flat_index((row, col), shape)
+    return _flat_index((channel, row, col), shape)
+
+
 def avg_pool2d(
     image: Tensor,
     window: tuple[int, int],
     *,
     stride: tuple[int, int] | None = None,
 ) -> Tensor:
-    """Average-pool a 2D tensor with a fixed window and stride."""
+    """Average-pool a 2D tensor or each channel in a 3D tensor."""
 
-    if len(image.shape) != 2:
-        raise ValueError("avg_pool2d expects a 2D tensor")
+    if image.ndim == 2:
+        channels = 1
+        image_rows, image_cols = image.shape
+        out_shape_prefix = ()
+    elif image.ndim == 3:
+        channels, image_rows, image_cols = image.shape
+        out_shape_prefix = (channels,)
+    else:
+        raise ValueError("avg_pool2d expects a 2D or 3D tensor")
 
     window_rows, window_cols = window
     if window_rows <= 0 or window_cols <= 0:
@@ -659,7 +677,6 @@ def avg_pool2d(
         if stride_rows <= 0 or stride_cols <= 0:
             raise ValueError("avg_pool2d stride dimensions must be positive")
 
-    image_rows, image_cols = image.shape
     if window_rows > image_rows or window_cols > image_cols:
         raise ValueError("avg_pool2d window must fit inside the image")
 
@@ -667,19 +684,25 @@ def avg_pool2d(
     out_cols = ((image_cols - window_cols) // stride_cols) + 1
     scale = 1 / (window_rows * window_cols)
     data = []
-    for out_row in range(out_rows):
-        for out_col in range(out_cols):
-            row_start = out_row * stride_rows
-            col_start = out_col * stride_cols
-            total = 0.0
-            for window_row in range(window_rows):
-                for window_col in range(window_cols):
-                    total += image[row_start + window_row, col_start + window_col]
-            data.append(total * scale)
+    for channel in range(channels):
+        for out_row in range(out_rows):
+            for out_col in range(out_cols):
+                row_start = out_row * stride_rows
+                col_start = out_col * stride_cols
+                total = 0.0
+                for window_row in range(window_rows):
+                    for window_col in range(window_cols):
+                        total += _conv2d_value(
+                            image,
+                            channel,
+                            row_start + window_row,
+                            col_start + window_col,
+                        )
+                data.append(total * scale)
 
     out = Tensor(
         data,
-        (out_rows, out_cols),
+        (*out_shape_prefix, out_rows, out_cols),
         requires_grad=image.requires_grad,
         _children=(image,),
         _op="avg_pool2d",
@@ -690,19 +713,27 @@ def avg_pool2d(
             return
         grad = _grad_data(out)
         image_grad = [0.0] * len(image.data)
-        for out_row in range(out_rows):
-            for out_col in range(out_cols):
-                row_start = out_row * stride_rows
-                col_start = out_col * stride_cols
-                out_grad = grad[out_row * out_cols + out_col] * scale
-                for window_row in range(window_rows):
-                    for window_col in range(window_cols):
-                        image_index = (
-                            (row_start + window_row) * image_cols
-                            + col_start
-                            + window_col
-                        )
-                        image_grad[image_index] += out_grad
+        for channel in range(channels):
+            for out_row in range(out_rows):
+                for out_col in range(out_cols):
+                    row_start = out_row * stride_rows
+                    col_start = out_col * stride_cols
+                    out_index = _pool2d_flat_index(
+                        out.shape,
+                        channel,
+                        out_row,
+                        out_col,
+                    )
+                    out_grad = grad[out_index] * scale
+                    for window_row in range(window_rows):
+                        for window_col in range(window_cols):
+                            image_index = _conv2d_flat_index(
+                                image.shape,
+                                channel,
+                                row_start + window_row,
+                                col_start + window_col,
+                            )
+                            image_grad[image_index] += out_grad
         _add_grad(image, image_grad)
 
     out._backward = _backward
