@@ -47,6 +47,7 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Add tensor multiclass loss, accuracy, and training helper
 - [x] Add local-file MNIST MLP demo entry point
 - [x] Add no-download MNIST-style smoke demo
+- [x] Add basic convolution and pooling tensor operations
 
 ### Next Small Checks
 
@@ -55,7 +56,6 @@ modules should prove that the core works on increasingly realistic checks.
 ### First Real Datasets
 
 - [ ] Run and tune MNIST MLP on local data
-- [ ] Add convolution and pooling tensor operations
 - [ ] Train a LeNet-style MNIST model
 - [ ] Try a small CIFAR CNN after the MNIST path is stable
 
