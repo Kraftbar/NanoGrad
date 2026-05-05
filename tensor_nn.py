@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 import json
+import math
 from pathlib import Path
 
 from tensor import Tensor, matmul
@@ -45,17 +46,15 @@ class TensorLinear(TensorModule):
         *,
         weight: Tensor | None = None,
         bias: Tensor | None = None,
+        seed: int | None = None,
     ) -> None:
         if inputs <= 0 or outputs <= 0:
             raise ValueError("TensorLinear dimensions must be positive")
 
-        self.weight = weight or Tensor(
-            [
-                random.uniform(-1.0, 1.0)
-                for _ in range(inputs * outputs)
-            ],
-            (outputs, inputs),
-            requires_grad=True,
+        self.weight = weight or xavier_uniform(
+            inputs,
+            outputs,
+            seed=seed,
         )
         self.bias = bias or Tensor.zeros((outputs,), requires_grad=True)
 
@@ -93,13 +92,18 @@ class TensorMLP(TensorModule):
         *,
         hidden_activation: str = "relu",
         output_activation: str = "linear",
+        seed: int | None = None,
     ) -> None:
         if not layers:
             raise ValueError("TensorMLP needs at least one layer")
 
         sizes = [inputs, *layers]
         self.layers = [
-            TensorLinear(sizes[i], sizes[i + 1])
+            TensorLinear(
+                sizes[i],
+                sizes[i + 1],
+                seed=None if seed is None else seed + i,
+            )
             for i in range(len(layers))
         ]
         self.hidden_activation = hidden_activation
@@ -160,6 +164,24 @@ def binary_mlp(
     hidden = linear(inputs, hidden_weight, hidden_bias).relu()
     logits = linear(hidden, output_weight, output_bias)
     return logits.sigmoid()
+
+
+def xavier_uniform(inputs: int, outputs: int, *, seed: int | None = None) -> Tensor:
+    """Create a trainable weight matrix with Xavier uniform initialization."""
+
+    if inputs <= 0 or outputs <= 0:
+        raise ValueError("initializer dimensions must be positive")
+
+    limit = math.sqrt(6.0 / (inputs + outputs))
+    rng = random.Random(seed)
+    return Tensor(
+        [
+            rng.uniform(-limit, limit)
+            for _ in range(inputs * outputs)
+        ],
+        (outputs, inputs),
+        requires_grad=True,
+    )
 
 
 def linear(inputs: Tensor, weight: Tensor, bias: Tensor) -> Tensor:

@@ -55,7 +55,7 @@ def run(args: argparse.Namespace) -> None:
 
     inputs = len(dataset.xs[0])
     classes = int(max(dataset.ys)) + 1
-    model = TensorMLP(inputs=inputs, layers=[args.hidden, classes])
+    model = TensorMLP(inputs=inputs, layers=[args.hidden, classes], seed=args.seed)
     if args.load_model is not None:
         model.load(args.load_model)
 

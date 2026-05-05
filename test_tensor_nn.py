@@ -1,12 +1,29 @@
 import tempfile
 import unittest
+import math
 from pathlib import Path
 
 from tensor import Tensor
-from tensor_nn import TensorLinear, TensorMLP, binary_mlp, linear
+from tensor_nn import TensorLinear, TensorMLP, binary_mlp, linear, xavier_uniform
 
 
 class TensorNNTests(unittest.TestCase):
+    def test_xavier_uniform_initialization(self) -> None:
+        weight = xavier_uniform(inputs=3, outputs=2, seed=7)
+        repeat = xavier_uniform(inputs=3, outputs=2, seed=7)
+        different = xavier_uniform(inputs=3, outputs=2, seed=8)
+        limit = math.sqrt(6.0 / (3 + 2))
+
+        self.assertEqual(weight.shape, (2, 3))
+        self.assertTrue(weight.requires_grad)
+        self.assertTrue(all(-limit <= value <= limit for value in weight.data))
+        self.assertEqual(weight.data, repeat.data)
+        self.assertNotEqual(weight.data, different.data)
+
+    def test_xavier_uniform_shape_error(self) -> None:
+        with self.assertRaises(ValueError):
+            xavier_uniform(inputs=0, outputs=1)
+
     def test_tensor_linear_module_uses_parameters(self) -> None:
         layer = TensorLinear(
             inputs=3,
@@ -65,7 +82,8 @@ class TensorNNTests(unittest.TestCase):
         self.assertTrue(target.bias.requires_grad)
 
     def test_tensor_mlp_forward_and_parameters(self) -> None:
-        model = TensorMLP(inputs=2, layers=[3, 1])
+        model = TensorMLP(inputs=2, layers=[3, 1], seed=0)
+        repeat = TensorMLP(inputs=2, layers=[3, 1], seed=0)
         inputs = Tensor.from_list([
             [0, 1],
             [1, 0],
@@ -75,6 +93,7 @@ class TensorNNTests(unittest.TestCase):
 
         self.assertEqual(outputs.shape, (2, 1))
         self.assertEqual(len(model.parameters()), 4)
+        self.assertEqual(model.state_dict(), repeat.state_dict())
 
     def test_tensor_mlp_state_dict_round_trip(self) -> None:
         source = TensorMLP(inputs=2, layers=[2, 1])
