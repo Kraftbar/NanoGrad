@@ -14,11 +14,13 @@ from train import train_tensor_multiclass_dataset
 
 CNN_PRESETS = {
     "tiny": {
+        "activation": "relu",
         "filters": 4,
         "kernel_size": 3,
         "pool_size": 2,
     },
     "lenet-ish": {
+        "activation": "tanh",
         "filters": 6,
         "kernel_size": 5,
         "pool_size": 2,
@@ -37,6 +39,7 @@ class MNISTCNN(TensorModule):
         filters: int = 4,
         kernel_size: int = 3,
         pool_size: int = 2,
+        activation: str = "relu",
         seed: int = 0,
     ) -> None:
         if len(image_shape) != 3:
@@ -49,6 +52,8 @@ class MNISTCNN(TensorModule):
             raise ValueError("kernel_size must be positive")
         if pool_size <= 0:
             raise ValueError("pool_size must be positive")
+        if activation not in ("relu", "tanh"):
+            raise ValueError("activation must be 'relu' or 'tanh'")
 
         channels, rows, cols = image_shape
         conv_rows = rows - kernel_size + 1
@@ -63,6 +68,7 @@ class MNISTCNN(TensorModule):
         classifier_inputs = filters * pooled_rows * pooled_cols
 
         self.pool_size = pool_size
+        self.activation = activation
         self.conv = TensorConv2D(
             (filters, channels, kernel_size, kernel_size),
             seed=seed,
@@ -74,7 +80,7 @@ class MNISTCNN(TensorModule):
         )
 
     def __call__(self, inputs: Tensor) -> Tensor:
-        features = self.conv(inputs).relu()
+        features = _activate(self.conv(inputs), self.activation)
         pooled = avg_pool2d(
             features,
             (self.pool_size, self.pool_size),
@@ -127,6 +133,7 @@ def run(args: argparse.Namespace) -> None:
         filters=args.filters,
         kernel_size=args.kernel_size,
         pool_size=args.pool_size,
+        activation=args.activation,
         seed=args.seed,
     )
     if args.load_model is not None:
@@ -160,6 +167,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"input shape:  {dataset.feature_shape}")
     print(f"classes:      {classes}")
     print(f"preset:       {args.preset}")
+    print(f"activation:   {args.activation}")
     print(f"filters:      {args.filters}")
     print(f"initial loss: {summary.initial_loss:.6f}")
     print(f"final batch:  {summary.final_loss:.6f}")
@@ -186,6 +194,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--preset", choices=sorted(CNN_PRESETS), default="tiny")
+    parser.add_argument("--activation", choices=("relu", "tanh"))
     parser.add_argument("--filters", type=int)
     parser.add_argument("--kernel-size", type=int)
     parser.add_argument("--pool-size", type=int)
@@ -198,6 +207,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _apply_preset(args: argparse.Namespace) -> argparse.Namespace:
     preset = CNN_PRESETS[args.preset]
+    if args.activation is None:
+        args.activation = preset["activation"]
     if args.filters is None:
         args.filters = preset["filters"]
     if args.kernel_size is None:
@@ -205,6 +216,14 @@ def _apply_preset(args: argparse.Namespace) -> argparse.Namespace:
     if args.pool_size is None:
         args.pool_size = preset["pool_size"]
     return args
+
+
+def _activate(tensor: Tensor, activation: str) -> Tensor:
+    if activation == "relu":
+        return tensor.relu()
+    if activation == "tanh":
+        return tensor.tanh()
+    raise ValueError(f"unknown activation: {activation}")
 
 
 def main(argv: list[str] | None = None) -> None:

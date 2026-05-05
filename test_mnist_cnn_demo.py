@@ -6,7 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from mnist_cnn_demo import MNISTCNN, _apply_preset, parse_args, run
+from mnist_cnn_demo import MNISTCNN, _activate, _apply_preset, parse_args, run
 from tensor import Tensor
 
 
@@ -27,6 +27,8 @@ class MNISTCNNDemoTests(unittest.TestCase):
             "0.1",
             "--preset",
             "lenet-ish",
+            "--activation",
+            "relu",
             "--filters",
             "5",
             "--kernel-size",
@@ -50,6 +52,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
         self.assertEqual(args.preset, "lenet-ish")
+        self.assertEqual(args.activation, "relu")
         self.assertEqual(args.filters, 5)
         self.assertEqual(args.kernel_size, 2)
         self.assertEqual(args.pool_size, 1)
@@ -61,6 +64,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
     def test_cnn_preset_supplies_default_shape_values(self) -> None:
         args = _apply_preset(parse_args(["--preset", "lenet-ish"]))
 
+        self.assertEqual(args.activation, "tanh")
         self.assertEqual(args.filters, 6)
         self.assertEqual(args.kernel_size, 5)
         self.assertEqual(args.pool_size, 2)
@@ -69,6 +73,8 @@ class MNISTCNNDemoTests(unittest.TestCase):
         args = _apply_preset(parse_args([
             "--preset",
             "lenet-ish",
+            "--activation",
+            "relu",
             "--filters",
             "2",
             "--kernel-size",
@@ -77,6 +83,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
             "1",
         ]))
 
+        self.assertEqual(args.activation, "relu")
         self.assertEqual(args.filters, 2)
         self.assertEqual(args.kernel_size, 3)
         self.assertEqual(args.pool_size, 1)
@@ -108,6 +115,28 @@ class MNISTCNNDemoTests(unittest.TestCase):
 
         self.assertEqual(logits.shape, (2, 2))
 
+    def test_mnist_cnn_accepts_tanh_activation(self) -> None:
+        model = MNISTCNN(
+            image_shape=(1, 2, 2),
+            classes=2,
+            filters=3,
+            kernel_size=2,
+            pool_size=1,
+            activation="tanh",
+            seed=0,
+        )
+
+        logits = model(Tensor.from_list([
+            [
+                [
+                    [1.0, 0.0],
+                    [0.0, 0.0],
+                ],
+            ],
+        ]))
+
+        self.assertEqual(logits.shape, (1, 2))
+
     def test_mnist_cnn_shape_errors(self) -> None:
         with self.assertRaises(ValueError):
             MNISTCNN(image_shape=(2, 2), classes=2)
@@ -124,6 +153,16 @@ class MNISTCNNDemoTests(unittest.TestCase):
                 kernel_size=2,
                 pool_size=2,
             )
+        with self.assertRaises(ValueError):
+            MNISTCNN(
+                image_shape=(1, 2, 2),
+                classes=2,
+                kernel_size=2,
+                activation="sigmoid",
+            )
+
+        with self.assertRaises(ValueError):
+            _activate(Tensor.from_list([1.0]), "sigmoid")
 
     def test_run_trains_on_tiny_idx_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -163,6 +202,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertIn("input shape:  (1, 2, 2)", text)
         self.assertIn("classes:      2", text)
         self.assertIn("preset:       tiny", text)
+        self.assertIn("activation:   relu", text)
         self.assertIn("filters:      2", text)
         self.assertIn("final batch:", text)
         self.assertIn("train loss:", text)
