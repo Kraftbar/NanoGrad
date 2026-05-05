@@ -120,6 +120,9 @@ class Tensor:
     def reshape(self, shape: tuple[int, ...]) -> "Tensor":
         return reshape(self, shape)
 
+    def flatten(self) -> "Tensor":
+        return flatten(self)
+
     def permute(self, axes: tuple[int, ...]) -> "Tensor":
         return permute(self, axes)
 
@@ -464,6 +467,12 @@ def reshape(tensor: Tensor, shape: tuple[int, ...]) -> Tensor:
 
     out._backward = _backward
     return out
+
+
+def flatten(tensor: Tensor) -> Tensor:
+    """Return all tensor values as one row-major vector."""
+
+    return reshape(tensor, (tensor.numel,))
 
 
 def permute(tensor: Tensor, axes: tuple[int, ...]) -> Tensor:

@@ -119,6 +119,33 @@ class TensorAutogradTests(unittest.TestCase):
 
         self.assertEqual(x.grad, [0.5, -1.0, 2.0, 3.0])
 
+    def test_flatten_gradient_preserves_flat_order(self) -> None:
+        x = Tensor.from_list([
+            [
+                [1.0, 2.0],
+                [3.0, 4.0],
+            ],
+            [
+                [5.0, 6.0],
+                [7.0, 8.0],
+            ],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            0.5,
+            -1.0,
+            2.0,
+            3.0,
+            1.5,
+            -0.5,
+            0.25,
+            4.0,
+        ])
+        loss = (x.flatten() * weights).sum()
+
+        loss.backward()
+
+        self.assertEqual(x.grad, weights.data)
+
     def test_conv2d_valid_gradients_match_finite_difference(self) -> None:
         image = Tensor.from_list([
             [1.0, 2.0, -1.0],

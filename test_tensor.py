@@ -5,6 +5,7 @@ from tensor import (
     Tensor,
     avg_pool2d,
     conv2d_valid,
+    flatten,
     matmul,
     permute,
     reshape,
@@ -421,6 +422,24 @@ class TensorTests(unittest.TestCase):
                     [4.0, 5.0, 6.0],
                 ],
             ],
+        )
+
+    def test_flatten(self) -> None:
+        x = Tensor.from_list([
+            [
+                [1, 2],
+                [3, 4],
+            ],
+            [
+                [5, 6],
+                [7, 8],
+            ],
+        ])
+
+        self.assertEqual(flatten(x).shape, (8,))
+        self.assertEqual(
+            x.flatten().tolist(),
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
         )
 
     def test_conv2d_valid(self) -> None:
