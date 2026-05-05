@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import random
+import gzip
+import struct
 from collections.abc import Iterator
+from pathlib import Path
 
 
 Batch = tuple[list[list[float]], list[float]]
@@ -82,6 +85,62 @@ def make_batches(
         shuffle=shuffle,
         seed=seed,
     )
+
+
+def load_mnist(
+    images_path: str | Path,
+    labels_path: str | Path,
+    *,
+    limit: int | None = None,
+) -> TinyDataset:
+    """Load local MNIST IDX image and label files into a TinyDataset."""
+
+    return TinyDataset(
+        read_mnist_images(images_path, limit=limit),
+        read_mnist_labels(labels_path, limit=limit),
+    )
+
+
+def read_mnist_images(
+    path: str | Path,
+    *,
+    limit: int | None = None,
+) -> list[list[float]]:
+    """Read local MNIST IDX image data as flattened values in [0, 1]."""
+
+    with _open_idx(path) as file:
+        magic, count, rows, cols = struct.unpack(">IIII", file.read(16))
+        if magic != 2051:
+            raise ValueError("MNIST image file has invalid magic number")
+
+        count = _limited_count(count, limit)
+        image_size = rows * cols
+        images = []
+        for _ in range(count):
+            raw = file.read(image_size)
+            if len(raw) != image_size:
+                raise ValueError("MNIST image file ended early")
+            images.append([pixel / 255.0 for pixel in raw])
+        return images
+
+
+def read_mnist_labels(
+    path: str | Path,
+    *,
+    limit: int | None = None,
+) -> list[float]:
+    """Read local MNIST IDX label data."""
+
+    with _open_idx(path) as file:
+        magic, count = struct.unpack(">II", file.read(8))
+        if magic != 2049:
+            raise ValueError("MNIST label file has invalid magic number")
+
+        count = _limited_count(count, limit)
+        raw = file.read(count)
+        if len(raw) != count:
+            raise ValueError("MNIST label file ended early")
+        return [float(label) for label in raw]
 
 
 def line_fitting() -> tuple[list[list[float]], list[float]]:
@@ -216,3 +275,18 @@ def xor_gate() -> tuple[list[list[float]], list[float]]:
         0.0,
     ]
     return xs, ys
+
+
+def _open_idx(path: str | Path):
+    path = Path(path)
+    if path.suffix == ".gz":
+        return gzip.open(path, "rb")
+    return path.open("rb")
+
+
+def _limited_count(count: int, limit: int | None) -> int:
+    if limit is None:
+        return count
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
+    return min(count, limit)
