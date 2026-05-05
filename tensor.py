@@ -207,77 +207,14 @@ def add(left: Tensor, right: Number | Tensor) -> Tensor:
         out._backward = _backward
         return out
 
-    if _is_scalar_tensor(right) and not _is_scalar_tensor(left):
-        out = Tensor(
-            [value + right[0] for value in left.data],
-            left.shape,
-            requires_grad=left.requires_grad or right.requires_grad,
-            _children=(left, right),
-            _op="+",
-        )
-
-        def _backward() -> None:
-            grad = _grad_data(out)
-            if left.requires_grad:
-                _add_grad(left, grad)
-            if right.requires_grad:
-                _add_grad(right, [sum(grad)])
-
-        out._backward = _backward
-        return out
-
-    if _is_scalar_tensor(left) and not _is_scalar_tensor(right):
-        out = Tensor(
-            [left[0] + value for value in right.data],
-            right.shape,
-            requires_grad=left.requires_grad or right.requires_grad,
-            _children=(left, right),
-            _op="+",
-        )
-
-        def _backward() -> None:
-            grad = _grad_data(out)
-            if left.requires_grad:
-                _add_grad(left, [sum(grad)])
-            if right.requires_grad:
-                _add_grad(right, grad)
-
-        out._backward = _backward
-        return out
-
-    if _can_row_broadcast(left, right):
-        out = _row_broadcast(left, right, lambda a, b: a + b, _op="+")
-
-        def _backward() -> None:
-            grad = _grad_data(out)
-            if left.requires_grad:
-                _add_grad(left, grad)
-            if right.requires_grad:
-                _add_grad(right, _sum_row_broadcast_grad(left.shape, grad))
-
-        out._backward = _backward
-        return out
-
-    if _can_row_broadcast(right, left):
-        out = _row_broadcast(right, left, lambda a, b: b + a, _op="+")
-
-        def _backward() -> None:
-            grad = _grad_data(out)
-            if right.requires_grad:
-                _add_grad(right, grad)
-            if left.requires_grad:
-                _add_grad(left, _sum_row_broadcast_grad(right.shape, grad))
-
-        out._backward = _backward
-        return out
-
-    _require_same_shape(left, right)
+    out_shape = _broadcast_shape(left.shape, right.shape)
     out = Tensor(
         [
-            a + b
-            for a, b in zip(left.data, right.data)
+            left.data[_broadcast_data_index(index, out_shape, left.shape)]
+            + right.data[_broadcast_data_index(index, out_shape, right.shape)]
+            for index in range(_numel(out_shape))
         ],
-        left.shape,
+        out_shape,
         requires_grad=left.requires_grad or right.requires_grad,
         _children=(left, right),
         _op="+",
@@ -286,9 +223,9 @@ def add(left: Tensor, right: Number | Tensor) -> Tensor:
     def _backward() -> None:
         grad = _grad_data(out)
         if left.requires_grad:
-            _add_grad(left, grad)
+            _add_grad(left, _sum_broadcast_grad(grad, out_shape, left.shape))
         if right.requires_grad:
-            _add_grad(right, grad)
+            _add_grad(right, _sum_broadcast_grad(grad, out_shape, right.shape))
 
     out._backward = _backward
     return out
@@ -313,109 +250,14 @@ def multiply(left: Tensor, right: Number | Tensor) -> Tensor:
         out._backward = _backward
         return out
 
-    if _is_scalar_tensor(right) and not _is_scalar_tensor(left):
-        out = Tensor(
-            [value * right[0] for value in left.data],
-            left.shape,
-            requires_grad=left.requires_grad or right.requires_grad,
-            _children=(left, right),
-            _op="*",
-        )
-
-        def _backward() -> None:
-            grad = _grad_data(out)
-            if left.requires_grad:
-                _add_grad(left, [right[0] * value for value in grad])
-            if right.requires_grad:
-                total = sum(
-                    value * out_grad
-                    for value, out_grad in zip(left.data, grad)
-                )
-                _add_grad(right, [total])
-
-        out._backward = _backward
-        return out
-
-    if _is_scalar_tensor(left) and not _is_scalar_tensor(right):
-        out = Tensor(
-            [left[0] * value for value in right.data],
-            right.shape,
-            requires_grad=left.requires_grad or right.requires_grad,
-            _children=(left, right),
-            _op="*",
-        )
-
-        def _backward() -> None:
-            grad = _grad_data(out)
-            if left.requires_grad:
-                total = sum(
-                    value * out_grad
-                    for value, out_grad in zip(right.data, grad)
-                )
-                _add_grad(left, [total])
-            if right.requires_grad:
-                _add_grad(right, [left[0] * value for value in grad])
-
-        out._backward = _backward
-        return out
-
-    if _can_row_broadcast(left, right):
-        out = _row_broadcast(left, right, lambda a, b: a * b, _op="*")
-
-        def _backward() -> None:
-            grad = _grad_data(out)
-            rows, cols = left.shape
-            if left.requires_grad:
-                _add_grad(
-                    left,
-                    [
-                        grad[row * cols + col] * right[col]
-                        for row in range(rows)
-                        for col in range(cols)
-                    ],
-                )
-            if right.requires_grad:
-                row_grad = [0.0] * cols
-                for row in range(rows):
-                    for col in range(cols):
-                        row_grad[col] += grad[row * cols + col] * left[row, col]
-                _add_grad(right, row_grad)
-
-        out._backward = _backward
-        return out
-
-    if _can_row_broadcast(right, left):
-        out = _row_broadcast(right, left, lambda a, b: b * a, _op="*")
-
-        def _backward() -> None:
-            grad = _grad_data(out)
-            rows, cols = right.shape
-            if right.requires_grad:
-                _add_grad(
-                    right,
-                    [
-                        grad[row * cols + col] * left[col]
-                        for row in range(rows)
-                        for col in range(cols)
-                    ],
-                )
-            if left.requires_grad:
-                row_grad = [0.0] * cols
-                for row in range(rows):
-                    for col in range(cols):
-                        row_grad[col] += grad[row * cols + col] * right[row, col]
-                _add_grad(left, row_grad)
-
-        out._backward = _backward
-        return out
-
-    _require_same_shape(left, right)
+    out_shape = _broadcast_shape(left.shape, right.shape)
     out = Tensor(
         [
-            a * b
-            for a, b in zip(left.data, right.data)
+            left.data[_broadcast_data_index(index, out_shape, left.shape)]
+            * right.data[_broadcast_data_index(index, out_shape, right.shape)]
+            for index in range(_numel(out_shape))
         ],
-        left.shape,
+        out_shape,
         requires_grad=left.requires_grad or right.requires_grad,
         _children=(left, right),
         _op="*",
@@ -424,9 +266,19 @@ def multiply(left: Tensor, right: Number | Tensor) -> Tensor:
     def _backward() -> None:
         grad = _grad_data(out)
         if left.requires_grad:
-            _add_grad(left, [b * g for b, g in zip(right.data, grad)])
+            left_grad = [0.0] * left.numel
+            for index, out_grad in enumerate(grad):
+                left_index = _broadcast_data_index(index, out_shape, left.shape)
+                right_index = _broadcast_data_index(index, out_shape, right.shape)
+                left_grad[left_index] += right.data[right_index] * out_grad
+            _add_grad(left, left_grad)
         if right.requires_grad:
-            _add_grad(right, [a * g for a, g in zip(left.data, grad)])
+            right_grad = [0.0] * right.numel
+            for index, out_grad in enumerate(grad):
+                left_index = _broadcast_data_index(index, out_shape, left.shape)
+                right_index = _broadcast_data_index(index, out_shape, right.shape)
+                right_grad[right_index] += left.data[left_index] * out_grad
+            _add_grad(right, right_grad)
 
     out._backward = _backward
     return out
@@ -996,36 +848,56 @@ def _normalize_index(index: int, size: int) -> int:
     return index
 
 
+def _broadcast_shape(
+    left_shape: tuple[int, ...],
+    right_shape: tuple[int, ...],
+) -> tuple[int, ...]:
+    shape = []
+    max_ndim = max(len(left_shape), len(right_shape))
+    padded_left = (1,) * (max_ndim - len(left_shape)) + left_shape
+    padded_right = (1,) * (max_ndim - len(right_shape)) + right_shape
+
+    for left_dim, right_dim in zip(padded_left, padded_right):
+        if left_dim == right_dim:
+            shape.append(left_dim)
+        elif left_dim == 1:
+            shape.append(right_dim)
+        elif right_dim == 1:
+            shape.append(left_dim)
+        else:
+            raise ValueError("tensor shapes cannot be broadcast")
+    return tuple(shape)
+
+
+def _broadcast_data_index(
+    out_flat_index: int,
+    out_shape: tuple[int, ...],
+    source_shape: tuple[int, ...],
+) -> int:
+    out_index = _unravel_index(out_flat_index, out_shape)
+    padded_source = (1,) * (len(out_shape) - len(source_shape)) + source_shape
+    source_index = [
+        0 if source_dim == 1 else out_dim
+        for out_dim, source_dim in zip(out_index, padded_source)
+    ]
+    source_index = source_index[len(source_index) - len(source_shape) :]
+    return _flat_index(tuple(source_index), source_shape)
+
+
+def _sum_broadcast_grad(
+    grad: list[float],
+    out_shape: tuple[int, ...],
+    source_shape: tuple[int, ...],
+) -> list[float]:
+    source_grad = [0.0] * _numel(source_shape)
+    for index, value in enumerate(grad):
+        source_grad[_broadcast_data_index(index, out_shape, source_shape)] += value
+    return source_grad
+
+
 def _require_same_shape(left: Tensor, right: Tensor) -> None:
     if left.shape != right.shape:
         raise ValueError("tensor shapes must match")
-
-
-def _is_scalar_tensor(tensor: Tensor) -> bool:
-    return tensor.shape == (1,)
-
-
-def _can_row_broadcast(matrix: Tensor, row: Tensor) -> bool:
-    return (
-        len(matrix.shape) == 2
-        and len(row.shape) == 1
-        and matrix.shape[1] == row.shape[0]
-    )
-
-
-def _row_broadcast(matrix: Tensor, row: Tensor, fn, _op: str = "") -> Tensor:
-    rows, cols = matrix.shape
-    data = []
-    for i in range(rows):
-        for j in range(cols):
-            data.append(fn(matrix[i, j], row[j]))
-    return Tensor(
-        data,
-        matrix.shape,
-        requires_grad=matrix.requires_grad or row.requires_grad,
-        _children=(matrix, row),
-        _op=_op,
-    )
 
 
 def _map(tensor: Tensor, fn, grad_fn, op: str) -> Tensor:
@@ -1083,15 +955,3 @@ def _add_grad(tensor: Tensor, grad: Sequence[Number]) -> None:
         raise ValueError("gradient length does not match tensor data")
     for i, value in enumerate(grad):
         tensor.grad[i] += float(value)
-
-
-def _sum_row_broadcast_grad(
-    matrix_shape: tuple[int, ...],
-    grad: Sequence[Number],
-) -> list[float]:
-    rows, cols = matrix_shape
-    row_grad = [0.0] * cols
-    for row in range(rows):
-        for col in range(cols):
-            row_grad[col] += grad[row * cols + col]
-    return row_grad

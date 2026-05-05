@@ -222,6 +222,35 @@ class TensorAutogradTests(unittest.TestCase):
 
         self.assert_grad_close(x, loss_fn)
 
+    def test_nd_broadcast_gradients_match_finite_difference(self) -> None:
+        x = Tensor.from_list([
+            [
+                [1.0, 2.0, 3.0],
+                [4.0, 5.0, 6.0],
+            ],
+            [
+                [7.0, 8.0, 9.0],
+                [10.0, 11.0, 12.0],
+            ],
+        ], requires_grad=True)
+        row = Tensor.from_list([0.5, -1.0, 2.0], requires_grad=True)
+        column = Tensor.from_list([
+            [
+                [1.0],
+                [-2.0],
+            ],
+        ], requires_grad=True)
+        loss = ((x * row) + column).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            return ((x * row) + column).sum()[0]
+
+        self.assert_grad_close(x, loss_fn)
+        self.assert_grad_close(row, loss_fn)
+        self.assert_grad_close(column, loss_fn)
+
     def test_row_broadcast_bias_gradient(self) -> None:
         inputs = Tensor.from_list([
             [1.0, 2.0],

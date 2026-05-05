@@ -174,6 +174,52 @@ class TensorTests(unittest.TestCase):
             ],
         )
 
+    def test_nd_trailing_dimension_broadcast(self) -> None:
+        x = Tensor.from_list([
+            [
+                [1, 2, 3],
+                [4, 5, 6],
+            ],
+            [
+                [7, 8, 9],
+                [10, 11, 12],
+            ],
+        ])
+        row = Tensor.from_list([10, 20, 30])
+        column = Tensor.from_list([
+            [
+                [1],
+                [2],
+            ],
+        ])
+
+        self.assertEqual(
+            (x + row).tolist(),
+            [
+                [
+                    [11.0, 22.0, 33.0],
+                    [14.0, 25.0, 36.0],
+                ],
+                [
+                    [17.0, 28.0, 39.0],
+                    [20.0, 31.0, 42.0],
+                ],
+            ],
+        )
+        self.assertEqual(
+            (x * column).tolist(),
+            [
+                [
+                    [1.0, 2.0, 3.0],
+                    [8.0, 10.0, 12.0],
+                ],
+                [
+                    [7.0, 8.0, 9.0],
+                    [20.0, 22.0, 24.0],
+                ],
+            ],
+        )
+
     def test_scalar_broadcast_and_subtraction(self) -> None:
         x = Tensor.from_list([1, 2, 3])
         scalar = Tensor.from_list([2])
