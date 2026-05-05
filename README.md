@@ -44,6 +44,7 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Add tensor module abstractions for linear layers and MLPs
 - [x] Train tensor classifiers on AND, OR, and XOR logic gates
 - [x] Add local MNIST IDX dataset loading
+- [x] Add tensor multiclass loss, accuracy, and training helper
 
 ### Next Small Checks
 

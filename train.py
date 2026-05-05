@@ -7,8 +7,11 @@ from dataclasses import dataclass
 from time import perf_counter
 
 from engine import Value
-from losses import binary_cross_entropy as tensor_binary_cross_entropy
-from metrics import binary_accuracy, tensor_binary_accuracy
+from losses import (
+    binary_cross_entropy as tensor_binary_cross_entropy,
+    softmax_cross_entropy,
+)
+from metrics import binary_accuracy, tensor_binary_accuracy, tensor_multiclass_accuracy
 from nn import Module
 from optim import SGD, TensorSGD
 from tensor import Tensor
@@ -194,6 +197,40 @@ def train_tensor_binary_classifier(
 
     elapsed_seconds = perf_counter() - start
     accuracy = tensor_binary_accuracy(forward(), targets)
+
+    return TrainingSummary(
+        history=history,
+        elapsed_seconds=elapsed_seconds,
+        accuracy=accuracy,
+    )
+
+
+def train_tensor_multiclass_classifier(
+    forward: Callable[[], Tensor],
+    targets: Tensor,
+    parameters: list[Tensor],
+    *,
+    steps: int = 100,
+    lr: float = 0.05,
+) -> TrainingSummary:
+    """Train a tensor multiclass classifier from a logits closure."""
+
+    optimizer = TensorSGD(parameters, lr=lr)
+    history = []
+    start = perf_counter()
+
+    for _ in range(steps):
+        logits = forward()
+        loss = softmax_cross_entropy(logits, targets)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        history.append(loss[0])
+
+    elapsed_seconds = perf_counter() - start
+    accuracy = tensor_multiclass_accuracy(forward(), targets)
 
     return TrainingSummary(
         history=history,

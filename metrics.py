@@ -42,3 +42,42 @@ def tensor_binary_accuracy(
         targets=targets.data,
         threshold=threshold,
     )
+
+
+def tensor_multiclass_accuracy(logits: Tensor, targets: Tensor | list[int]) -> float:
+    """Return accuracy from 2D class logits and integer class targets."""
+
+    if len(logits.shape) != 2:
+        raise ValueError("multiclass accuracy expects 2D logits")
+
+    rows, cols = logits.shape
+    classes = _class_indices(targets, rows, cols)
+
+    correct = 0
+    for row, target in enumerate(classes):
+        start = row * cols
+        row_logits = logits.data[start : start + cols]
+        prediction = max(range(cols), key=lambda col: row_logits[col])
+        correct += prediction == target
+
+    return correct / rows
+
+
+def _class_indices(targets: Tensor | list[int], rows: int, cols: int) -> list[int]:
+    if isinstance(targets, Tensor):
+        if targets.shape not in ((rows,), (rows, 1)):
+            raise ValueError("class targets must have shape (batch,) or (batch, 1)")
+        values = targets.data
+    else:
+        values = targets
+
+    if len(values) != rows:
+        raise ValueError("class targets length must match logits batch size")
+
+    classes = []
+    for value in values:
+        index = int(value)
+        if index != value or index < 0 or index >= cols:
+            raise ValueError("class targets must be integer class indices")
+        classes.append(index)
+    return classes

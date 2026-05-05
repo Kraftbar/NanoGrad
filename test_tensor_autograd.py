@@ -3,7 +3,7 @@ import unittest
 from datasets import and_gate, or_gate, xor_gate
 from tensor import Tensor, matmul
 from tensor_nn import TensorLinear, TensorMLP
-from train import train_tensor_binary_classifier
+from train import train_tensor_binary_classifier, train_tensor_multiclass_classifier
 
 
 class TensorAutogradTests(unittest.TestCase):
@@ -184,6 +184,35 @@ class TensorAutogradTests(unittest.TestCase):
             model.parameters(),
             steps=2000,
             lr=0.5,
+        )
+
+        self.assertLess(summary.final_loss, summary.initial_loss)
+        self.assertLess(summary.final_loss, 0.01)
+        self.assertEqual(summary.accuracy, 1.0)
+
+    def test_tensor_linear_learns_tiny_multiclass_clusters(self) -> None:
+        inputs = Tensor.from_list([
+            [2.0, 0.0],
+            [3.0, 0.0],
+            [0.0, 2.0],
+            [0.0, 3.0],
+            [-2.0, -2.0],
+            [-3.0, -2.0],
+        ])
+        targets = Tensor.from_list([0, 0, 1, 1, 2, 2])
+        model = TensorLinear(
+            inputs=2,
+            outputs=3,
+            weight=Tensor.zeros((3, 2), requires_grad=True),
+            bias=Tensor.zeros((3,), requires_grad=True),
+        )
+
+        summary = train_tensor_multiclass_classifier(
+            lambda: model(inputs),
+            targets,
+            model.parameters(),
+            steps=500,
+            lr=0.2,
         )
 
         self.assertLess(summary.final_loss, summary.initial_loss)
