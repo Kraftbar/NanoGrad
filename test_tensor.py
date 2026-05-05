@@ -7,6 +7,7 @@ from tensor import (
     tensor_exp,
     tensor_log,
     tensor_mean,
+    tensor_reciprocal,
     tensor_relu,
     tensor_sigmoid,
     tensor_sum,
@@ -81,6 +82,8 @@ class TensorTests(unittest.TestCase):
         self.assertEqual((10 + x).tolist(), [11.0, 12.0, 13.0])
         self.assertEqual((x - 1).tolist(), [0.0, 1.0, 2.0])
         self.assertEqual((10 - x).tolist(), [9.0, 8.0, 7.0])
+        self.assertEqual((x / 2).tolist(), [0.5, 1.0, 1.5])
+        self.assertEqual((12 / x).tolist(), [12.0, 6.0, 4.0])
 
     def test_row_vector_broadcast(self) -> None:
         x = Tensor.from_list([
@@ -116,6 +119,20 @@ class TensorTests(unittest.TestCase):
             [
                 [10.0, 40.0, 90.0],
                 [40.0, 100.0, 180.0],
+            ],
+        )
+        self.assertEqual(
+            (x / row).tolist(),
+            [
+                [0.1, 0.1, 0.1],
+                [0.4, 0.25, 0.2],
+            ],
+        )
+        self.assertEqual(
+            (row / x).tolist(),
+            [
+                [10.0, 10.0, 10.0],
+                [2.5, 4.0, 5.0],
             ],
         )
 
@@ -220,6 +237,12 @@ class TensorTests(unittest.TestCase):
         self.assertAlmostEqual(x.log()[1, 1], 3.0)
         self.assertAlmostEqual(tensor_exp(Tensor.from_list([0.0]))[0], 1.0)
 
+    def test_reciprocal(self) -> None:
+        x = Tensor.from_list([2.0, 4.0, -8.0])
+
+        self.assertEqual(tensor_reciprocal(x).tolist(), [0.5, 0.25, -0.125])
+        self.assertEqual(x.reciprocal().tolist(), tensor_reciprocal(x).tolist())
+
     def test_relu(self) -> None:
         x = Tensor.from_list([
             [-2, -1, 0],
@@ -285,6 +308,12 @@ class TensorTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             Tensor.from_list([1, 0, -1]).log()
+
+        with self.assertRaises(ValueError):
+            Tensor.from_list([1, 0, -1]).reciprocal()
+
+        with self.assertRaises(ValueError):
+            Tensor.from_list([1, 2, 3]) / 0
 
 
 if __name__ == "__main__":

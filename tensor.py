@@ -124,6 +124,18 @@ class Tensor:
     def __rmul__(self, other: Number | "Tensor") -> "Tensor":
         return multiply(self, other)
 
+    def __truediv__(self, other: Number | "Tensor") -> "Tensor":
+        if isinstance(other, (int, float)):
+            if other == 0:
+                raise ValueError("division by zero")
+            return self * (1 / other)
+        return self * tensor_reciprocal(other)
+
+    def __rtruediv__(self, other: Number | "Tensor") -> "Tensor":
+        if isinstance(other, (int, float)):
+            return tensor_reciprocal(self) * other
+        return other / self
+
     @property
     def T(self) -> "Tensor":
         return transpose(self)
@@ -145,6 +157,9 @@ class Tensor:
 
     def sigmoid(self) -> "Tensor":
         return tensor_sigmoid(self)
+
+    def reciprocal(self) -> "Tensor":
+        return tensor_reciprocal(self)
 
     def zero_grad(self) -> None:
         if self.requires_grad:
@@ -674,6 +689,19 @@ def tensor_sigmoid(tensor: Tensor) -> Tensor:
         sigmoid,
         lambda value: sigmoid(value) * (1 - sigmoid(value)),
         "sigmoid",
+    )
+
+
+def tensor_reciprocal(tensor: Tensor) -> Tensor:
+    """Elementwise reciprocal."""
+
+    if any(value == 0.0 for value in tensor.data):
+        raise ValueError("division by zero")
+    return _map(
+        tensor,
+        lambda value: 1 / value,
+        lambda value: -1 / (value * value),
+        "reciprocal",
     )
 
 

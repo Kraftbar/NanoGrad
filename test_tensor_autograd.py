@@ -151,6 +151,22 @@ class TensorAutogradTests(unittest.TestCase):
         self.assertEqual(inputs.grad, [10.0, -2.0, 10.0, -2.0])
         self.assertEqual(row.grad, [4.0, 6.0])
 
+    def test_division_gradient_matches_finite_difference(self) -> None:
+        inputs = Tensor.from_list([
+            [2.0, 4.0],
+            [6.0, 8.0],
+        ], requires_grad=True)
+        row = Tensor.from_list([0.5, 2.0], requires_grad=True)
+        loss = ((inputs / row) + (12 / inputs)).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            return ((inputs / row) + (12 / inputs)).sum()[0]
+
+        self.assert_grad_close(inputs, loss_fn)
+        self.assert_grad_close(row, loss_fn)
+
     def test_log_sigmoid_gradient_matches_finite_difference(self) -> None:
         x = Tensor.from_list([0.25, -0.5], requires_grad=True)
         loss = (x.sigmoid().log() * Tensor.from_list([2.0, -1.0])).sum()
