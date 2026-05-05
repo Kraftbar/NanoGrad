@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 
-from tensor import Tensor, matmul
+from tensor import Tensor, conv2d_valid, matmul
 
 
 class TensorModule:
@@ -79,6 +79,48 @@ class TensorLinear(TensorModule):
 
     def load_state_dict(self, state: dict) -> None:
         self.weight.data = _state_data(state, "weight", self.weight.shape)
+        self.bias.data = _state_data(state, "bias", self.bias.shape)
+
+
+class TensorConv2D(TensorModule):
+    """Single-kernel 2D convolution layer for early vision experiments."""
+
+    def __init__(
+        self,
+        kernel_shape: tuple[int, int],
+        *,
+        kernel: Tensor | None = None,
+        bias: Tensor | None = None,
+        seed: int | None = None,
+    ) -> None:
+        rows, cols = kernel_shape
+        if rows <= 0 or cols <= 0:
+            raise ValueError("TensorConv2D kernel dimensions must be positive")
+
+        self.kernel = kernel or conv2d_kernel(kernel_shape, seed=seed)
+        self.bias = bias or Tensor.zeros((1,), requires_grad=True)
+
+        _require_matrix("kernel", self.kernel)
+        _require_vector("bias", self.bias)
+        if self.kernel.shape != kernel_shape:
+            raise ValueError("kernel shape must match kernel_shape")
+        if self.bias.shape != (1,):
+            raise ValueError("bias shape must be (1,)")
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        return conv2d_valid(inputs, self.kernel) + self.bias
+
+    def parameters(self) -> list[Tensor]:
+        return [self.kernel, self.bias]
+
+    def state_dict(self) -> dict:
+        return {
+            "kernel": _tensor_state(self.kernel),
+            "bias": _tensor_state(self.bias),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        self.kernel.data = _state_data(state, "kernel", self.kernel.shape)
         self.bias.data = _state_data(state, "bias", self.bias.shape)
 
 
@@ -180,6 +222,26 @@ def xavier_uniform(inputs: int, outputs: int, *, seed: int | None = None) -> Ten
             for _ in range(inputs * outputs)
         ],
         (outputs, inputs),
+        requires_grad=True,
+    )
+
+
+def conv2d_kernel(kernel_shape: tuple[int, int], *, seed: int | None = None) -> Tensor:
+    """Create a trainable 2D convolution kernel."""
+
+    rows, cols = kernel_shape
+    if rows <= 0 or cols <= 0:
+        raise ValueError("kernel dimensions must be positive")
+
+    fan_in = rows * cols
+    limit = math.sqrt(6.0 / (fan_in + 1))
+    rng = random.Random(seed)
+    return Tensor(
+        [
+            rng.uniform(-limit, limit)
+            for _ in range(fan_in)
+        ],
+        kernel_shape,
         requires_grad=True,
     )
 

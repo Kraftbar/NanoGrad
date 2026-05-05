@@ -4,7 +4,15 @@ import math
 from pathlib import Path
 
 from tensor import Tensor
-from tensor_nn import TensorLinear, TensorMLP, binary_mlp, linear, xavier_uniform
+from tensor_nn import (
+    TensorConv2D,
+    TensorLinear,
+    TensorMLP,
+    binary_mlp,
+    conv2d_kernel,
+    linear,
+    xavier_uniform,
+)
 
 
 class TensorNNTests(unittest.TestCase):
@@ -23,6 +31,22 @@ class TensorNNTests(unittest.TestCase):
     def test_xavier_uniform_shape_error(self) -> None:
         with self.assertRaises(ValueError):
             xavier_uniform(inputs=0, outputs=1)
+
+    def test_conv2d_kernel_initialization(self) -> None:
+        kernel = conv2d_kernel((2, 3), seed=7)
+        repeat = conv2d_kernel((2, 3), seed=7)
+        different = conv2d_kernel((2, 3), seed=8)
+        limit = math.sqrt(6.0 / (6 + 1))
+
+        self.assertEqual(kernel.shape, (2, 3))
+        self.assertTrue(kernel.requires_grad)
+        self.assertTrue(all(-limit <= value <= limit for value in kernel.data))
+        self.assertEqual(kernel.data, repeat.data)
+        self.assertNotEqual(kernel.data, different.data)
+
+    def test_conv2d_kernel_shape_error(self) -> None:
+        with self.assertRaises(ValueError):
+            conv2d_kernel((0, 1))
 
     def test_tensor_linear_module_uses_parameters(self) -> None:
         layer = TensorLinear(
@@ -79,6 +103,67 @@ class TensorNNTests(unittest.TestCase):
         self.assertEqual(target.weight.tolist(), [[1.0, 2.0], [3.0, 4.0]])
         self.assertEqual(target.bias.tolist(), [5.0, 6.0])
         self.assertTrue(target.weight.requires_grad)
+        self.assertTrue(target.bias.requires_grad)
+
+    def test_tensor_conv2d_module_uses_parameters(self) -> None:
+        layer = TensorConv2D(
+            (2, 2),
+            kernel=Tensor.from_list([
+                [1, 0],
+                [0, -1],
+            ], requires_grad=True),
+            bias=Tensor.from_list([10], requires_grad=True),
+        )
+        inputs = Tensor.from_list([
+            [1, 2, 3],
+            [4, 5, 6],
+            [7, 8, 9],
+        ])
+
+        outputs = layer(inputs)
+
+        self.assertEqual(outputs.shape, (2, 2))
+        self.assertEqual(
+            outputs.tolist(),
+            [
+                [6.0, 6.0],
+                [6.0, 6.0],
+            ],
+        )
+        self.assertEqual(layer.parameters(), [layer.kernel, layer.bias])
+
+    def test_tensor_conv2d_zero_grad(self) -> None:
+        layer = TensorConv2D((2, 2), seed=0)
+        loss = layer(Tensor.from_list([
+            [1, 2, 3],
+            [4, 5, 6],
+            [7, 8, 9],
+        ])).sum()
+        loss.backward()
+
+        self.assertTrue(any(grad != 0.0 for grad in layer.kernel.grad or []))
+        self.assertTrue(any(grad != 0.0 for grad in layer.bias.grad or []))
+        layer.zero_grad()
+
+        self.assertEqual(layer.kernel.grad, [0.0, 0.0, 0.0, 0.0])
+        self.assertEqual(layer.bias.grad, [0.0])
+
+    def test_tensor_conv2d_state_dict_round_trip(self) -> None:
+        source = TensorConv2D(
+            (2, 2),
+            kernel=Tensor.from_list([
+                [1, 2],
+                [3, 4],
+            ], requires_grad=True),
+            bias=Tensor.from_list([5], requires_grad=True),
+        )
+        target = TensorConv2D((2, 2))
+
+        target.load_state_dict(source.state_dict())
+
+        self.assertEqual(target.kernel.tolist(), [[1.0, 2.0], [3.0, 4.0]])
+        self.assertEqual(target.bias.tolist(), [5.0])
+        self.assertTrue(target.kernel.requires_grad)
         self.assertTrue(target.bias.requires_grad)
 
     def test_tensor_mlp_forward_and_parameters(self) -> None:
@@ -155,6 +240,21 @@ class TensorNNTests(unittest.TestCase):
                 inputs=2,
                 outputs=1,
                 weight=Tensor.from_list([[1, 2], [3, 4]]),
+            )
+
+        with self.assertRaises(ValueError):
+            TensorConv2D((0, 1))
+
+        with self.assertRaises(ValueError):
+            TensorConv2D(
+                (2, 2),
+                kernel=Tensor.from_list([[1, 2]]),
+            )
+
+        with self.assertRaises(ValueError):
+            TensorConv2D(
+                (2, 2),
+                bias=Tensor.from_list([1, 2]),
             )
 
     def test_binary_mlp_vector_input(self) -> None:
