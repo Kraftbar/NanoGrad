@@ -139,6 +139,9 @@ class Tensor:
     def reshape(self, shape: tuple[int, ...]) -> "Tensor":
         return reshape(self, shape)
 
+    def conv2d_valid(self, kernel: "Tensor") -> "Tensor":
+        return conv2d_valid(self, kernel)
+
     @property
     def T(self) -> "Tensor":
         return transpose(self)
@@ -530,6 +533,80 @@ def reshape(tensor: Tensor, shape: tuple[int, ...]) -> Tensor:
     def _backward() -> None:
         if tensor.requires_grad:
             _add_grad(tensor, _grad_data(out))
+
+    out._backward = _backward
+    return out
+
+
+def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
+    """Apply a single 2D valid convolution-style filter.
+
+    This uses the cross-correlation convention common in neural networks:
+    the kernel is slid over the image without flipping it.
+    """
+
+    if len(image.shape) != 2 or len(kernel.shape) != 2:
+        raise ValueError("conv2d_valid expects 2D image and kernel tensors")
+
+    image_rows, image_cols = image.shape
+    kernel_rows, kernel_cols = kernel.shape
+    if kernel_rows > image_rows or kernel_cols > image_cols:
+        raise ValueError("conv2d_valid kernel must fit inside the image")
+
+    out_rows = image_rows - kernel_rows + 1
+    out_cols = image_cols - kernel_cols + 1
+    data = []
+    for out_row in range(out_rows):
+        for out_col in range(out_cols):
+            total = 0.0
+            for kernel_row in range(kernel_rows):
+                for kernel_col in range(kernel_cols):
+                    total += (
+                        image[out_row + kernel_row, out_col + kernel_col]
+                        * kernel[kernel_row, kernel_col]
+                    )
+            data.append(total)
+
+    out = Tensor(
+        data,
+        (out_rows, out_cols),
+        requires_grad=image.requires_grad or kernel.requires_grad,
+        _children=(image, kernel),
+        _op="conv2d_valid",
+    )
+
+    def _backward() -> None:
+        grad = _grad_data(out)
+        if image.requires_grad:
+            image_grad = [0.0] * len(image.data)
+            for out_row in range(out_rows):
+                for out_col in range(out_cols):
+                    out_grad = grad[out_row * out_cols + out_col]
+                    for kernel_row in range(kernel_rows):
+                        for kernel_col in range(kernel_cols):
+                            image_index = (
+                                (out_row + kernel_row) * image_cols
+                                + out_col
+                                + kernel_col
+                            )
+                            image_grad[image_index] += (
+                                out_grad * kernel[kernel_row, kernel_col]
+                            )
+            _add_grad(image, image_grad)
+        if kernel.requires_grad:
+            kernel_grad = [0.0] * len(kernel.data)
+            for kernel_row in range(kernel_rows):
+                for kernel_col in range(kernel_cols):
+                    total = 0.0
+                    for out_row in range(out_rows):
+                        for out_col in range(out_cols):
+                            out_grad = grad[out_row * out_cols + out_col]
+                            total += (
+                                out_grad
+                                * image[out_row + kernel_row, out_col + kernel_col]
+                            )
+                    kernel_grad[kernel_row * kernel_cols + kernel_col] += total
+            _add_grad(kernel, kernel_grad)
 
     out._backward = _backward
     return out

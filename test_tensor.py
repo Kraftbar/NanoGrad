@@ -3,6 +3,7 @@ import unittest
 
 from tensor import (
     Tensor,
+    conv2d_valid,
     matmul,
     reshape,
     tensor_exp,
@@ -210,6 +211,36 @@ class TensorTests(unittest.TestCase):
         self.assertEqual(x.reshape((3, 2)).shape, (3, 2))
         self.assertEqual(x.reshape((3, 2)).reshape((6,)).tolist(), x.tolist())
 
+    def test_conv2d_valid(self) -> None:
+        image = Tensor.from_list([
+            [1, 2, 3],
+            [4, 5, 6],
+            [7, 8, 9],
+        ])
+        edge_kernel = Tensor.from_list([
+            [1, 0],
+            [0, -1],
+        ])
+        sum_kernel = Tensor.from_list([
+            [1, 1],
+            [1, 1],
+        ])
+
+        self.assertEqual(
+            conv2d_valid(image, edge_kernel).tolist(),
+            [
+                [-4.0, -4.0],
+                [-4.0, -4.0],
+            ],
+        )
+        self.assertEqual(
+            image.conv2d_valid(sum_kernel).tolist(),
+            [
+                [12.0, 16.0],
+                [24.0, 28.0],
+            ],
+        )
+
     def test_sum_reductions(self) -> None:
         x = Tensor.from_list([
             [1, 2, 3],
@@ -322,6 +353,18 @@ class TensorTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             Tensor.from_list([1, 2, 3]).reshape((2, 2))
+
+        with self.assertRaises(ValueError):
+            conv2d_valid(Tensor.from_list([1, 2]), Tensor.from_list([[1]]))
+
+        with self.assertRaises(ValueError):
+            conv2d_valid(
+                Tensor.from_list([[1, 2]]),
+                Tensor.from_list([
+                    [1, 2],
+                    [3, 4],
+                ]),
+            )
 
         with self.assertRaises(ValueError):
             Tensor.from_list([1, 0, -1]).log()
