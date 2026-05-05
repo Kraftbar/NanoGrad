@@ -11,7 +11,7 @@ Number = int | float
 
 
 class Tensor:
-    """A dense 1D or 2D tensor backed by flat row-major data."""
+    """A dense tensor backed by flat row-major data."""
 
     def __init__(
         self,
@@ -22,8 +22,8 @@ class Tensor:
         _children: tuple["Tensor", ...] = (),
         _op: str = "",
     ) -> None:
-        if len(shape) not in (1, 2):
-            raise ValueError("Tensor currently supports only 1D or 2D shapes")
+        if len(shape) == 0:
+            raise ValueError("Tensor shape must have at least one dimension")
         if any(dim <= 0 for dim in shape):
             raise ValueError("shape dimensions must be positive")
         if len(data) != _numel(shape):
@@ -48,28 +48,19 @@ class Tensor:
     def __len__(self) -> int:
         return self.shape[0]
 
-    def __getitem__(self, index: int | tuple[int, int]) -> float:
+    def __getitem__(self, index: int | tuple[int, ...]) -> float:
         if len(self.shape) == 1:
             if not isinstance(index, int):
                 raise IndexError("1D tensors use one integer index")
             return self.data[_normalize_index(index, self.shape[0])]
 
-        if not isinstance(index, tuple) or len(index) != 2:
-            raise IndexError("2D tensors use row and column indices")
+        if not isinstance(index, tuple) or len(index) != len(self.shape):
+            raise IndexError("tensor indices must match tensor dimensions")
 
-        row = _normalize_index(index[0], self.shape[0])
-        col = _normalize_index(index[1], self.shape[1])
-        return self.data[row * self.shape[1] + col]
+        return self.data[_flat_index(index, self.shape)]
 
-    def tolist(self) -> list[float] | list[list[float]]:
-        if len(self.shape) == 1:
-            return self.data[:]
-
-        rows, cols = self.shape
-        return [
-            self.data[row * cols : (row + 1) * cols]
-            for row in range(rows)
-        ]
+    def tolist(self) -> list:
+        return _nested_list(self.data, self.shape)
 
     @classmethod
     def zeros(cls, shape: tuple[int, ...], *, requires_grad: bool = False) -> "Tensor":
@@ -78,30 +69,12 @@ class Tensor:
     @classmethod
     def from_list(
         cls,
-        values: Sequence[Number] | Sequence[Sequence[Number]],
+        values: Sequence,
         *,
         requires_grad: bool = False,
     ) -> "Tensor":
-        if not values:
-            raise ValueError("values must not be empty")
-
-        first = values[0]
-        if isinstance(first, Sequence):
-            rows = values
-            width = len(first)
-            if width == 0:
-                raise ValueError("rows must not be empty")
-            if any(not isinstance(row, Sequence) or len(row) != width for row in rows):
-                raise ValueError("2D input must be rectangular")
-
-            data = [
-                value
-                for row in rows
-                for value in row
-            ]
-            return cls(data, (len(rows), width), requires_grad=requires_grad)
-
-        return cls(values, (len(values),), requires_grad=requires_grad)
+        shape = _infer_shape(values)
+        return cls(_flatten_nested(values), shape, requires_grad=requires_grad)
 
     def __add__(self, other: Number | "Tensor") -> "Tensor":
         return add(self, other)
@@ -976,6 +949,57 @@ def _numel(shape: tuple[int, ...]) -> int:
     for dim in shape:
         total *= dim
     return total
+
+
+def _flat_index(index: tuple[int, ...], shape: tuple[int, ...]) -> int:
+    offset = 0
+    for value, dim in zip(index, shape):
+        offset = offset * dim + _normalize_index(value, dim)
+    return offset
+
+
+def _infer_shape(values: Sequence) -> tuple[int, ...]:
+    if not _is_sequence(values):
+        raise ValueError("values must be a non-empty sequence")
+    if not values:
+        raise ValueError("values must not be empty")
+
+    first = values[0]
+    if not _is_sequence(first):
+        if any(_is_sequence(value) for value in values):
+            raise ValueError("nested input must be rectangular")
+        return (len(values),)
+
+    child_shape = _infer_shape(first)
+    for value in values:
+        if not _is_sequence(value) or _infer_shape(value) != child_shape:
+            raise ValueError("nested input must be rectangular")
+    return (len(values), *child_shape)
+
+
+def _flatten_nested(values: Sequence) -> list[float]:
+    flat = []
+    for value in values:
+        if _is_sequence(value):
+            flat.extend(_flatten_nested(value))
+        else:
+            flat.append(float(value))
+    return flat
+
+
+def _nested_list(data: list[float], shape: tuple[int, ...]) -> list:
+    if len(shape) == 1:
+        return data[: shape[0]]
+
+    step = _numel(shape[1:])
+    return [
+        _nested_list(data[index * step : (index + 1) * step], shape[1:])
+        for index in range(shape[0])
+    ]
+
+
+def _is_sequence(value) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
 
 
 def _normalize_index(index: int, size: int) -> int:

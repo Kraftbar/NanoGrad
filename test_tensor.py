@@ -44,12 +44,53 @@ class TensorTests(unittest.TestCase):
             ],
         )
 
+    def test_nd_tensor_shape_indexing_and_list_conversion(self) -> None:
+        x = Tensor.from_list([
+            [
+                [1, 2, 3],
+                [4, 5, 6],
+            ],
+            [
+                [7, 8, 9],
+                [10, 11, 12],
+            ],
+        ])
+
+        self.assertEqual(x.shape, (2, 2, 3))
+        self.assertEqual(x[0, 0, 0], 1.0)
+        self.assertEqual(x[1, 1, 2], 12.0)
+        self.assertEqual(x[-1, -1, -1], 12.0)
+        self.assertEqual(
+            x.tolist(),
+            [
+                [
+                    [1.0, 2.0, 3.0],
+                    [4.0, 5.0, 6.0],
+                ],
+                [
+                    [7.0, 8.0, 9.0],
+                    [10.0, 11.0, 12.0],
+                ],
+            ],
+        )
+
     def test_zeros(self) -> None:
         self.assertEqual(
             Tensor.zeros((2, 2)).tolist(),
             [
                 [0.0, 0.0],
                 [0.0, 0.0],
+            ],
+        )
+        self.assertEqual(
+            Tensor.zeros((2, 1, 2)).tolist(),
+            [
+                [
+                    [0.0, 0.0],
+                ],
+                [
+                    [0.0, 0.0],
+                ],
             ],
         )
 
@@ -75,6 +116,55 @@ class TensorTests(unittest.TestCase):
             [
                 [2.0, 4.0],
                 [6.0, 8.0],
+            ],
+        )
+
+    def test_nd_elementwise_add_and_multiply(self) -> None:
+        a = Tensor.from_list([
+            [
+                [1, 2],
+                [3, 4],
+            ],
+            [
+                [5, 6],
+                [7, 8],
+            ],
+        ])
+        b = Tensor.from_list([
+            [
+                [10, 20],
+                [30, 40],
+            ],
+            [
+                [50, 60],
+                [70, 80],
+            ],
+        ])
+
+        self.assertEqual(
+            (a + b).tolist(),
+            [
+                [
+                    [11.0, 22.0],
+                    [33.0, 44.0],
+                ],
+                [
+                    [55.0, 66.0],
+                    [77.0, 88.0],
+                ],
+            ],
+        )
+        self.assertEqual(
+            (a * Tensor.from_list([2])).tolist(),
+            [
+                [
+                    [2.0, 4.0],
+                    [6.0, 8.0],
+                ],
+                [
+                    [10.0, 12.0],
+                    [14.0, 16.0],
+                ],
             ],
         )
 
@@ -238,6 +328,15 @@ class TensorTests(unittest.TestCase):
         )
         self.assertEqual(x.reshape((3, 2)).shape, (3, 2))
         self.assertEqual(x.reshape((3, 2)).reshape((6,)).tolist(), x.tolist())
+        self.assertEqual(
+            x.reshape((1, 2, 3)).tolist(),
+            [
+                [
+                    [1.0, 2.0, 3.0],
+                    [4.0, 5.0, 6.0],
+                ],
+            ],
+        )
 
     def test_conv2d_valid(self) -> None:
         image = Tensor.from_list([
@@ -371,6 +470,26 @@ class TensorTests(unittest.TestCase):
                 [1, 2],
                 [3],
             ])
+
+        with self.assertRaises(ValueError):
+            Tensor.from_list([
+                [
+                    [1, 2],
+                ],
+                [
+                    [3],
+                ],
+            ])
+
+        with self.assertRaises(IndexError):
+            Tensor.from_list([
+                [
+                    [1],
+                ],
+            ])[0, 0]
+
+        with self.assertRaises(ValueError):
+            Tensor([1], ())
 
         with self.assertRaises(ValueError):
             Tensor.from_list([1, 2]) + Tensor.from_list([1, 2, 3])

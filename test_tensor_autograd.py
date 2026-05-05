@@ -29,6 +29,24 @@ class TensorAutogradTests(unittest.TestCase):
             ],
         )
 
+    def test_nd_elementwise_gradients(self) -> None:
+        x = Tensor.from_list([
+            [
+                [1.0, 2.0],
+                [3.0, 4.0],
+            ],
+            [
+                [5.0, 6.0],
+                [7.0, 8.0],
+            ],
+        ], requires_grad=True)
+        y = (x * Tensor.from_list([2.0])).sum()
+
+        y.backward()
+
+        self.assertEqual(y.shape, (1,))
+        self.assertEqual(x.grad, [2.0] * 8)
+
     def test_subtraction_and_scalar_reverse_gradients(self) -> None:
         x = Tensor.from_list([1.0, -2.0, 3.0], requires_grad=True)
         y = Tensor.from_list([0.5, 4.0, -1.0], requires_grad=True)
