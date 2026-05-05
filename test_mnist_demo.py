@@ -79,6 +79,8 @@ class MNISTDemoTests(unittest.TestCase):
             "5",
             "--seed",
             "9",
+            "--report-every",
+            "2",
             "--save-model",
             "model.json",
             "--load-model",
@@ -94,6 +96,7 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertEqual(args.lr, 0.1)
         self.assertEqual(args.hidden, 5)
         self.assertEqual(args.seed, 9)
+        self.assertEqual(args.report_every, 2)
         self.assertEqual(args.save_model, Path("model.json"))
         self.assertEqual(args.load_model, Path("model-in.json"))
         self.assertTrue(args.check_data)
@@ -118,6 +121,8 @@ class MNISTDemoTests(unittest.TestCase):
                 "3",
                 "--lr",
                 "0.1",
+                "--report-every",
+                "1",
             ])
 
             output = io.StringIO()
@@ -130,6 +135,8 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertIn("inputs:       4", text)
         self.assertIn("classes:      2", text)
         self.assertIn("val accuracy:", text)
+        self.assertIn("epoch 1/2", text)
+        self.assertIn("val_acc=", text)
 
     def test_run_check_data_on_tiny_idx_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

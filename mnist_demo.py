@@ -68,6 +68,16 @@ def run(args: argparse.Namespace) -> None:
         shuffle=True,
         seed=args.seed,
         validation_dataset=validation_dataset,
+        epoch_callback=(
+            None
+            if args.report_every <= 0
+            else lambda epoch, summary: print_epoch_report(
+                epoch,
+                args.epochs,
+                summary,
+                report_every=args.report_every,
+            )
+        ),
     )
 
     print("MNIST MLP demo")
@@ -86,6 +96,26 @@ def run(args: argparse.Namespace) -> None:
     if args.save_model is not None:
         model.save(args.save_model)
         print(f"saved model:  {args.save_model}")
+
+
+def print_epoch_report(
+    epoch: int,
+    epochs: int,
+    summary,
+    *,
+    report_every: int,
+) -> None:
+    if epoch % report_every != 0 and epoch != epochs:
+        return
+
+    message = (
+        f"epoch {epoch}/{epochs} "
+        f"loss={summary.final_loss:.6f} "
+        f"train_acc={summary.accuracy:.3f}"
+    )
+    if summary.validation_accuracy is not None:
+        message += f" val_acc={summary.validation_accuracy:.3f}"
+    print(message)
 
 
 def print_data_check(
@@ -158,6 +188,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--hidden", type=int, default=32)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--report-every", type=int, default=0)
     parser.add_argument("--save-model", type=Path)
     parser.add_argument("--load-model", type=Path)
     parser.add_argument(

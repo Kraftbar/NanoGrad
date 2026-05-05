@@ -276,6 +276,41 @@ class TensorAutogradTests(unittest.TestCase):
         self.assertEqual(summary.accuracy, 1.0)
         self.assertEqual(summary.validation_accuracy, 1.0)
 
+    def test_tensor_multiclass_dataset_training_epoch_callback(self) -> None:
+        dataset = TinyDataset(
+            xs=[
+                [2.0, 0.0],
+                [0.0, 2.0],
+            ],
+            ys=[
+                0,
+                1,
+            ],
+        )
+        model = TensorLinear(
+            inputs=2,
+            outputs=2,
+            weight=Tensor.zeros((2, 2), requires_grad=True),
+            bias=Tensor.zeros((2,), requires_grad=True),
+        )
+        reports = []
+
+        train_tensor_multiclass_dataset(
+            model,
+            dataset,
+            epochs=3,
+            batch_size=1,
+            lr=0.2,
+            shuffle=False,
+            epoch_callback=lambda epoch, summary: reports.append(
+                (epoch, summary.final_loss, summary.accuracy)
+            ),
+        )
+
+        self.assertEqual([report[0] for report in reports], [1, 2, 3])
+        self.assertTrue(all(report[1] > 0.0 for report in reports))
+        self.assertTrue(all(report[2] is not None for report in reports))
+
     def test_tensor_multiclass_dataset_training_epoch_error(self) -> None:
         with self.assertRaises(ValueError):
             train_tensor_multiclass_dataset(

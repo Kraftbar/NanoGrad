@@ -251,6 +251,7 @@ def train_tensor_multiclass_dataset(
     lr: float = 0.05,
     shuffle: bool = True,
     seed: int | None = None,
+    epoch_callback: Callable[[int, TrainingSummary], None] | None = None,
 ) -> TrainingSummary:
     """Train a tensor multiclass model on TinyDataset batches."""
 
@@ -274,6 +275,19 @@ def train_tensor_multiclass_dataset(
             optimizer.step()
 
             history.append(loss[0])
+
+        if epoch_callback is not None:
+            epoch_summary = TrainingSummary(
+                history=history[:],
+                elapsed_seconds=perf_counter() - start,
+                accuracy=_tensor_multiclass_dataset_accuracy(model, dataset),
+                validation_accuracy=(
+                    None
+                    if validation_dataset is None
+                    else _tensor_multiclass_dataset_accuracy(model, validation_dataset)
+                ),
+            )
+            epoch_callback(epoch + 1, epoch_summary)
 
     elapsed_seconds = perf_counter() - start
     accuracy = _tensor_multiclass_dataset_accuracy(model, dataset)
