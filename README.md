@@ -48,7 +48,7 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Add local-file MNIST MLP demo entry point
 - [x] Add no-download channel-first MNIST-style CNN smoke demo
 - [x] Add local-file MNIST CNN demo entry point
-- [x] Add a LeNet-ish MNIST CNN preset
+- [x] Add a two-conv LeNet-ish MNIST CNN preset
 - [x] Add basic convolution and pooling tensor operations
 
 ### Next Small Checks
