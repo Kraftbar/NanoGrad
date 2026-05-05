@@ -412,6 +412,48 @@ class TensorTests(unittest.TestCase):
         self.assertEqual(x.mean(axis=0).tolist(), [2.5, 3.5, 4.5])
         self.assertEqual(x.mean(axis=1).tolist(), [2.0, 5.0])
 
+    def test_nd_sum_and_mean_reductions(self) -> None:
+        x = Tensor.from_list([
+            [
+                [1, 2, 3],
+                [4, 5, 6],
+            ],
+            [
+                [7, 8, 9],
+                [10, 11, 12],
+            ],
+        ])
+
+        self.assertEqual(
+            x.sum(axis=0).tolist(),
+            [
+                [8.0, 10.0, 12.0],
+                [14.0, 16.0, 18.0],
+            ],
+        )
+        self.assertEqual(
+            x.sum(axis=1).tolist(),
+            [
+                [5.0, 7.0, 9.0],
+                [17.0, 19.0, 21.0],
+            ],
+        )
+        self.assertEqual(
+            x.sum(axis=2).tolist(),
+            [
+                [6.0, 15.0],
+                [24.0, 33.0],
+            ],
+        )
+        self.assertEqual(x.sum(axis=-1).tolist(), x.sum(axis=2).tolist())
+        self.assertEqual(
+            x.mean(axis=2).tolist(),
+            [
+                [2.0, 5.0],
+                [8.0, 11.0],
+            ],
+        )
+
     def test_1d_sum_and_mean(self) -> None:
         x = Tensor.from_list([1, 2, 3])
 
@@ -521,6 +563,13 @@ class TensorTests(unittest.TestCase):
                 [1, 2],
                 [3, 4],
             ]).sum(axis=2)
+
+        with self.assertRaises(ValueError):
+            Tensor.from_list([
+                [
+                    [1],
+                ],
+            ]).sum(axis=3)
 
         with self.assertRaises(ValueError):
             Tensor.from_list([1, 2, 3]).reshape((2, 2))

@@ -196,6 +196,32 @@ class TensorAutogradTests(unittest.TestCase):
 
         self.assert_grad_close(x, loss_fn)
 
+    def test_nd_axis_reduction_gradients(self) -> None:
+        x = Tensor.from_list([
+            [
+                [1.0, 2.0],
+                [3.0, 4.0],
+            ],
+            [
+                [5.0, 6.0],
+                [7.0, 8.0],
+            ],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            [0.5, -1.0],
+            [2.0, 3.0],
+        ])
+        loss = (x.sum(axis=2) * weights).sum()
+        loss = loss + x.mean(axis=0).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            weighted = (x.sum(axis=2) * weights).sum()
+            return (weighted + x.mean(axis=0).sum())[0]
+
+        self.assert_grad_close(x, loss_fn)
+
     def test_row_broadcast_bias_gradient(self) -> None:
         inputs = Tensor.from_list([
             [1.0, 2.0],

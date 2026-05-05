@@ -783,7 +783,7 @@ def transpose(tensor: Tensor) -> Tensor:
 
 
 def tensor_sum(tensor: Tensor, axis: int | None = None) -> Tensor:
-    """Sum all values or reduce a 2D tensor along one axis."""
+    """Sum all values or reduce a tensor along one axis."""
 
     if axis is None:
         out = Tensor(
@@ -801,95 +801,50 @@ def tensor_sum(tensor: Tensor, axis: int | None = None) -> Tensor:
         out._backward = _backward
         return out
 
-    if len(tensor.shape) == 1:
-        if axis != 0:
-            raise ValueError("1D tensors only support axis=0")
-        return tensor_sum(tensor)
+    axis = _normalize_axis(axis, len(tensor.shape))
+    out_shape = _reduced_shape(tensor.shape, axis)
+    data = [0.0] * _numel(out_shape)
 
-    rows, cols = tensor.shape
-    if axis == 0:
-        data = []
-        for col in range(cols):
-            total = 0.0
-            for row in range(rows):
-                total += tensor[row, col]
-            data.append(total)
-        out = Tensor(
-            data,
-            (cols,),
-            requires_grad=tensor.requires_grad,
-            _children=(tensor,),
-            _op="sum",
-        )
+    for flat_index, value in enumerate(tensor.data):
+        index = _unravel_index(flat_index, tensor.shape)
+        reduced_index = index[:axis] + index[axis + 1 :]
+        if not reduced_index:
+            reduced_index = (0,)
+        data[_flat_index(reduced_index, out_shape)] += value
 
-        def _backward() -> None:
-            if not tensor.requires_grad:
-                return
-            grad = _grad_data(out)
-            _add_grad(
-                tensor,
-                [
-                    grad[col]
-                    for row in range(rows)
-                    for col in range(cols)
-                ],
-            )
+    out = Tensor(
+        data,
+        out_shape,
+        requires_grad=tensor.requires_grad,
+        _children=(tensor,),
+        _op="sum",
+    )
 
-        out._backward = _backward
-        return out
+    def _backward() -> None:
+        if not tensor.requires_grad:
+            return
+        grad = _grad_data(out)
+        tensor_grad = []
+        for flat_index in range(len(tensor.data)):
+            index = _unravel_index(flat_index, tensor.shape)
+            reduced_index = index[:axis] + index[axis + 1 :]
+            if not reduced_index:
+                reduced_index = (0,)
+            tensor_grad.append(grad[_flat_index(reduced_index, out_shape)])
+        _add_grad(tensor, tensor_grad)
 
-    if axis == 1:
-        data = []
-        for row in range(rows):
-            total = 0.0
-            for col in range(cols):
-                total += tensor[row, col]
-            data.append(total)
-        out = Tensor(
-            data,
-            (rows,),
-            requires_grad=tensor.requires_grad,
-            _children=(tensor,),
-            _op="sum",
-        )
-
-        def _backward() -> None:
-            if not tensor.requires_grad:
-                return
-            grad = _grad_data(out)
-            _add_grad(
-                tensor,
-                [
-                    grad[row]
-                    for row in range(rows)
-                    for col in range(cols)
-                ],
-            )
-
-        out._backward = _backward
-        return out
-
-    raise ValueError("2D tensors only support axis=0 or axis=1")
+    out._backward = _backward
+    return out
 
 
 def tensor_mean(tensor: Tensor, axis: int | None = None) -> Tensor:
-    """Mean of all values or a 2D tensor along one axis."""
+    """Mean of all values or a tensor along one axis."""
 
     if axis is None:
         return tensor_sum(tensor) * (1 / len(tensor.data))
 
-    if len(tensor.shape) == 1:
-        if axis != 0:
-            raise ValueError("1D tensors only support axis=0")
-        return tensor_sum(tensor, axis=0) * (1 / tensor.shape[0])
-
-    if axis == 0:
-        return tensor_sum(tensor, axis=0) * (1 / tensor.shape[0])
-
-    if axis == 1:
-        return tensor_sum(tensor, axis=1) * (1 / tensor.shape[1])
-
-    raise ValueError("2D tensors only support axis=0 or axis=1")
+    axis = _normalize_axis(axis, len(tensor.shape))
+    return tensor_sum(tensor, axis=axis) * (1 / tensor.shape[axis])
 
 
 def tensor_exp(tensor: Tensor) -> Tensor:
@@ -956,6 +911,29 @@ def _flat_index(index: tuple[int, ...], shape: tuple[int, ...]) -> int:
     for value, dim in zip(index, shape):
         offset = offset * dim + _normalize_index(value, dim)
     return offset
+
+
+def _unravel_index(flat_index: int, shape: tuple[int, ...]) -> tuple[int, ...]:
+    index = []
+    for dim in reversed(shape):
+        index.append(flat_index % dim)
+        flat_index //= dim
+    return tuple(reversed(index))
+
+
+def _normalize_axis(axis: int, ndim: int) -> int:
+    if axis < 0:
+        axis += ndim
+    if axis < 0 or axis >= ndim:
+        raise ValueError("axis out of range")
+    return axis
+
+
+def _reduced_shape(shape: tuple[int, ...], axis: int) -> tuple[int, ...]:
+    reduced = shape[:axis] + shape[axis + 1 :]
+    if not reduced:
+        return (1,)
+    return reduced
 
 
 def _infer_shape(values: Sequence) -> tuple[int, ...]:
