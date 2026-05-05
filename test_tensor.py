@@ -23,6 +23,8 @@ class TensorTests(unittest.TestCase):
         x = Tensor.from_list([1, 2, 3])
 
         self.assertEqual(x.shape, (3,))
+        self.assertEqual(x.ndim, 1)
+        self.assertEqual(x.numel, 3)
         self.assertEqual(x[0], 1.0)
         self.assertEqual(x[-1], 3.0)
         self.assertEqual(x.tolist(), [1.0, 2.0, 3.0])
@@ -34,6 +36,8 @@ class TensorTests(unittest.TestCase):
         ])
 
         self.assertEqual(x.shape, (2, 3))
+        self.assertEqual(x.ndim, 2)
+        self.assertEqual(x.numel, 6)
         self.assertEqual(x[0, 0], 1.0)
         self.assertEqual(x[1, 2], 6.0)
         self.assertEqual(
@@ -57,6 +61,8 @@ class TensorTests(unittest.TestCase):
         ])
 
         self.assertEqual(x.shape, (2, 2, 3))
+        self.assertEqual(x.ndim, 3)
+        self.assertEqual(x.numel, 12)
         self.assertEqual(x[0, 0, 0], 1.0)
         self.assertEqual(x[1, 1, 2], 12.0)
         self.assertEqual(x[-1, -1, -1], 12.0)

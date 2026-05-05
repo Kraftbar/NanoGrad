@@ -48,6 +48,14 @@ class Tensor:
     def __len__(self) -> int:
         return self.shape[0]
 
+    @property
+    def ndim(self) -> int:
+        return len(self.shape)
+
+    @property
+    def numel(self) -> int:
+        return len(self.data)
+
     def __getitem__(self, index: int | tuple[int, ...]) -> float:
         if len(self.shape) == 1:
             if not isinstance(index, int):
