@@ -55,6 +55,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
             "model.json",
             "--load-model",
             "model-in.json",
+            "--check-data",
         ])
 
         self.assertEqual(args.data_dir, Path("custom"))
@@ -74,6 +75,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertEqual(args.report_every, 2)
         self.assertEqual(args.save_model, Path("model.json"))
         self.assertEqual(args.load_model, Path("model-in.json"))
+        self.assertTrue(args.check_data)
 
     def test_cnn_preset_supplies_default_shape_values(self) -> None:
         args = _apply_preset(parse_args(["--preset", "lenet-ish"]))
@@ -270,6 +272,53 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertIn("val loss:", text)
         self.assertIn("val accuracy:", text)
         self.assertIn("epoch 1/2", text)
+
+    def test_run_check_data_on_tiny_idx_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            _write_mnist_images(data_dir / "train-images-idx3-ubyte.gz")
+            _write_mnist_labels(data_dir / "train-labels-idx1-ubyte.gz")
+            _write_mnist_images(data_dir / "t10k-images-idx3-ubyte.gz")
+            _write_mnist_labels(data_dir / "t10k-labels-idx1-ubyte.gz")
+            args = parse_args([
+                "--data-dir",
+                str(data_dir),
+                "--limit",
+                "2",
+                "--validation-limit",
+                "1",
+                "--check-data",
+            ])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                run(args)
+
+        text = output.getvalue()
+        self.assertIn("MNIST CNN data check", text)
+        self.assertIn("train samples: 2", text)
+        self.assertIn("train shape:   (1, 2, 2)", text)
+        self.assertIn("train labels:  [0]", text)
+        self.assertIn("test samples: 1", text)
+
+    def test_run_check_data_without_test_split(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            _write_mnist_images(data_dir / "train-images-idx3-ubyte.gz")
+            _write_mnist_labels(data_dir / "train-labels-idx1-ubyte.gz")
+            args = parse_args([
+                "--data-dir",
+                str(data_dir),
+                "--limit",
+                "1",
+                "--check-data",
+            ])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                run(args)
+
+        self.assertIn("test:         not found", output.getvalue())
 
     def test_run_saves_and_loads_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

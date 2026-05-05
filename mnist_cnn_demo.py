@@ -208,6 +208,16 @@ def run(args: argparse.Namespace) -> None:
         )
     )
 
+    if args.check_data:
+        print_data_check(
+            dataset,
+            images_path,
+            labels_path,
+            validation_dataset=validation_dataset,
+            validation_paths=validation_paths,
+        )
+        return
+
     classes = int(max(dataset.ys)) + 1
     model = build_model(
         args,
@@ -285,7 +295,43 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--report-every", type=int, default=0)
     parser.add_argument("--save-model", type=Path)
     parser.add_argument("--load-model", type=Path)
+    parser.add_argument(
+        "--check-data",
+        action="store_true",
+        help="Verify local MNIST files and channel-first shapes without training.",
+    )
     return parser.parse_args(argv)
+
+
+def print_data_check(
+    dataset,
+    images_path: Path,
+    labels_path: Path,
+    *,
+    validation_dataset=None,
+    validation_paths: tuple[Path, Path] | None = None,
+) -> None:
+    """Print local MNIST file and channel-first shape information."""
+
+    print("MNIST CNN data check")
+    print(f"train images: {images_path}")
+    print(f"train labels: {labels_path}")
+    print_dataset_summary("train", dataset)
+
+    if validation_dataset is None or validation_paths is None:
+        print("test:         not found")
+        return
+
+    print(f"test images:  {validation_paths[0]}")
+    print(f"test labels:  {validation_paths[1]}")
+    print_dataset_summary("test", validation_dataset)
+
+
+def print_dataset_summary(name: str, dataset) -> None:
+    labels = sorted({int(label) for label in dataset.ys})
+    print(f"{name} samples: {len(dataset)}")
+    print(f"{name} shape:   {dataset.feature_shape}")
+    print(f"{name} labels:  {labels}")
 
 
 def _apply_preset(args: argparse.Namespace) -> argparse.Namespace:
