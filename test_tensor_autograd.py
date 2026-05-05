@@ -199,6 +199,51 @@ class TensorAutogradTests(unittest.TestCase):
         self.assert_grad_close(image, loss_fn)
         self.assert_grad_close(kernel, loss_fn)
 
+    def test_conv2d_valid_multi_filter_gradients_match_finite_difference(self) -> None:
+        image = Tensor.from_list([
+            [
+                [1.0, 2.0, -1.0],
+                [0.5, -2.0, 3.0],
+                [4.0, 1.5, -0.5],
+            ],
+            [
+                [0.25, -1.0, 2.0],
+                [3.0, 0.5, -2.0],
+                [1.0, -0.75, 4.0],
+            ],
+        ], requires_grad=True)
+        kernel = Tensor.from_list([
+            [
+                [
+                    [0.25, -1.0],
+                    [2.0, 0.5],
+                ],
+                [
+                    [-0.5, 1.5],
+                    [0.75, -2.0],
+                ],
+            ],
+            [
+                [
+                    [1.0, 0.5],
+                    [-1.5, 2.0],
+                ],
+                [
+                    [0.25, -0.75],
+                    [1.25, -0.5],
+                ],
+            ],
+        ], requires_grad=True)
+
+        loss = conv2d_valid(image, kernel).sum()
+        loss.backward()
+
+        def loss_fn() -> float:
+            return conv2d_valid(image, kernel).sum()[0]
+
+        self.assert_grad_close(image, loss_fn)
+        self.assert_grad_close(kernel, loss_fn)
+
     def test_avg_pool2d_gradient_matches_finite_difference(self) -> None:
         image = Tensor.from_list([
             [1.0, 2.0, 3.0],
