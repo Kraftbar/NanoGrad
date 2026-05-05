@@ -63,6 +63,31 @@ def tensor_multiclass_accuracy(logits: Tensor, targets: Tensor | list[int]) -> f
     return correct / rows
 
 
+def tensor_multiclass_confusion_matrix(
+    logits: Tensor,
+    targets: Tensor | list[int],
+) -> list[list[int]]:
+    """Return counts indexed by true class row and predicted class column."""
+
+    if len(logits.shape) != 2:
+        raise ValueError("multiclass confusion matrix expects 2D logits")
+
+    rows, cols = logits.shape
+    classes = _class_indices(targets, rows, cols)
+    matrix = [
+        [0 for _ in range(cols)]
+        for _ in range(cols)
+    ]
+
+    for row, target in enumerate(classes):
+        start = row * cols
+        row_logits = logits.data[start : start + cols]
+        prediction = max(range(cols), key=lambda col: row_logits[col])
+        matrix[target][prediction] += 1
+
+    return matrix
+
+
 def _class_indices(targets: Tensor | list[int], rows: int, cols: int) -> list[int]:
     if isinstance(targets, Tensor):
         if targets.shape not in ((rows,), (rows, 1)):

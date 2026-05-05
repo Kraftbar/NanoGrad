@@ -818,6 +818,14 @@ class TensorAutogradTests(unittest.TestCase):
         self.assertGreaterEqual(summary.elapsed_seconds, 0.0)
         self.assertEqual(summary.examples_seen, len(dataset))
         self.assertGreaterEqual(summary.examples_per_second, 0.0)
+        self.assertEqual(
+            summary.confusion_matrix,
+            [
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1],
+            ],
+        )
 
     def test_tensor_multiclass_dataset_evaluation_batch_error(self) -> None:
         with self.assertRaises(ValueError):

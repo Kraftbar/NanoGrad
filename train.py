@@ -11,7 +11,12 @@ from losses import (
     binary_cross_entropy as tensor_binary_cross_entropy,
     softmax_cross_entropy,
 )
-from metrics import binary_accuracy, tensor_binary_accuracy, tensor_multiclass_accuracy
+from metrics import (
+    binary_accuracy,
+    tensor_binary_accuracy,
+    tensor_multiclass_accuracy,
+    tensor_multiclass_confusion_matrix,
+)
 from nn import Module
 from optim import SGD, TensorSGD
 from tensor import Tensor
@@ -55,6 +60,7 @@ class EvaluationSummary:
     accuracy: float
     elapsed_seconds: float
     examples_seen: int
+    confusion_matrix: list[list[int]] | None = None
 
     @property
     def examples_per_second(self) -> float:
@@ -385,6 +391,7 @@ def evaluate_tensor_multiclass_dataset(
     total_loss = 0.0
     total_correct = 0.0
     total_count = 0
+    confusion_matrix: list[list[int]] | None = None
 
     for xs, ys in dataset.batches(batch_size, shuffle=False):
         inputs = Tensor.from_list(xs)
@@ -395,6 +402,10 @@ def evaluate_tensor_multiclass_dataset(
 
         total_loss += loss[0] * batch_count
         total_correct += tensor_multiclass_accuracy(logits, targets) * batch_count
+        confusion_matrix = _add_confusion_matrices(
+            confusion_matrix,
+            tensor_multiclass_confusion_matrix(logits, targets),
+        )
         total_count += batch_count
 
     return EvaluationSummary(
@@ -402,6 +413,7 @@ def evaluate_tensor_multiclass_dataset(
         accuracy=total_correct / total_count,
         elapsed_seconds=perf_counter() - start,
         examples_seen=total_count,
+        confusion_matrix=confusion_matrix,
     )
 
 
@@ -415,3 +427,26 @@ def binary_probabilities(model: Module, xs: list[list[float]]) -> list[float]:
             raise TypeError("binary probability prediction expects one scalar Value")
         probabilities.append(logit.sigmoid().data)
     return probabilities
+
+
+def _add_confusion_matrices(
+    left: list[list[int]] | None,
+    right: list[list[int]],
+) -> list[list[int]]:
+    if left is None:
+        return [
+            row[:]
+            for row in right
+        ]
+    if len(left) != len(right) or any(
+        len(left_row) != len(right_row)
+        for left_row, right_row in zip(left, right)
+    ):
+        raise ValueError("confusion matrix shapes must match")
+    return [
+        [
+            left_value + right_value
+            for left_value, right_value in zip(left_row, right_row)
+        ]
+        for left_row, right_row in zip(left, right)
+    ]
