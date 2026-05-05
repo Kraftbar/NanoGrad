@@ -136,6 +136,9 @@ class Tensor:
             return tensor_reciprocal(self) * other
         return other / self
 
+    def reshape(self, shape: tuple[int, ...]) -> "Tensor":
+        return reshape(self, shape)
+
     @property
     def T(self) -> "Tensor":
         return transpose(self)
@@ -508,6 +511,28 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
         return out
 
     raise ValueError("matmul expects 1D or 2D tensors")
+
+
+def reshape(tensor: Tensor, shape: tuple[int, ...]) -> Tensor:
+    """Return a tensor view-shaped copy with the same flat data order."""
+
+    if _numel(shape) != len(tensor.data):
+        raise ValueError("reshape must preserve the number of elements")
+
+    out = Tensor(
+        tensor.data[:],
+        shape,
+        requires_grad=tensor.requires_grad,
+        _children=(tensor,),
+        _op="reshape",
+    )
+
+    def _backward() -> None:
+        if tensor.requires_grad:
+            _add_grad(tensor, _grad_data(out))
+
+    out._backward = _backward
+    return out
 
 
 def transpose(tensor: Tensor) -> Tensor:

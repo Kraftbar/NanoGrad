@@ -4,6 +4,7 @@ import unittest
 from tensor import (
     Tensor,
     matmul,
+    reshape,
     tensor_exp,
     tensor_log,
     tensor_mean,
@@ -196,6 +197,19 @@ class TensorTests(unittest.TestCase):
         )
         self.assertEqual(x.T.tolist(), transpose(x).tolist())
 
+    def test_reshape(self) -> None:
+        x = Tensor.from_list([1, 2, 3, 4, 5, 6])
+
+        self.assertEqual(
+            reshape(x, (2, 3)).tolist(),
+            [
+                [1.0, 2.0, 3.0],
+                [4.0, 5.0, 6.0],
+            ],
+        )
+        self.assertEqual(x.reshape((3, 2)).shape, (3, 2))
+        self.assertEqual(x.reshape((3, 2)).reshape((6,)).tolist(), x.tolist())
+
     def test_sum_reductions(self) -> None:
         x = Tensor.from_list([
             [1, 2, 3],
@@ -305,6 +319,9 @@ class TensorTests(unittest.TestCase):
                 [1, 2],
                 [3, 4],
             ]).sum(axis=2)
+
+        with self.assertRaises(ValueError):
+            Tensor.from_list([1, 2, 3]).reshape((2, 2))
 
         with self.assertRaises(ValueError):
             Tensor.from_list([1, 0, -1]).log()

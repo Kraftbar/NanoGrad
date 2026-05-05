@@ -89,6 +89,18 @@ class TensorAutogradTests(unittest.TestCase):
         self.assert_grad_close(inputs, loss_fn)
         self.assert_grad_close(weight, loss_fn)
 
+    def test_reshape_gradient_preserves_flat_order(self) -> None:
+        x = Tensor.from_list([1.0, 2.0, 3.0, 4.0], requires_grad=True)
+        weights = Tensor.from_list([
+            [0.5, -1.0],
+            [2.0, 3.0],
+        ])
+        loss = (x.reshape((2, 2)) * weights).sum()
+
+        loss.backward()
+
+        self.assertEqual(x.grad, [0.5, -1.0, 2.0, 3.0])
+
     def test_transpose_gradient_matches_finite_difference(self) -> None:
         x = Tensor.from_list([
             [1.0, -2.0, 3.0],
