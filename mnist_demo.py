@@ -87,8 +87,12 @@ def run(args: argparse.Namespace) -> None:
     print(f"inputs:       {inputs}")
     print(f"classes:      {classes}")
     print(f"initial loss: {summary.initial_loss:.6f}")
-    print(f"final loss:   {summary.final_loss:.6f}")
+    print(f"final batch:  {summary.final_loss:.6f}")
+    if summary.evaluation_loss is not None:
+        print(f"train loss:   {summary.evaluation_loss:.6f}")
     print(f"accuracy:     {summary.accuracy:.3f}")
+    if summary.validation_loss is not None:
+        print(f"val loss:     {summary.validation_loss:.6f}")
     if summary.validation_accuracy is not None:
         print(f"val accuracy: {summary.validation_accuracy:.3f}")
     print(f"runtime:      {summary.elapsed_seconds:.4f}s")
@@ -110,12 +114,20 @@ def print_epoch_report(
 
     message = (
         f"epoch {epoch}/{epochs} "
-        f"loss={summary.final_loss:.6f} "
+        f"loss={_report_loss(summary):.6f} "
         f"train_acc={summary.accuracy:.3f}"
     )
+    if summary.validation_loss is not None:
+        message += f" val_loss={summary.validation_loss:.6f}"
     if summary.validation_accuracy is not None:
         message += f" val_acc={summary.validation_accuracy:.3f}"
     print(message)
+
+
+def _report_loss(summary) -> float:
+    if summary.evaluation_loss is None:
+        return summary.final_loss
+    return summary.evaluation_loss
 
 
 def print_data_check(

@@ -26,6 +26,8 @@ class TrainingSummary:
     elapsed_seconds: float
     accuracy: float | None = None
     validation_accuracy: float | None = None
+    evaluation_loss: float | None = None
+    validation_loss: float | None = None
 
     @property
     def initial_loss(self) -> float:
@@ -34,6 +36,15 @@ class TrainingSummary:
     @property
     def final_loss(self) -> float:
         return self.history[-1]
+
+
+@dataclass(frozen=True)
+class EvaluationSummary:
+    """Whole-dataset classifier metrics."""
+
+    loss: float
+    accuracy: float
+    elapsed_seconds: float
 
 
 def mse_loss(predictions: list[Value], targets: list[float]) -> Value:
@@ -277,31 +288,101 @@ def train_tensor_multiclass_dataset(
             history.append(loss[0])
 
         if epoch_callback is not None:
+            epoch_elapsed = perf_counter() - start
+            train_eval = evaluate_tensor_multiclass_dataset(
+                model,
+                dataset,
+                batch_size=batch_size,
+            )
+            validation_eval = (
+                None
+                if validation_dataset is None
+                else evaluate_tensor_multiclass_dataset(
+                    model,
+                    validation_dataset,
+                    batch_size=batch_size,
+                )
+            )
             epoch_summary = TrainingSummary(
                 history=history[:],
-                elapsed_seconds=perf_counter() - start,
-                accuracy=_tensor_multiclass_dataset_accuracy(model, dataset),
+                elapsed_seconds=epoch_elapsed,
+                accuracy=train_eval.accuracy,
                 validation_accuracy=(
                     None
-                    if validation_dataset is None
-                    else _tensor_multiclass_dataset_accuracy(model, validation_dataset)
+                    if validation_eval is None
+                    else validation_eval.accuracy
+                ),
+                evaluation_loss=train_eval.loss,
+                validation_loss=(
+                    None
+                    if validation_eval is None
+                    else validation_eval.loss
                 ),
             )
             epoch_callback(epoch + 1, epoch_summary)
 
     elapsed_seconds = perf_counter() - start
-    accuracy = _tensor_multiclass_dataset_accuracy(model, dataset)
-    validation_accuracy = (
+    train_eval = evaluate_tensor_multiclass_dataset(
+        model,
+        dataset,
+        batch_size=batch_size,
+    )
+    validation_eval = (
         None
         if validation_dataset is None
-        else _tensor_multiclass_dataset_accuracy(model, validation_dataset)
+        else evaluate_tensor_multiclass_dataset(
+            model,
+            validation_dataset,
+            batch_size=batch_size,
+        )
     )
 
     return TrainingSummary(
         history=history,
         elapsed_seconds=elapsed_seconds,
-        accuracy=accuracy,
-        validation_accuracy=validation_accuracy,
+        accuracy=train_eval.accuracy,
+        validation_accuracy=(
+            None
+            if validation_eval is None
+            else validation_eval.accuracy
+        ),
+        evaluation_loss=train_eval.loss,
+        validation_loss=(
+            None
+            if validation_eval is None
+            else validation_eval.loss
+        ),
+    )
+
+
+def evaluate_tensor_multiclass_dataset(
+    model,
+    dataset: TinyDataset,
+    *,
+    batch_size: int = 128,
+) -> EvaluationSummary:
+    """Evaluate multiclass loss and accuracy across a full TinyDataset."""
+
+    start = perf_counter()
+    total_loss = 0.0
+    total_correct = 0.0
+    total_count = 0
+
+    for xs, ys in dataset.batches(batch_size, shuffle=False):
+        inputs = Tensor.from_list(xs)
+        targets = Tensor.from_list(ys)
+        logits = model(inputs)
+        loss = softmax_cross_entropy(logits, targets)
+        batch_count = len(ys)
+
+        total_loss += loss[0] * batch_count
+        total_correct += tensor_multiclass_accuracy(logits, targets) * batch_count
+        total_count += batch_count
+
+    return EvaluationSummary(
+        loss=total_loss / total_count,
+        accuracy=total_correct / total_count,
+        elapsed_seconds=perf_counter() - start,
     )
 
 
@@ -315,9 +396,3 @@ def binary_probabilities(model: Module, xs: list[list[float]]) -> list[float]:
             raise TypeError("binary probability prediction expects one scalar Value")
         probabilities.append(logit.sigmoid().data)
     return probabilities
-
-
-def _tensor_multiclass_dataset_accuracy(model, dataset: TinyDataset) -> float:
-    inputs = Tensor.from_list(dataset.xs)
-    targets = Tensor.from_list(dataset.ys)
-    return tensor_multiclass_accuracy(model(inputs), targets)

@@ -4,6 +4,7 @@ from datasets import TinyDataset, and_gate, or_gate, xor_gate
 from tensor import Tensor, matmul
 from tensor_nn import TensorLinear, TensorMLP
 from train import (
+    evaluate_tensor_multiclass_dataset,
     train_tensor_binary_classifier,
     train_tensor_multiclass_classifier,
     train_tensor_multiclass_dataset,
@@ -275,6 +276,54 @@ class TensorAutogradTests(unittest.TestCase):
         self.assertLess(summary.final_loss, summary.initial_loss)
         self.assertEqual(summary.accuracy, 1.0)
         self.assertEqual(summary.validation_accuracy, 1.0)
+        self.assertIsNotNone(summary.evaluation_loss)
+        self.assertIsNotNone(summary.validation_loss)
+        self.assertGreater(summary.evaluation_loss, 0.0)
+        self.assertGreater(summary.validation_loss, 0.0)
+
+    def test_tensor_multiclass_dataset_evaluation_uses_batches(self) -> None:
+        dataset = TinyDataset(
+            xs=[
+                [2.0, 0.0],
+                [0.0, 2.0],
+                [-2.0, -2.0],
+            ],
+            ys=[
+                0,
+                1,
+                2,
+            ],
+        )
+        model = TensorLinear(
+            inputs=2,
+            outputs=3,
+            weight=Tensor.from_list(
+                [
+                    [2.0, 0.0],
+                    [0.0, 2.0],
+                    [-2.0, -2.0],
+                ],
+            ),
+            bias=Tensor.zeros((3,)),
+        )
+
+        summary = evaluate_tensor_multiclass_dataset(
+            model,
+            dataset,
+            batch_size=2,
+        )
+
+        self.assertGreater(summary.loss, 0.0)
+        self.assertEqual(summary.accuracy, 1.0)
+        self.assertGreaterEqual(summary.elapsed_seconds, 0.0)
+
+    def test_tensor_multiclass_dataset_evaluation_batch_error(self) -> None:
+        with self.assertRaises(ValueError):
+            evaluate_tensor_multiclass_dataset(
+                TensorLinear(inputs=1, outputs=2),
+                TinyDataset([[0.0]], [0.0]),
+                batch_size=0,
+            )
 
     def test_tensor_multiclass_dataset_training_epoch_callback(self) -> None:
         dataset = TinyDataset(
@@ -303,7 +352,7 @@ class TensorAutogradTests(unittest.TestCase):
             lr=0.2,
             shuffle=False,
             epoch_callback=lambda epoch, summary: reports.append(
-                (epoch, summary.final_loss, summary.accuracy)
+                (epoch, summary.evaluation_loss, summary.accuracy)
             ),
         )
 
