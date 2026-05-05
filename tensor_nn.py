@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import random
+import json
+from pathlib import Path
 
 from tensor import Tensor, matmul
 
@@ -16,6 +18,21 @@ class TensorModule:
     def zero_grad(self) -> None:
         for parameter in self.parameters():
             parameter.zero_grad()
+
+    def state_dict(self) -> dict:
+        return {}
+
+    def load_state_dict(self, state: dict) -> None:
+        if state:
+            raise ValueError("unexpected state for empty TensorModule")
+
+    def save(self, path: str | Path) -> None:
+        path = Path(path)
+        path.write_text(json.dumps(self.state_dict(), indent=2), encoding="utf-8")
+
+    def load(self, path: str | Path) -> None:
+        path = Path(path)
+        self.load_state_dict(json.loads(path.read_text(encoding="utf-8")))
 
 
 class TensorLinear(TensorModule):
@@ -54,6 +71,16 @@ class TensorLinear(TensorModule):
 
     def parameters(self) -> list[Tensor]:
         return [self.weight, self.bias]
+
+    def state_dict(self) -> dict:
+        return {
+            "weight": _tensor_state(self.weight),
+            "bias": _tensor_state(self.bias),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        self.weight.data = _state_data(state, "weight", self.weight.shape)
+        self.bias.data = _state_data(state, "bias", self.bias.shape)
 
 
 class TensorMLP(TensorModule):
@@ -96,6 +123,24 @@ class TensorMLP(TensorModule):
             for layer in self.layers
             for parameter in layer.parameters()
         ]
+
+    def state_dict(self) -> dict:
+        return {
+            "layers": [
+                layer.state_dict()
+                for layer in self.layers
+            ],
+            "hidden_activation": self.hidden_activation,
+            "output_activation": self.output_activation,
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        layers = state.get("layers")
+        if not isinstance(layers, list) or len(layers) != len(self.layers):
+            raise ValueError("state layer count does not match TensorMLP")
+
+        for layer, layer_state in zip(self.layers, layers):
+            layer.load_state_dict(layer_state)
 
 
 def binary_mlp(
@@ -161,3 +206,29 @@ def _apply_activation(tensor: Tensor, activation: str) -> Tensor:
     if activation == "sigmoid":
         return tensor.sigmoid()
     raise ValueError(f"unknown activation: {activation}")
+
+
+def _tensor_state(tensor: Tensor) -> dict:
+    return {
+        "shape": list(tensor.shape),
+        "data": tensor.data[:],
+    }
+
+
+def _state_data(state: dict, name: str, shape: tuple[int, ...]) -> list[float]:
+    value = state.get(name)
+    if not isinstance(value, dict):
+        raise ValueError(f"missing tensor state: {name}")
+    if tuple(value.get("shape", ())) != shape:
+        raise ValueError(f"state shape for {name} does not match module shape")
+    data = value.get("data")
+    if not isinstance(data, list) or len(data) != _numel(shape):
+        raise ValueError(f"state data for {name} does not match module shape")
+    return [float(item) for item in data]
+
+
+def _numel(shape: tuple[int, ...]) -> int:
+    total = 1
+    for dim in shape:
+        total *= dim
+    return total

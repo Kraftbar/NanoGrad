@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from tensor import Tensor
 from tensor_nn import TensorLinear, TensorMLP, binary_mlp, linear
@@ -43,6 +45,25 @@ class TensorNNTests(unittest.TestCase):
         self.assertEqual(layer.weight.grad, [0.0, 0.0])
         self.assertEqual(layer.bias.grad, [0.0])
 
+    def test_tensor_linear_state_dict_round_trip(self) -> None:
+        source = TensorLinear(
+            inputs=2,
+            outputs=2,
+            weight=Tensor.from_list([
+                [1, 2],
+                [3, 4],
+            ], requires_grad=True),
+            bias=Tensor.from_list([5, 6], requires_grad=True),
+        )
+        target = TensorLinear(inputs=2, outputs=2)
+
+        target.load_state_dict(source.state_dict())
+
+        self.assertEqual(target.weight.tolist(), [[1.0, 2.0], [3.0, 4.0]])
+        self.assertEqual(target.bias.tolist(), [5.0, 6.0])
+        self.assertTrue(target.weight.requires_grad)
+        self.assertTrue(target.bias.requires_grad)
+
     def test_tensor_mlp_forward_and_parameters(self) -> None:
         model = TensorMLP(inputs=2, layers=[3, 1])
         inputs = Tensor.from_list([
@@ -54,6 +75,54 @@ class TensorNNTests(unittest.TestCase):
 
         self.assertEqual(outputs.shape, (2, 1))
         self.assertEqual(len(model.parameters()), 4)
+
+    def test_tensor_mlp_state_dict_round_trip(self) -> None:
+        source = TensorMLP(inputs=2, layers=[2, 1])
+        source.layers[0].weight.data = [1.0, 2.0, 3.0, 4.0]
+        source.layers[0].bias.data = [5.0, 6.0]
+        source.layers[1].weight.data = [7.0, 8.0]
+        source.layers[1].bias.data = [9.0]
+        target = TensorMLP(inputs=2, layers=[2, 1])
+
+        target.load_state_dict(source.state_dict())
+
+        self.assertEqual(target.state_dict(), source.state_dict())
+
+    def test_tensor_mlp_save_and_load(self) -> None:
+        source = TensorMLP(inputs=2, layers=[2, 1])
+        source.layers[0].weight.data = [1.0, 2.0, 3.0, 4.0]
+        source.layers[0].bias.data = [5.0, 6.0]
+        source.layers[1].weight.data = [7.0, 8.0]
+        source.layers[1].bias.data = [9.0]
+        target = TensorMLP(inputs=2, layers=[2, 1])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "model.json"
+            source.save(path)
+            target.load(path)
+
+        self.assertEqual(target.state_dict(), source.state_dict())
+
+    def test_tensor_state_dict_errors(self) -> None:
+        layer = TensorLinear(inputs=2, outputs=1)
+
+        with self.assertRaises(ValueError):
+            layer.load_state_dict({})
+
+        with self.assertRaises(ValueError):
+            layer.load_state_dict({
+                "weight": {
+                    "shape": [2, 2],
+                    "data": [1, 2, 3, 4],
+                },
+                "bias": {
+                    "shape": [1],
+                    "data": [0],
+                },
+            })
+
+        with self.assertRaises(ValueError):
+            TensorMLP(inputs=2, layers=[1]).load_state_dict({"layers": []})
 
     def test_tensor_mlp_shape_errors(self) -> None:
         with self.assertRaises(ValueError):
