@@ -21,3 +21,7 @@ ref_pytorch/
 # ref_tinygrad/
 # ref_nanogpt/
 # ref_micrograd/
+
+# Local datasets
+data/mnist/*-idx*-ubyte
+data/mnist/*-idx*-ubyte.gz
