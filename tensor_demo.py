@@ -5,7 +5,7 @@ from __future__ import annotations
 from losses import binary_cross_entropy, mse_loss
 from metrics import tensor_binary_accuracy
 from tensor import Tensor, matmul
-from tensor_nn import binary_mlp, linear
+from tensor_nn import TensorMLP, binary_mlp, linear
 from train import train_tensor_binary_classifier
 
 
@@ -118,29 +118,19 @@ def tensor_training_demo() -> None:
         [1],
         [0],
     ])
-    hidden_weight = Tensor.from_list([
+    model = TensorMLP(inputs=2, layers=[2, 1])
+    model.layers[0].weight = Tensor.from_list([
         [1.0, -1.0],
         [-1.0, 1.0],
     ], requires_grad=True)
-    hidden_bias = Tensor.from_list([0.0, 0.0], requires_grad=True)
-    output_weight = Tensor.from_list([[0.1, 0.1]], requires_grad=True)
-    output_bias = Tensor.from_list([0.0], requires_grad=True)
+    model.layers[0].bias = Tensor.from_list([0.0, 0.0], requires_grad=True)
+    model.layers[1].weight = Tensor.from_list([[0.1, 0.1]], requires_grad=True)
+    model.layers[1].bias = Tensor.from_list([0.0], requires_grad=True)
 
     summary = train_tensor_binary_classifier(
-        lambda: binary_mlp(
-            inputs,
-            hidden_weight,
-            hidden_bias,
-            output_weight,
-            output_bias,
-        ),
+        lambda: model(inputs).sigmoid(),
         targets,
-        [
-            hidden_weight,
-            hidden_bias,
-            output_weight,
-            output_bias,
-        ],
+        model.parameters(),
         steps=2000,
         lr=0.5,
     )

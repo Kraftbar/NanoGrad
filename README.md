@@ -41,6 +41,7 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Track loss, accuracy, and basic runtime on small examples
 - [x] Add a tensor binary MLP forward pass
 - [x] Add tensor autograd for core tensor math
+- [x] Add tensor module abstractions for linear layers and MLPs
 - [x] Train tensor classifiers on AND, OR, and XOR logic gates
 
 ### Next Small Checks
