@@ -54,6 +54,13 @@ class EvaluationSummary:
     loss: float
     accuracy: float
     elapsed_seconds: float
+    examples_seen: int
+
+    @property
+    def examples_per_second(self) -> float:
+        if self.elapsed_seconds <= 0.0:
+            return 0.0
+        return self.examples_seen / self.elapsed_seconds
 
 
 def mse_loss(predictions: list[Value], targets: list[float]) -> Value:
@@ -394,6 +401,7 @@ def evaluate_tensor_multiclass_dataset(
         loss=total_loss / total_count,
         accuracy=total_correct / total_count,
         elapsed_seconds=perf_counter() - start,
+        examples_seen=total_count,
     )
 
 
