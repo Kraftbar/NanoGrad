@@ -302,6 +302,8 @@ def _apply_activation(tensor: Tensor, activation: str) -> Tensor:
         return tensor.relu()
     if activation == "sigmoid":
         return tensor.sigmoid()
+    if activation == "tanh":
+        return tensor.tanh()
     raise ValueError(f"unknown activation: {activation}")
 
 

@@ -438,6 +438,24 @@ class TensorNNTests(unittest.TestCase):
         self.assertEqual(len(model.parameters()), 4)
         self.assertEqual(model.state_dict(), repeat.state_dict())
 
+    def test_tensor_mlp_accepts_tanh_activation(self) -> None:
+        model = TensorMLP(
+            inputs=2,
+            layers=[2, 1],
+            hidden_activation="tanh",
+            output_activation="tanh",
+            seed=0,
+        )
+        inputs = Tensor.from_list([
+            [0, 1],
+            [1, 0],
+        ])
+
+        outputs = model(inputs)
+
+        self.assertEqual(outputs.shape, (2, 1))
+        self.assertTrue(all(-1.0 <= value <= 1.0 for value in outputs.data))
+
     def test_tensor_mlp_state_dict_round_trip(self) -> None:
         source = TensorMLP(inputs=2, layers=[2, 1])
         source.layers[0].weight.data = [1.0, 2.0, 3.0, 4.0]

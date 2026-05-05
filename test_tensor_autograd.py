@@ -631,6 +631,18 @@ class TensorAutogradTests(unittest.TestCase):
 
         self.assert_grad_close(x, loss_fn)
 
+    def test_tanh_gradient_matches_finite_difference(self) -> None:
+        x = Tensor.from_list([0.25, -0.5, 1.5], requires_grad=True)
+        weights = Tensor.from_list([2.0, -1.0, 0.5])
+        loss = (x.tanh() * weights).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            return (x.tanh() * weights).sum()[0]
+
+        self.assert_grad_close(x, loss_fn)
+
     def test_tensor_logistic_regression_learns_linear_logic_gates(self) -> None:
         for dataset in (and_gate, or_gate):
             with self.subTest(dataset=dataset.__name__):

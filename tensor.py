@@ -163,6 +163,9 @@ class Tensor:
     def sigmoid(self) -> "Tensor":
         return tensor_sigmoid(self)
 
+    def tanh(self) -> "Tensor":
+        return tensor_tanh(self)
+
     def reciprocal(self) -> "Tensor":
         return tensor_reciprocal(self)
 
@@ -1065,6 +1068,17 @@ def tensor_sigmoid(tensor: Tensor) -> Tensor:
         sigmoid,
         lambda value: sigmoid(value) * (1 - sigmoid(value)),
         "sigmoid",
+    )
+
+
+def tensor_tanh(tensor: Tensor) -> Tensor:
+    """Elementwise hyperbolic tangent."""
+
+    return _map(
+        tensor,
+        math.tanh,
+        lambda value: 1 - math.tanh(value) ** 2,
+        "tanh",
     )
 
 

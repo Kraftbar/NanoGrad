@@ -17,6 +17,7 @@ from tensor import (
     tensor_relu,
     tensor_sigmoid,
     tensor_sum,
+    tensor_tanh,
     transpose,
 )
 
@@ -951,6 +952,16 @@ class TensorTests(unittest.TestCase):
         self.assertAlmostEqual(y[1], 0.5)
         self.assertAlmostEqual(y[2], 1 / (1 + math.exp(-2.0)))
         self.assertEqual(x.sigmoid().tolist(), y.tolist())
+
+    def test_tanh(self) -> None:
+        x = Tensor.from_list([-2.0, 0.0, 2.0])
+        y = tensor_tanh(x)
+
+        self.assertEqual(y.shape, x.shape)
+        self.assertAlmostEqual(y[0], math.tanh(-2.0))
+        self.assertAlmostEqual(y[1], 0.0)
+        self.assertAlmostEqual(y[2], math.tanh(2.0))
+        self.assertEqual(x.tanh().tolist(), y.tolist())
 
     def test_shape_errors(self) -> None:
         with self.assertRaises(ValueError):
