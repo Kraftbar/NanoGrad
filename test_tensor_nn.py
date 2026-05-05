@@ -250,6 +250,12 @@ class TensorNNTests(unittest.TestCase):
             ],
         )
 
+    def test_tensor_conv2d_multi_filter_default_bias(self) -> None:
+        layer = TensorConv2D((2, 1, 2, 2), seed=0)
+
+        self.assertEqual(layer.bias.shape, (2, 1, 1))
+        self.assertEqual(layer.bias.tolist(), [[[0.0]], [[0.0]]])
+
     def test_tensor_conv2d_zero_grad(self) -> None:
         layer = TensorConv2D((2, 2), seed=0)
         loss = layer(Tensor.from_list([
@@ -381,6 +387,12 @@ class TensorNNTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             TensorConv2D(
                 (2, 2),
+                bias=Tensor.from_list([1, 2]),
+            )
+
+        with self.assertRaises(ValueError):
+            TensorConv2D(
+                (2, 1, 2, 2),
                 bias=Tensor.from_list([1, 2]),
             )
 

@@ -98,15 +98,15 @@ class TensorConv2D(TensorModule):
         if any(dim <= 0 for dim in kernel_shape):
             raise ValueError("TensorConv2D kernel dimensions must be positive")
 
+        bias_shape = _conv2d_bias_shape(kernel_shape)
         self.kernel = kernel or conv2d_kernel(kernel_shape, seed=seed)
-        self.bias = bias or Tensor.zeros((1,), requires_grad=True)
+        self.bias = bias or Tensor.zeros(bias_shape, requires_grad=True)
 
         _require_conv2d_kernel("kernel", self.kernel)
-        _require_vector("bias", self.bias)
         if self.kernel.shape != kernel_shape:
             raise ValueError("kernel shape must match kernel_shape")
-        if self.bias.shape != (1,):
-            raise ValueError("bias shape must be (1,)")
+        if self.bias.shape not in ((1,), bias_shape):
+            raise ValueError("bias shape must be (1,) or match conv output channels")
 
     def __call__(self, inputs: Tensor) -> Tensor:
         return conv2d_valid(inputs, self.kernel) + self.bias
@@ -287,6 +287,12 @@ def _require_matrix(name: str, tensor: Tensor) -> None:
 def _require_conv2d_kernel(name: str, tensor: Tensor) -> None:
     if len(tensor.shape) not in (2, 3, 4):
         raise ValueError(f"{name} must be a 2D, 3D, or 4D tensor")
+
+
+def _conv2d_bias_shape(kernel_shape: tuple[int, ...]) -> tuple[int, ...]:
+    if len(kernel_shape) == 4:
+        return (kernel_shape[0], 1, 1)
+    return (1,)
 
 
 def _apply_activation(tensor: Tensor, activation: str) -> Tensor:

@@ -154,7 +154,7 @@ def train_tiny_cnn_classifier(
     lr: float = 0.1,
 ) -> tuple[TensorConv2D, TensorLinear, list[float], float]:
     samples = tiny_cnn_samples()
-    conv = TensorConv2D((2, 2, 2), seed=0)
+    conv = TensorConv2D((2, 1, 2, 2), seed=0)
     classifier = TensorLinear(inputs=8, outputs=1, seed=1)
     optimizer = TensorSGD([*conv.parameters(), *classifier.parameters()], lr=lr)
     history = []
@@ -197,37 +197,45 @@ def tiny_cnn_samples() -> list[tuple[Tensor, float]]:
     return [
         (
             Tensor.from_list([
-                [0, 1, 1, 0],
-                [0, 1, 1, 0],
-                [0, 1, 1, 0],
-                [0, 1, 1, 0],
+                [
+                    [0, 1, 1, 0],
+                    [0, 1, 1, 0],
+                    [0, 1, 1, 0],
+                    [0, 1, 1, 0],
+                ],
             ]),
             1.0,
         ),
         (
             Tensor.from_list([
-                [1, 0, 0, 1],
-                [1, 0, 0, 1],
-                [1, 0, 0, 1],
-                [1, 0, 0, 1],
+                [
+                    [1, 0, 0, 1],
+                    [1, 0, 0, 1],
+                    [1, 0, 0, 1],
+                    [1, 0, 0, 1],
+                ],
             ]),
             1.0,
         ),
         (
             Tensor.from_list([
-                [0, 0, 0, 0],
-                [1, 1, 1, 1],
-                [1, 1, 1, 1],
-                [0, 0, 0, 0],
+                [
+                    [0, 0, 0, 0],
+                    [1, 1, 1, 1],
+                    [1, 1, 1, 1],
+                    [0, 0, 0, 0],
+                ],
             ]),
             0.0,
         ),
         (
             Tensor.from_list([
-                [1, 1, 1, 1],
-                [0, 0, 0, 0],
-                [0, 0, 0, 0],
-                [1, 1, 1, 1],
+                [
+                    [1, 1, 1, 1],
+                    [0, 0, 0, 0],
+                    [0, 0, 0, 0],
+                    [1, 1, 1, 1],
+                ],
             ]),
             0.0,
         ),
