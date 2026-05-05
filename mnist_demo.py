@@ -56,6 +56,9 @@ def run(args: argparse.Namespace) -> None:
     inputs = len(dataset.xs[0])
     classes = int(max(dataset.ys)) + 1
     model = TensorMLP(inputs=inputs, layers=[args.hidden, classes])
+    if args.load_model is not None:
+        model.load(args.load_model)
+
     summary = train_tensor_multiclass_dataset(
         model,
         dataset,
@@ -79,6 +82,10 @@ def run(args: argparse.Namespace) -> None:
     if summary.validation_accuracy is not None:
         print(f"val accuracy: {summary.validation_accuracy:.3f}")
     print(f"runtime:      {summary.elapsed_seconds:.4f}s")
+
+    if args.save_model is not None:
+        model.save(args.save_model)
+        print(f"saved model:  {args.save_model}")
 
 
 def print_data_check(
@@ -151,6 +158,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--hidden", type=int, default=32)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--save-model", type=Path)
+    parser.add_argument("--load-model", type=Path)
     parser.add_argument(
         "--check-data",
         action="store_true",

@@ -79,6 +79,10 @@ class MNISTDemoTests(unittest.TestCase):
             "5",
             "--seed",
             "9",
+            "--save-model",
+            "model.json",
+            "--load-model",
+            "model-in.json",
             "--check-data",
         ])
 
@@ -90,6 +94,8 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertEqual(args.lr, 0.1)
         self.assertEqual(args.hidden, 5)
         self.assertEqual(args.seed, 9)
+        self.assertEqual(args.save_model, Path("model.json"))
+        self.assertEqual(args.load_model, Path("model-in.json"))
         self.assertTrue(args.check_data)
 
     def test_run_trains_on_tiny_idx_fixture(self) -> None:
@@ -152,6 +158,54 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertIn("train inputs:  4", text)
         self.assertIn("train labels:  [0]", text)
         self.assertIn("test samples: 1", text)
+
+    def test_run_saves_and_loads_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            save_path = data_dir / "mnist-model.json"
+            reload_path = data_dir / "mnist-model-reloaded.json"
+            _write_mnist_images(data_dir / "train-images-idx3-ubyte.gz")
+            _write_mnist_labels(data_dir / "train-labels-idx1-ubyte.gz")
+            args = parse_args([
+                "--data-dir",
+                str(data_dir),
+                "--limit",
+                "4",
+                "--epochs",
+                "2",
+                "--batch-size",
+                "2",
+                "--hidden",
+                "3",
+                "--save-model",
+                str(save_path),
+            ])
+            with redirect_stdout(io.StringIO()):
+                run(args)
+
+            reload_args = parse_args([
+                "--data-dir",
+                str(data_dir),
+                "--limit",
+                "4",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "2",
+                "--hidden",
+                "3",
+                "--load-model",
+                str(save_path),
+                "--save-model",
+                str(reload_path),
+            ])
+            output = io.StringIO()
+            with redirect_stdout(output):
+                run(reload_args)
+
+            self.assertTrue(save_path.exists())
+            self.assertTrue(reload_path.exists())
+            self.assertIn("saved model:", output.getvalue())
 
     def test_run_check_data_without_test_split(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
