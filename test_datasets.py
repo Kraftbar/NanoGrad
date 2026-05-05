@@ -148,6 +148,29 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(len(dataset), 1)
         self.assertEqual(dataset[0][1], 7.0)
 
+    def test_load_mnist_channel_first_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            images_path = Path(tmpdir) / "images.idx3-ubyte"
+            labels_path = Path(tmpdir) / "labels.idx1-ubyte"
+            _write_mnist_images(images_path)
+            _write_mnist_labels(labels_path)
+
+            dataset = load_mnist(images_path, labels_path, channel_first=True)
+
+        self.assertEqual(dataset.feature_shape, (1, 2, 2))
+        self.assertEqual(
+            dataset[0],
+            (
+                [
+                    [
+                        [0.0, 1.0 / 255.0],
+                        [2.0 / 255.0, 1.0],
+                    ],
+                ],
+                7.0,
+            ),
+        )
+
     def test_load_mnist_from_gzip_idx_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             images_path = Path(tmpdir) / "images.idx3-ubyte.gz"

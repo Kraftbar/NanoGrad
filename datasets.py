@@ -124,11 +124,16 @@ def load_mnist(
     labels_path: str | Path,
     *,
     limit: int | None = None,
+    channel_first: bool = False,
 ) -> TinyDataset:
     """Load local MNIST IDX image and label files into a TinyDataset."""
 
     return TinyDataset(
-        read_mnist_images(images_path, limit=limit),
+        read_mnist_images(
+            images_path,
+            limit=limit,
+            channel_first=channel_first,
+        ),
         read_mnist_labels(labels_path, limit=limit),
     )
 
@@ -137,8 +142,9 @@ def read_mnist_images(
     path: str | Path,
     *,
     limit: int | None = None,
-) -> list[list[float]]:
-    """Read local MNIST IDX image data as flattened values in [0, 1]."""
+    channel_first: bool = False,
+) -> list:
+    """Read local MNIST IDX image data as values in [0, 1]."""
 
     with _open_idx(path) as file:
         magic, count, rows, cols = struct.unpack(">IIII", file.read(16))
@@ -152,7 +158,16 @@ def read_mnist_images(
             raw = file.read(image_size)
             if len(raw) != image_size:
                 raise ValueError("MNIST image file ended early")
-            images.append([pixel / 255.0 for pixel in raw])
+            pixels = [pixel / 255.0 for pixel in raw]
+            if channel_first:
+                images.append([
+                    [
+                        pixels[row * cols : (row + 1) * cols]
+                        for row in range(rows)
+                    ],
+                ])
+            else:
+                images.append(pixels)
         return images
 
 
