@@ -48,6 +48,7 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Add local-file MNIST MLP demo entry point
 - [x] Add no-download channel-first MNIST-style CNN smoke demo
 - [x] Add local-file MNIST CNN demo entry point
+- [x] Add a LeNet-ish MNIST CNN preset
 - [x] Add basic convolution and pooling tensor operations
 
 ### Next Small Checks
@@ -151,7 +152,8 @@ python3 mnist_smoke_demo.py
 Use the test suite as the main correctness check. The demos are small examples
 for inspecting the scalar-autograd and tensor paths by eye.
 
-For local MNIST files, see [data/mnist](./data/mnist).
+For local MNIST files, see [data/mnist](./data/mnist). The CNN demo can use
+`python3 mnist_cnn_demo.py --preset lenet-ish`.
 
 ## Status
 
