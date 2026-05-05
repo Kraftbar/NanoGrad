@@ -406,6 +406,47 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
         out._backward = _backward
         return out
 
+    if len(left.shape) == 1 and len(right.shape) == 2:
+        shared = left.shape[0]
+        right_rows, cols = right.shape
+        if shared != right_rows:
+            raise ValueError("vector-matrix inner dimensions must match")
+
+        data = []
+        for col in range(cols):
+            total = 0.0
+            for inner in range(shared):
+                total += left[inner] * right[inner, col]
+            data.append(total)
+        out = Tensor(
+            data,
+            (cols,),
+            requires_grad=left.requires_grad or right.requires_grad,
+            _children=(left, right),
+            _op="matmul",
+        )
+
+        def _backward() -> None:
+            grad = _grad_data(out)
+            if left.requires_grad:
+                left_grad = [0.0] * shared
+                for inner in range(shared):
+                    for col in range(cols):
+                        left_grad[inner] += grad[col] * right[inner, col]
+                _add_grad(left, left_grad)
+            if right.requires_grad:
+                _add_grad(
+                    right,
+                    [
+                        left[inner] * grad[col]
+                        for inner in range(shared)
+                        for col in range(cols)
+                    ],
+                )
+
+        out._backward = _backward
+        return out
+
     if len(left.shape) == 2 and len(right.shape) == 2:
         rows, shared = left.shape
         right_rows, cols = right.shape
@@ -451,7 +492,7 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
         out._backward = _backward
         return out
 
-    raise ValueError("matmul does not support vector-matrix multiplication yet")
+    raise ValueError("matmul expects 1D or 2D tensors")
 
 
 def transpose(tensor: Tensor) -> Tensor:

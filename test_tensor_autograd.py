@@ -72,6 +72,23 @@ class TensorAutogradTests(unittest.TestCase):
         self.assert_grad_close(weight, loss_fn)
         self.assert_grad_close(inputs, loss_fn)
 
+    def test_vector_matrix_matmul_gradients_match_finite_difference(self) -> None:
+        inputs = Tensor.from_list([2.0, -1.0, 0.5], requires_grad=True)
+        weight = Tensor.from_list([
+            [1.0, -2.0],
+            [0.5, 3.0],
+            [-1.0, 4.0],
+        ], requires_grad=True)
+
+        loss = matmul(inputs, weight).sum()
+        loss.backward()
+
+        def loss_fn() -> float:
+            return matmul(inputs, weight).sum()[0]
+
+        self.assert_grad_close(inputs, loss_fn)
+        self.assert_grad_close(weight, loss_fn)
+
     def test_transpose_gradient_matches_finite_difference(self) -> None:
         x = Tensor.from_list([
             [1.0, -2.0, 3.0],

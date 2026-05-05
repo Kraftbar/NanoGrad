@@ -28,7 +28,7 @@ def smoke_dataset() -> TinyDataset:
 
 def main() -> None:
     dataset = smoke_dataset()
-    model = TensorMLP(inputs=4, layers=[4, 2])
+    model = TensorMLP(inputs=4, layers=[4, 2], seed=0)
     summary = train_tensor_multiclass_dataset(
         model,
         dataset,

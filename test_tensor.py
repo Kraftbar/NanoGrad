@@ -134,6 +134,16 @@ class TensorTests(unittest.TestCase):
 
         self.assertEqual(matmul(a, x).tolist(), [140.0, 320.0])
 
+    def test_vector_matrix_multiply(self) -> None:
+        x = Tensor.from_list([10, 20, 30])
+        a = Tensor.from_list([
+            [1, 2],
+            [3, 4],
+            [5, 6],
+        ])
+
+        self.assertEqual(matmul(x, a).tolist(), [220.0, 280.0])
+
     def test_matrix_matrix_multiply(self) -> None:
         a = Tensor.from_list([
             [1, 2, 3],
@@ -253,6 +263,16 @@ class TensorTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             matmul(Tensor.from_list([1, 2]), Tensor.from_list([1, 2, 3]))
+
+        with self.assertRaises(ValueError):
+            matmul(
+                Tensor.from_list([1, 2]),
+                Tensor.from_list([
+                    [1, 2],
+                    [3, 4],
+                    [5, 6],
+                ]),
+            )
 
         with self.assertRaises(ValueError):
             Tensor.from_list([1, 2]).T
