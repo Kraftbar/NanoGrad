@@ -83,24 +83,25 @@ class TensorLinear(TensorModule):
 
 
 class TensorConv2D(TensorModule):
-    """Single-kernel 2D convolution layer for early vision experiments."""
+    """Single-filter convolution layer for early vision experiments."""
 
     def __init__(
         self,
-        kernel_shape: tuple[int, int],
+        kernel_shape: tuple[int, ...],
         *,
         kernel: Tensor | None = None,
         bias: Tensor | None = None,
         seed: int | None = None,
     ) -> None:
-        rows, cols = kernel_shape
-        if rows <= 0 or cols <= 0:
+        if len(kernel_shape) not in (2, 3):
+            raise ValueError("TensorConv2D kernel shape must be 2D or 3D")
+        if any(dim <= 0 for dim in kernel_shape):
             raise ValueError("TensorConv2D kernel dimensions must be positive")
 
         self.kernel = kernel or conv2d_kernel(kernel_shape, seed=seed)
         self.bias = bias or Tensor.zeros((1,), requires_grad=True)
 
-        _require_matrix("kernel", self.kernel)
+        _require_conv2d_kernel("kernel", self.kernel)
         _require_vector("bias", self.bias)
         if self.kernel.shape != kernel_shape:
             raise ValueError("kernel shape must match kernel_shape")
@@ -226,14 +227,15 @@ def xavier_uniform(inputs: int, outputs: int, *, seed: int | None = None) -> Ten
     )
 
 
-def conv2d_kernel(kernel_shape: tuple[int, int], *, seed: int | None = None) -> Tensor:
-    """Create a trainable 2D convolution kernel."""
+def conv2d_kernel(kernel_shape: tuple[int, ...], *, seed: int | None = None) -> Tensor:
+    """Create a trainable 2D or channel-stacked convolution kernel."""
 
-    rows, cols = kernel_shape
-    if rows <= 0 or cols <= 0:
+    if len(kernel_shape) not in (2, 3):
+        raise ValueError("kernel shape must be 2D or 3D")
+    if any(dim <= 0 for dim in kernel_shape):
         raise ValueError("kernel dimensions must be positive")
 
-    fan_in = rows * cols
+    fan_in = _numel(kernel_shape)
     limit = math.sqrt(6.0 / (fan_in + 1))
     rng = random.Random(seed)
     return Tensor(
@@ -280,6 +282,11 @@ def _require_vector(name: str, tensor: Tensor) -> None:
 def _require_matrix(name: str, tensor: Tensor) -> None:
     if len(tensor.shape) != 2:
         raise ValueError(f"{name} must be a 2D tensor")
+
+
+def _require_conv2d_kernel(name: str, tensor: Tensor) -> None:
+    if len(tensor.shape) not in (2, 3):
+        raise ValueError(f"{name} must be a 2D or 3D tensor")
 
 
 def _apply_activation(tensor: Tensor, activation: str) -> Tensor:

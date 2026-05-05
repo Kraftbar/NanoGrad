@@ -44,9 +44,21 @@ class TensorNNTests(unittest.TestCase):
         self.assertEqual(kernel.data, repeat.data)
         self.assertNotEqual(kernel.data, different.data)
 
+    def test_conv2d_channel_kernel_initialization(self) -> None:
+        kernel = conv2d_kernel((2, 2, 3), seed=7)
+        repeat = conv2d_kernel((2, 2, 3), seed=7)
+        limit = math.sqrt(6.0 / (12 + 1))
+
+        self.assertEqual(kernel.shape, (2, 2, 3))
+        self.assertTrue(kernel.requires_grad)
+        self.assertTrue(all(-limit <= value <= limit for value in kernel.data))
+        self.assertEqual(kernel.data, repeat.data)
+
     def test_conv2d_kernel_shape_error(self) -> None:
         with self.assertRaises(ValueError):
             conv2d_kernel((0, 1))
+        with self.assertRaises(ValueError):
+            conv2d_kernel((1,))
 
     def test_tensor_linear_module_uses_parameters(self) -> None:
         layer = TensorLinear(
@@ -131,6 +143,45 @@ class TensorNNTests(unittest.TestCase):
             ],
         )
         self.assertEqual(layer.parameters(), [layer.kernel, layer.bias])
+
+    def test_tensor_conv2d_module_accepts_channel_stack(self) -> None:
+        layer = TensorConv2D(
+            (2, 2, 2),
+            kernel=Tensor.from_list([
+                [
+                    [1, 0],
+                    [0, -1],
+                ],
+                [
+                    [0.5, 0],
+                    [0, -0.5],
+                ],
+            ], requires_grad=True),
+            bias=Tensor.from_list([10], requires_grad=True),
+        )
+        inputs = Tensor.from_list([
+            [
+                [1, 2, 3],
+                [4, 5, 6],
+                [7, 8, 9],
+            ],
+            [
+                [10, 20, 30],
+                [40, 50, 60],
+                [70, 80, 90],
+            ],
+        ])
+
+        outputs = layer(inputs)
+
+        self.assertEqual(outputs.shape, (2, 2))
+        self.assertEqual(
+            outputs.tolist(),
+            [
+                [-14.0, -14.0],
+                [-14.0, -14.0],
+            ],
+        )
 
     def test_tensor_conv2d_zero_grad(self) -> None:
         layer = TensorConv2D((2, 2), seed=0)
@@ -246,9 +297,18 @@ class TensorNNTests(unittest.TestCase):
             TensorConv2D((0, 1))
 
         with self.assertRaises(ValueError):
+            TensorConv2D((1,))
+
+        with self.assertRaises(ValueError):
             TensorConv2D(
                 (2, 2),
                 kernel=Tensor.from_list([[1, 2]]),
+            )
+
+        with self.assertRaises(ValueError):
+            TensorConv2D(
+                (2, 2),
+                kernel=Tensor.zeros((1, 2, 2)),
             )
 
         with self.assertRaises(ValueError):
