@@ -12,6 +12,20 @@ from tensor_nn import TensorConv2D, TensorLinear, TensorModule
 from train import train_tensor_multiclass_dataset
 
 
+CNN_PRESETS = {
+    "tiny": {
+        "filters": 4,
+        "kernel_size": 3,
+        "pool_size": 2,
+    },
+    "lenet-ish": {
+        "filters": 6,
+        "kernel_size": 5,
+        "pool_size": 2,
+    },
+}
+
+
 class MNISTCNN(TensorModule):
     """Small channel-first CNN for local MNIST experiments."""
 
@@ -86,6 +100,7 @@ class MNISTCNN(TensorModule):
 
 
 def run(args: argparse.Namespace) -> None:
+    args = _apply_preset(args)
     images_path, labels_path = find_mnist_files(args.data_dir)
     dataset = load_mnist(
         images_path,
@@ -144,6 +159,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"samples:      {len(dataset)}")
     print(f"input shape:  {dataset.feature_shape}")
     print(f"classes:      {classes}")
+    print(f"preset:       {args.preset}")
     print(f"filters:      {args.filters}")
     print(f"initial loss: {summary.initial_loss:.6f}")
     print(f"final batch:  {summary.final_loss:.6f}")
@@ -169,14 +185,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=0.05)
-    parser.add_argument("--filters", type=int, default=4)
-    parser.add_argument("--kernel-size", type=int, default=3)
-    parser.add_argument("--pool-size", type=int, default=2)
+    parser.add_argument("--preset", choices=sorted(CNN_PRESETS), default="tiny")
+    parser.add_argument("--filters", type=int)
+    parser.add_argument("--kernel-size", type=int)
+    parser.add_argument("--pool-size", type=int)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--report-every", type=int, default=0)
     parser.add_argument("--save-model", type=Path)
     parser.add_argument("--load-model", type=Path)
     return parser.parse_args(argv)
+
+
+def _apply_preset(args: argparse.Namespace) -> argparse.Namespace:
+    preset = CNN_PRESETS[args.preset]
+    if args.filters is None:
+        args.filters = preset["filters"]
+    if args.kernel_size is None:
+        args.kernel_size = preset["kernel_size"]
+    if args.pool_size is None:
+        args.pool_size = preset["pool_size"]
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:

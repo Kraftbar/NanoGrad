@@ -6,7 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from mnist_cnn_demo import MNISTCNN, parse_args, run
+from mnist_cnn_demo import MNISTCNN, _apply_preset, parse_args, run
 from tensor import Tensor
 
 
@@ -25,6 +25,8 @@ class MNISTCNNDemoTests(unittest.TestCase):
             "2",
             "--lr",
             "0.1",
+            "--preset",
+            "lenet-ish",
             "--filters",
             "5",
             "--kernel-size",
@@ -47,6 +49,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
+        self.assertEqual(args.preset, "lenet-ish")
         self.assertEqual(args.filters, 5)
         self.assertEqual(args.kernel_size, 2)
         self.assertEqual(args.pool_size, 1)
@@ -54,6 +57,29 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertEqual(args.report_every, 2)
         self.assertEqual(args.save_model, Path("model.json"))
         self.assertEqual(args.load_model, Path("model-in.json"))
+
+    def test_cnn_preset_supplies_default_shape_values(self) -> None:
+        args = _apply_preset(parse_args(["--preset", "lenet-ish"]))
+
+        self.assertEqual(args.filters, 6)
+        self.assertEqual(args.kernel_size, 5)
+        self.assertEqual(args.pool_size, 2)
+
+    def test_explicit_shape_values_override_preset(self) -> None:
+        args = _apply_preset(parse_args([
+            "--preset",
+            "lenet-ish",
+            "--filters",
+            "2",
+            "--kernel-size",
+            "3",
+            "--pool-size",
+            "1",
+        ]))
+
+        self.assertEqual(args.filters, 2)
+        self.assertEqual(args.kernel_size, 3)
+        self.assertEqual(args.pool_size, 1)
 
     def test_mnist_cnn_forward_shape(self) -> None:
         model = MNISTCNN(
@@ -136,6 +162,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertIn("samples:      4", text)
         self.assertIn("input shape:  (1, 2, 2)", text)
         self.assertIn("classes:      2", text)
+        self.assertIn("preset:       tiny", text)
         self.assertIn("filters:      2", text)
         self.assertIn("final batch:", text)
         self.assertIn("train loss:", text)
