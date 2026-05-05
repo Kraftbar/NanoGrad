@@ -93,8 +93,8 @@ class TensorConv2D(TensorModule):
         bias: Tensor | None = None,
         seed: int | None = None,
     ) -> None:
-        if len(kernel_shape) not in (2, 3):
-            raise ValueError("TensorConv2D kernel shape must be 2D or 3D")
+        if len(kernel_shape) not in (2, 3, 4):
+            raise ValueError("TensorConv2D kernel shape must be 2D, 3D, or 4D")
         if any(dim <= 0 for dim in kernel_shape):
             raise ValueError("TensorConv2D kernel dimensions must be positive")
 
@@ -228,10 +228,10 @@ def xavier_uniform(inputs: int, outputs: int, *, seed: int | None = None) -> Ten
 
 
 def conv2d_kernel(kernel_shape: tuple[int, ...], *, seed: int | None = None) -> Tensor:
-    """Create a trainable 2D or channel-stacked convolution kernel."""
+    """Create a trainable convolution kernel."""
 
-    if len(kernel_shape) not in (2, 3):
-        raise ValueError("kernel shape must be 2D or 3D")
+    if len(kernel_shape) not in (2, 3, 4):
+        raise ValueError("kernel shape must be 2D, 3D, or 4D")
     if any(dim <= 0 for dim in kernel_shape):
         raise ValueError("kernel dimensions must be positive")
 
@@ -285,8 +285,8 @@ def _require_matrix(name: str, tensor: Tensor) -> None:
 
 
 def _require_conv2d_kernel(name: str, tensor: Tensor) -> None:
-    if len(tensor.shape) not in (2, 3):
-        raise ValueError(f"{name} must be a 2D or 3D tensor")
+    if len(tensor.shape) not in (2, 3, 4):
+        raise ValueError(f"{name} must be a 2D, 3D, or 4D tensor")
 
 
 def _apply_activation(tensor: Tensor, activation: str) -> Tensor:
