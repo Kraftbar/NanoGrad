@@ -146,6 +146,39 @@ class TensorAutogradTests(unittest.TestCase):
 
         self.assertEqual(x.grad, weights.data)
 
+    def test_flatten_from_axis_gradient_preserves_flat_order(self) -> None:
+        x = Tensor.from_list([
+            [
+                [
+                    [1.0, 2.0],
+                    [3.0, 4.0],
+                ],
+                [
+                    [5.0, 6.0],
+                    [7.0, 8.0],
+                ],
+            ],
+            [
+                [
+                    [9.0, 10.0],
+                    [11.0, 12.0],
+                ],
+                [
+                    [13.0, 14.0],
+                    [15.0, 16.0],
+                ],
+            ],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            [0.5, -1.0, 2.0, 3.0, 1.5, -0.5, 0.25, 4.0],
+            [2.5, -3.0, 0.75, 1.25, -1.5, 0.0, 3.5, -2.0],
+        ])
+        loss = (x.flatten(start_axis=1) * weights).sum()
+
+        loss.backward()
+
+        self.assertEqual(x.grad, weights.data)
+
     def test_stack_gradient_routes_to_each_input(self) -> None:
         a = Tensor.from_list([
             [1.0, 2.0],

@@ -124,8 +124,8 @@ class Tensor:
     def reshape(self, shape: tuple[int, ...]) -> "Tensor":
         return reshape(self, shape)
 
-    def flatten(self) -> "Tensor":
-        return flatten(self)
+    def flatten(self, start_axis: int = 0) -> "Tensor":
+        return flatten(self, start_axis=start_axis)
 
     def permute(self, axes: tuple[int, ...]) -> "Tensor":
         return permute(self, axes)
@@ -473,10 +473,13 @@ def reshape(tensor: Tensor, shape: tuple[int, ...]) -> Tensor:
     return out
 
 
-def flatten(tensor: Tensor) -> Tensor:
-    """Return all tensor values as one row-major vector."""
+def flatten(tensor: Tensor, start_axis: int = 0) -> Tensor:
+    """Return tensor values flattened from start_axis onward."""
 
-    return reshape(tensor, (tensor.numel,))
+    start_axis = _normalize_axis(start_axis, tensor.ndim)
+    leading_shape = tensor.shape[:start_axis]
+    flattened = _numel(tensor.shape[start_axis:])
+    return reshape(tensor, (*leading_shape, flattened))
 
 
 def stack(tensors: Sequence[Tensor], axis: int = 0) -> Tensor:
