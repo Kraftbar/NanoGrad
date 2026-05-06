@@ -6,9 +6,9 @@ import argparse
 from pathlib import Path
 
 from datasets import load_cifar10_batches
-from mnist_cnn_demo import SimpleCNN
 from mnist_demo import print_confusion_matrix, print_epoch_report
 from train import train_tensor_multiclass_dataset
+from vision import SimpleCNN
 
 
 DATA_DIR = Path("data/cifar10")

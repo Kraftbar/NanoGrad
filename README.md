@@ -120,6 +120,7 @@ train.py         # scalar and tensor training loops
 demo.py          # scalar autograd training demo
 tensor_demo.py   # tensor math and tensor-autograd demos
 benchmark.py     # small core operation timing checks
+vision.py        # reusable small CNN model implementations
 mnist_demo.py    # local-file MNIST MLP demo
 mnist_cnn_demo.py # local-file MNIST CNN demo
 mnist_smoke_demo.py # no-download MNIST-style CNN smoke demo

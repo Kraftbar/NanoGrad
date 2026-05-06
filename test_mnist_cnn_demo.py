@@ -7,16 +7,13 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from mnist_cnn_demo import (
-    LeNetishCNN,
-    MNISTCNN,
-    SimpleCNN,
-    _activate,
     _apply_preset,
     build_model,
     parse_args,
     run,
 )
 from tensor import Tensor
+from vision import LeNetishCNN, MNISTCNN, SimpleCNN, _activate
 
 
 class MNISTCNNDemoTests(unittest.TestCase):
