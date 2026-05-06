@@ -12,7 +12,7 @@ from cifar_cnn_demo import (
     parse_args,
     run,
 )
-from vision import SimpleCNN, TwoConvCNN
+from vision import SimpleCNN, ThreeConvCNN, TwoConvCNN
 
 
 class CIFARCnnDemoTests(unittest.TestCase):
@@ -42,6 +42,8 @@ class CIFARCnnDemoTests(unittest.TestCase):
             "2",
             "--second-filters",
             "3",
+            "--third-filters",
+            "4",
             "--kernel-size",
             "5",
             "--pool-size",
@@ -72,6 +74,7 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertEqual(args.activation, "tanh")
         self.assertEqual(args.filters, 2)
         self.assertEqual(args.second_filters, 3)
+        self.assertEqual(args.third_filters, 4)
         self.assertEqual(args.kernel_size, 5)
         self.assertEqual(args.pool_size, 2)
         self.assertEqual(args.pooling, "max")
@@ -90,6 +93,7 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertEqual(args.activation, "relu")
         self.assertEqual(args.filters, 4)
         self.assertEqual(args.second_filters, 8)
+        self.assertEqual(args.third_filters, 16)
         self.assertEqual(args.kernel_size, 3)
         self.assertEqual(args.pool_size, 2)
         self.assertEqual(args.pooling, "avg")
@@ -108,6 +112,8 @@ class CIFARCnnDemoTests(unittest.TestCase):
             "2",
             "--second-filters",
             "3",
+            "--third-filters",
+            "4",
             "--kernel-size",
             "5",
             "--pool-size",
@@ -121,6 +127,7 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertEqual(args.activation, "tanh")
         self.assertEqual(args.filters, 2)
         self.assertEqual(args.second_filters, 3)
+        self.assertEqual(args.third_filters, 4)
         self.assertEqual(args.kernel_size, 5)
         self.assertEqual(args.pool_size, 1)
         self.assertEqual(args.pooling, "max")
@@ -130,6 +137,14 @@ class CIFARCnnDemoTests(unittest.TestCase):
 
         self.assertEqual(args.architecture, "two-conv")
         self.assertEqual(args.normalize, "train")
+        self.assertEqual(args.pooling, "max")
+
+    def test_three_conv_preset_supplies_architecture(self) -> None:
+        args = _apply_preset(parse_args(["--preset", "three-conv-maxpool-normalized"]))
+
+        self.assertEqual(args.architecture, "three-conv")
+        self.assertEqual(args.normalize, "train")
+        self.assertEqual(args.third_filters, 16)
         self.assertEqual(args.pooling, "max")
 
     def test_build_model_uses_requested_architecture(self) -> None:
@@ -143,6 +158,14 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertIsInstance(
             build_model(two_conv_args, image_shape=(3, 32, 32), classes=10),
             TwoConvCNN,
+        )
+        self.assertIsInstance(
+            build_model(
+                _apply_preset(parse_args(["--architecture", "three-conv"])),
+                image_shape=(3, 32, 32),
+                classes=10,
+            ),
+            ThreeConvCNN,
         )
         self.assertEqual(
             build_model(
@@ -318,6 +341,48 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertIn("architecture: two-conv", text)
         self.assertIn("pooling:      max", text)
         self.assertIn("filters 2:    1", text)
+        self.assertIn("val loss:", text)
+
+    def test_run_trains_with_three_conv_architecture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            _write_cifar10_batch(data_dir / "data_batch_1.bin", labels=[0])
+            _write_cifar10_batch(data_dir / "test_batch.bin", labels=[0])
+            args = parse_args([
+                "--data-dir",
+                str(data_dir),
+                "--limit",
+                "1",
+                "--validation-limit",
+                "1",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "1",
+                "--architecture",
+                "three-conv",
+                "--filters",
+                "1",
+                "--second-filters",
+                "1",
+                "--third-filters",
+                "1",
+                "--kernel-size",
+                "3",
+                "--pool-size",
+                "2",
+                "--pooling",
+                "max",
+            ])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                run(args)
+
+        text = output.getvalue()
+        self.assertIn("architecture: three-conv", text)
+        self.assertIn("filters 2:    1", text)
+        self.assertIn("filters 3:    1", text)
         self.assertIn("val loss:", text)
 
 

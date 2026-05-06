@@ -12,7 +12,7 @@ from datasets import (
 )
 from mnist_demo import print_confusion_matrix, print_epoch_report
 from train import train_tensor_multiclass_dataset
-from vision import SimpleCNN, TwoConvCNN
+from vision import SimpleCNN, ThreeConvCNN, TwoConvCNN
 
 
 DATA_DIR = Path("data/cifar10")
@@ -33,6 +33,7 @@ CIFAR_PRESETS = {
         "activation": "relu",
         "filters": 4,
         "second_filters": 8,
+        "third_filters": 16,
         "kernel_size": 3,
         "pool_size": 2,
         "pooling": "avg",
@@ -43,6 +44,7 @@ CIFAR_PRESETS = {
         "activation": "relu",
         "filters": 4,
         "second_filters": 8,
+        "third_filters": 16,
         "kernel_size": 3,
         "pool_size": 2,
         "pooling": "avg",
@@ -53,6 +55,7 @@ CIFAR_PRESETS = {
         "activation": "relu",
         "filters": 4,
         "second_filters": 8,
+        "third_filters": 16,
         "kernel_size": 3,
         "pool_size": 2,
         "pooling": "avg",
@@ -63,6 +66,18 @@ CIFAR_PRESETS = {
         "activation": "relu",
         "filters": 4,
         "second_filters": 8,
+        "third_filters": 16,
+        "kernel_size": 3,
+        "pool_size": 2,
+        "pooling": "max",
+    },
+    "three-conv-maxpool-normalized": {
+        "normalize": "train",
+        "architecture": "three-conv",
+        "activation": "relu",
+        "filters": 4,
+        "second_filters": 8,
+        "third_filters": 16,
         "kernel_size": 3,
         "pool_size": 2,
         "pooling": "max",
@@ -145,6 +160,9 @@ def run(args: argparse.Namespace) -> None:
     print(f"filters:      {args.filters}")
     if args.architecture == "two-conv":
         print(f"filters 2:    {args.second_filters}")
+    if args.architecture == "three-conv":
+        print(f"filters 2:    {args.second_filters}")
+        print(f"filters 3:    {args.third_filters}")
     print(f"parameters:   {model.num_parameters()}")
     print(f"initial loss: {summary.initial_loss:.6f}")
     print(f"final batch:  {summary.final_loss:.6f}")
@@ -241,6 +259,19 @@ def build_model(
             activation=args.activation,
             seed=args.seed,
         )
+    if args.architecture == "three-conv":
+        return ThreeConvCNN(
+            image_shape=image_shape,
+            classes=classes,
+            filters=args.filters,
+            second_filters=args.second_filters,
+            third_filters=args.third_filters,
+            kernel_size=args.kernel_size,
+            pool_size=args.pool_size,
+            pooling=args.pooling,
+            activation=args.activation,
+            seed=args.seed,
+        )
     raise ValueError(f"unknown architecture: {args.architecture}")
 
 
@@ -256,6 +287,8 @@ def _apply_preset(args: argparse.Namespace) -> argparse.Namespace:
         args.filters = preset["filters"]
     if args.second_filters is None:
         args.second_filters = preset["second_filters"]
+    if args.third_filters is None:
+        args.third_filters = preset["third_filters"]
     if args.kernel_size is None:
         args.kernel_size = preset["kernel_size"]
     if args.pool_size is None:
@@ -319,11 +352,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--architecture",
-        choices=("simple", "two-conv"),
+        choices=("simple", "two-conv", "three-conv"),
     )
     parser.add_argument("--activation", choices=("relu", "tanh"))
     parser.add_argument("--filters", type=int)
     parser.add_argument("--second-filters", type=int)
+    parser.add_argument("--third-filters", type=int)
     parser.add_argument("--kernel-size", type=int)
     parser.add_argument("--pool-size", type=int)
     parser.add_argument("--pooling", choices=("avg", "max"))
