@@ -24,6 +24,8 @@ class CharDemoTests(unittest.TestCase):
             "abba",
             "--text-file",
             "tiny.txt",
+            "--max-chars",
+            "3",
             "--epochs",
             "3",
             "--batch-size",
@@ -40,6 +42,7 @@ class CharDemoTests(unittest.TestCase):
 
         self.assertEqual(args.text, "abba")
         self.assertEqual(args.text_file, Path("tiny.txt"))
+        self.assertEqual(args.max_chars, 3)
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
@@ -125,6 +128,20 @@ class CharDemoTests(unittest.TestCase):
 
             self.assertEqual(load_text(args), "from file")
             self.assertEqual(text_source(args), str(path))
+
+    def test_load_text_can_cap_character_count(self) -> None:
+        args = parse_args([
+            "--text",
+            "abcdef",
+            "--max-chars",
+            "3",
+        ])
+
+        self.assertEqual(load_text(args), "abc")
+
+        args = parse_args(["--max-chars", "0"])
+        with self.assertRaises(ValueError):
+            load_text(args)
 
     def test_run_trains_on_tiny_text(self) -> None:
         args = parse_args([

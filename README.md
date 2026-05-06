@@ -65,7 +65,7 @@ modules should prove that the core works on increasingly realistic checks.
 
 - [x] Explore a small AlexNet-inspired CIFAR model after convolution basics work
 - [x] Train a tiny character-level language model
-- [ ] Add Tiny Shakespeare as the first language dataset
+- [x] Add Tiny Shakespeare as the first language dataset
 - [ ] Add transformer/GPT-style components later
 - [ ] Compare tiny language-model structure and behavior against nanoGPT
 - [ ] Explore camera geometry and pose estimation

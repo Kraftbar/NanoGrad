@@ -117,8 +117,14 @@ def _argmax(values: list[float]) -> int:
 
 def load_text(args: argparse.Namespace) -> str:
     if args.text_file is not None:
-        return args.text_file.read_text(encoding="utf-8")
-    return args.text
+        text = args.text_file.read_text(encoding="utf-8")
+    else:
+        text = args.text
+    if args.max_chars is not None:
+        if args.max_chars <= 0:
+            raise ValueError("max_chars must be positive")
+        text = text[: args.max_chars]
+    return text
 
 
 def text_source(args: argparse.Namespace) -> str:
@@ -131,6 +137,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--text", default=DEFAULT_TEXT)
     parser.add_argument("--text-file", type=Path)
+    parser.add_argument("--max-chars", type=int)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=0.2)
