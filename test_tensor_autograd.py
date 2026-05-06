@@ -1,7 +1,7 @@
 import unittest
 
 from datasets import TinyDataset, and_gate, or_gate, xor_gate
-from tensor import Tensor, avg_pool2d, conv2d_valid, matmul, stack
+from tensor import Tensor, avg_pool2d, conv2d_valid, matmul, max_pool2d, stack
 from tensor_nn import TensorLinear, TensorMLP
 from train import (
     evaluate_tensor_multiclass_dataset,
@@ -437,6 +437,110 @@ class TensorAutogradTests(unittest.TestCase):
             return (pooled * weights).sum()[0]
 
         self.assert_grad_close(image, loss_fn)
+
+    def test_max_pool2d_gradient_matches_finite_difference(self) -> None:
+        image = Tensor.from_list([
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            [7.0, 8.0, 9.0],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            [1.0, -2.0],
+            [0.5, 3.0],
+        ])
+        loss = (max_pool2d(image, (2, 2), stride=(1, 1)) * weights).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            pooled = max_pool2d(image, (2, 2), stride=(1, 1))
+            return (pooled * weights).sum()[0]
+
+        self.assert_grad_close(image, loss_fn)
+
+    def test_max_pool2d_channel_gradient_matches_finite_difference(self) -> None:
+        image = Tensor.from_list([
+            [
+                [1.0, 2.0, 3.0],
+                [4.0, 5.0, 6.0],
+                [7.0, 8.0, 9.0],
+            ],
+            [
+                [0.5, -1.0, 2.0],
+                [3.0, 0.25, -2.0],
+                [1.0, -0.75, 4.0],
+            ],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            [
+                [1.0, -2.0],
+                [0.5, 3.0],
+            ],
+            [
+                [-0.5, 1.5],
+                [0.75, -2.0],
+            ],
+        ])
+        loss = (max_pool2d(image, (2, 2), stride=(1, 1)) * weights).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            pooled = max_pool2d(image, (2, 2), stride=(1, 1))
+            return (pooled * weights).sum()[0]
+
+        self.assert_grad_close(image, loss_fn)
+
+    def test_max_pool2d_batched_gradient_matches_finite_difference(self) -> None:
+        image = Tensor.from_list([
+            [
+                [
+                    [1.0, 2.0, 3.0],
+                    [4.0, 5.0, 6.0],
+                    [7.0, 8.0, 9.0],
+                ],
+            ],
+            [
+                [
+                    [0.5, -1.0, 2.0],
+                    [3.0, 0.25, -2.0],
+                    [1.5, -0.75, 4.0],
+                ],
+            ],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            [
+                [
+                    [1.0, -2.0],
+                    [0.5, 3.0],
+                ],
+            ],
+            [
+                [
+                    [-1.5, 0.75],
+                    [2.0, -0.25],
+                ],
+            ],
+        ])
+        loss = (max_pool2d(image, (2, 2), stride=(1, 1)) * weights).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            pooled = max_pool2d(image, (2, 2), stride=(1, 1))
+            return (pooled * weights).sum()[0]
+
+        self.assert_grad_close(image, loss_fn)
+
+    def test_max_pool2d_tie_gradient_uses_first_max(self) -> None:
+        image = Tensor.from_list([
+            [2.0, 2.0],
+            [1.0, 0.0],
+        ], requires_grad=True)
+
+        max_pool2d(image, (2, 2)).sum().backward()
+
+        self.assertEqual(image.grad, [1.0, 0.0, 0.0, 0.0])
 
     def test_transpose_gradient_matches_finite_difference(self) -> None:
         x = Tensor.from_list([

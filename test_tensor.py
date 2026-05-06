@@ -7,6 +7,7 @@ from tensor import (
     conv2d_valid,
     flatten,
     matmul,
+    max_pool2d,
     permute,
     reshape,
     stack,
@@ -839,6 +840,98 @@ class TensorTests(unittest.TestCase):
             ],
         )
 
+    def test_max_pool2d(self) -> None:
+        image = Tensor.from_list([
+            [1, 2, 3, 4],
+            [5, 9, 7, 8],
+            [9, 10, 6, 12],
+            [13, 14, 15, 11],
+        ])
+
+        self.assertEqual(
+            max_pool2d(image, (2, 2)).tolist(),
+            [
+                [9.0, 8.0],
+                [14.0, 15.0],
+            ],
+        )
+        self.assertEqual(
+            image.max_pool2d((2, 2), stride=(1, 2)).tolist(),
+            [
+                [9.0, 8.0],
+                [10.0, 12.0],
+                [14.0, 15.0],
+            ],
+        )
+
+    def test_max_pool2d_channel_stack(self) -> None:
+        image = Tensor.from_list([
+            [
+                [1, 2, 3, 4],
+                [5, 9, 7, 8],
+                [9, 10, 6, 12],
+                [13, 14, 15, 11],
+            ],
+            [
+                [10, 20, 30, 40],
+                [50, 90, 70, 80],
+                [90, 100, 60, 120],
+                [130, 140, 150, 110],
+            ],
+        ])
+
+        self.assertEqual(
+            max_pool2d(image, (2, 2)).tolist(),
+            [
+                [
+                    [9.0, 8.0],
+                    [14.0, 15.0],
+                ],
+                [
+                    [90.0, 80.0],
+                    [140.0, 150.0],
+                ],
+            ],
+        )
+
+    def test_max_pool2d_batched_channel_stack(self) -> None:
+        image = Tensor.from_list([
+            [
+                [
+                    [1, 2, 3, 4],
+                    [5, 9, 7, 8],
+                    [9, 10, 6, 12],
+                    [13, 14, 15, 11],
+                ],
+            ],
+            [
+                [
+                    [10, 20, 30, 40],
+                    [50, 90, 70, 80],
+                    [90, 100, 60, 120],
+                    [130, 140, 150, 110],
+                ],
+            ],
+        ])
+
+        self.assertEqual(
+            max_pool2d(image, (2, 2)).tolist(),
+            [
+                [
+                    [
+                        [9.0, 8.0],
+                        [14.0, 15.0],
+                    ],
+                ],
+                [
+                    [
+                        [90.0, 80.0],
+                        [140.0, 150.0],
+                    ],
+                ],
+            ],
+        )
+
     def test_sum_reductions(self) -> None:
         x = Tensor.from_list([
             [1, 2, 3],
@@ -1099,6 +1192,21 @@ class TensorTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             avg_pool2d(Tensor.from_list([[1, 2]]), (2, 1))
+
+        with self.assertRaises(ValueError):
+            max_pool2d(Tensor.from_list([1, 2]), (1, 1))
+
+        with self.assertRaises(ValueError):
+            max_pool2d(Tensor.zeros((1, 1, 1, 2, 2)), (1, 1))
+
+        with self.assertRaises(ValueError):
+            max_pool2d(Tensor.from_list([[1, 2]]), (0, 1))
+
+        with self.assertRaises(ValueError):
+            max_pool2d(Tensor.from_list([[1, 2]]), (1, 1), stride=(0, 1))
+
+        with self.assertRaises(ValueError):
+            max_pool2d(Tensor.from_list([[1, 2]]), (2, 1))
 
         with self.assertRaises(ValueError):
             Tensor.from_list([1, 0, -1]).log()

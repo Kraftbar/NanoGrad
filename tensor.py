@@ -141,6 +141,14 @@ class Tensor:
     ) -> "Tensor":
         return avg_pool2d(self, window, stride=stride)
 
+    def max_pool2d(
+        self,
+        window: tuple[int, int],
+        *,
+        stride: tuple[int, int] | None = None,
+    ) -> "Tensor":
+        return max_pool2d(self, window, stride=stride)
+
     @property
     def T(self) -> "Tensor":
         return transpose(self)
@@ -908,6 +916,97 @@ def avg_pool2d(
                                     col_start + window_col,
                                 )
                                 image_grad[image_index] += out_grad
+        _add_grad(image, image_grad)
+
+    out._backward = _backward
+    return out
+
+
+def max_pool2d(
+    image: Tensor,
+    window: tuple[int, int],
+    *,
+    stride: tuple[int, int] | None = None,
+) -> Tensor:
+    """Max-pool a 2D tensor or each channel in a 3D/4D tensor.
+
+    If values tie inside a pooling window, the gradient is routed to the first
+    maximum in row-major order.
+    """
+
+    if image.ndim == 2:
+        batches = 1
+        channels = 1
+        image_rows, image_cols = image.shape
+        out_shape_prefix = ()
+    elif image.ndim == 3:
+        batches = 1
+        channels, image_rows, image_cols = image.shape
+        out_shape_prefix = (channels,)
+    elif image.ndim == 4:
+        batches, channels, image_rows, image_cols = image.shape
+        out_shape_prefix = (batches, channels)
+    else:
+        raise ValueError("max_pool2d expects a 2D, 3D, or 4D tensor")
+
+    window_rows, window_cols = window
+    if window_rows <= 0 or window_cols <= 0:
+        raise ValueError("max_pool2d window dimensions must be positive")
+
+    if stride is None:
+        stride_rows, stride_cols = window
+    else:
+        stride_rows, stride_cols = stride
+        if stride_rows <= 0 or stride_cols <= 0:
+            raise ValueError("max_pool2d stride dimensions must be positive")
+
+    if window_rows > image_rows or window_cols > image_cols:
+        raise ValueError("max_pool2d window must fit inside the image")
+
+    out_rows = ((image_rows - window_rows) // stride_rows) + 1
+    out_cols = ((image_cols - window_cols) // stride_cols) + 1
+    data = []
+    max_indices = []
+    for batch in range(batches):
+        for channel in range(channels):
+            for out_row in range(out_rows):
+                for out_col in range(out_cols):
+                    row_start = out_row * stride_rows
+                    col_start = out_col * stride_cols
+                    max_value = None
+                    max_index = None
+                    for window_row in range(window_rows):
+                        for window_col in range(window_cols):
+                            image_index = _pool2d_flat_index(
+                                image.shape,
+                                batch,
+                                channel,
+                                row_start + window_row,
+                                col_start + window_col,
+                            )
+                            value = image.data[image_index]
+                            if max_value is None or value > max_value:
+                                max_value = value
+                                max_index = image_index
+                    assert max_value is not None
+                    assert max_index is not None
+                    data.append(max_value)
+                    max_indices.append(max_index)
+
+    out = Tensor(
+        data,
+        (*out_shape_prefix, out_rows, out_cols),
+        requires_grad=image.requires_grad,
+        _children=(image,),
+        _op="max_pool2d",
+    )
+
+    def _backward() -> None:
+        if not image.requires_grad:
+            return
+        image_grad = [0.0] * len(image.data)
+        for out_grad, image_index in zip(_grad_data(out), max_indices):
+            image_grad[image_index] += out_grad
         _add_grad(image, image_grad)
 
     out._backward = _backward
