@@ -145,6 +145,41 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.seed_text, "hell")
         self.assertEqual(args.generate, 24)
 
+    def test_tiny_gpt_preset_sets_gpt_like_smoke_defaults(self) -> None:
+        args = parse_args(["--preset", "tiny-gpt"])
+
+        self.assertEqual(args.preset, "tiny-gpt")
+        self.assertEqual(args.model, "transformer")
+        self.assertEqual(args.max_chars, 128)
+        self.assertEqual(args.context_size, 4)
+        self.assertEqual(args.embedding_dim, 8)
+        self.assertEqual(args.hidden_dim, 16)
+        self.assertEqual(args.heads, 1)
+        self.assertEqual(args.layers, 1)
+        self.assertEqual(args.activation, "gelu")
+        self.assertTrue(args.tie_embeddings)
+        self.assertEqual(args.epochs, 1)
+        self.assertEqual(args.batch_size, 4)
+        self.assertEqual(args.lr, 0.01)
+        self.assertEqual(args.optimizer, "adam")
+        self.assertEqual(args.weight_decay, 0.01)
+        self.assertEqual(args.max_grad_norm, 1.0)
+        self.assertEqual(args.seed_text, "hell")
+        self.assertEqual(args.generate, 24)
+
+    def test_tiny_gpt_preset_keeps_explicit_false_boolean(self) -> None:
+        args = parse_args([
+            "--preset",
+            "tiny-gpt",
+            "--no-tie-embeddings",
+            "--optimizer",
+            "sgd",
+        ])
+
+        self.assertFalse(args.tie_embeddings)
+        self.assertEqual(args.optimizer, "sgd")
+        self.assertEqual(args.activation, "gelu")
+
     def test_tiny_transformer_preset_keeps_explicit_values(self) -> None:
         args = parse_args([
             "--preset",

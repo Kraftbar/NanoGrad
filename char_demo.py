@@ -67,6 +67,25 @@ PRESETS = {
         "seed_text": "hell",
         "generate": 24,
     },
+    "tiny-gpt": {
+        "model": "transformer",
+        "max_chars": 128,
+        "context_size": 4,
+        "embedding_dim": 8,
+        "hidden_dim": 16,
+        "heads": 1,
+        "layers": 1,
+        "activation": "gelu",
+        "tie_embeddings": True,
+        "epochs": 1,
+        "batch_size": 4,
+        "lr": 0.01,
+        "optimizer": "adam",
+        "weight_decay": 0.01,
+        "max_grad_norm": 1.0,
+        "seed_text": "hell",
+        "generate": 24,
+    },
 }
 
 
@@ -558,7 +577,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("relu", "gelu"),
         default=DEFAULT_OPTIONS["activation"],
     )
-    parser.add_argument("--tie-embeddings", action="store_true")
+    parser.add_argument(
+        "--tie-embeddings",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_OPTIONS["tie_embeddings"],
+    )
     parser.add_argument("--epochs", type=int, default=DEFAULT_OPTIONS["epochs"])
     parser.add_argument("--batch-size", type=int, default=DEFAULT_OPTIONS["batch_size"])
     parser.add_argument("--lr", type=float, default=DEFAULT_OPTIONS["lr"])
@@ -630,7 +653,10 @@ def _explicit_option_names(argv: list[str]) -> set[str]:
         if not token.startswith("--"):
             continue
         name = token.split("=", 1)[0]
-        names.add(name.removeprefix("--").replace("-", "_"))
+        option_name = name.removeprefix("--").replace("-", "_")
+        names.add(option_name)
+        if option_name.startswith("no_"):
+            names.add(option_name.removeprefix("no_"))
     return names
 
 
