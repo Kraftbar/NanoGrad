@@ -1,7 +1,15 @@
 import unittest
 
 from datasets import TinyDataset, and_gate, or_gate, xor_gate
-from tensor import Tensor, avg_pool2d, conv2d_valid, matmul, max_pool2d, stack
+from tensor import (
+    Tensor,
+    avg_pool2d,
+    conv2d_valid,
+    matmul,
+    max_pool2d,
+    stack,
+    tensor_softmax,
+)
 from tensor_nn import TensorLinear, TensorMLP
 from train import (
     evaluate_tensor_multiclass_dataset,
@@ -744,6 +752,24 @@ class TensorAutogradTests(unittest.TestCase):
 
         def loss_fn() -> float:
             return (x.tanh() * weights).sum()[0]
+
+        self.assert_grad_close(x, loss_fn)
+
+    def test_softmax_gradient_matches_finite_difference(self) -> None:
+        x = Tensor.from_list([
+            [0.25, -0.5, 1.0],
+            [1.5, 0.0, -1.0],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            [0.3, -0.7, 1.1],
+            [-0.2, 0.5, 0.9],
+        ])
+        loss = (tensor_softmax(x, axis=1) * weights).sum()
+
+        loss.backward()
+
+        def loss_fn() -> float:
+            return (tensor_softmax(x, axis=1) * weights).sum()[0]
 
         self.assert_grad_close(x, loss_fn)
 

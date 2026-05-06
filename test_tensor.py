@@ -17,6 +17,7 @@ from tensor import (
     tensor_reciprocal,
     tensor_relu,
     tensor_sigmoid,
+    tensor_softmax,
     tensor_sum,
     tensor_tanh,
     transpose,
@@ -1002,6 +1003,37 @@ class TensorTests(unittest.TestCase):
         self.assertEqual(x.mean().tolist(), [2.0])
         self.assertEqual(x.mean(axis=0).tolist(), [2.0])
 
+    def test_softmax(self) -> None:
+        x = Tensor.from_list([
+            [1.0, 2.0, 3.0],
+            [1.0, 1.0, 1.0],
+        ])
+        y = tensor_softmax(x, axis=1)
+        row0_exp = [math.exp(-2.0), math.exp(-1.0), 1.0]
+        row0_sum = sum(row0_exp)
+
+        self.assertEqual(y.shape, x.shape)
+        self.assertAlmostEqual(sum(y.tolist()[0]), 1.0)
+        self.assertAlmostEqual(sum(y.tolist()[1]), 1.0)
+        self.assertAlmostEqual(y[0, 0], row0_exp[0] / row0_sum)
+        self.assertAlmostEqual(y[0, 1], row0_exp[1] / row0_sum)
+        self.assertAlmostEqual(y[0, 2], row0_exp[2] / row0_sum)
+        self.assertEqual(y.tolist()[1], [1 / 3, 1 / 3, 1 / 3])
+        self.assertEqual(x.softmax(axis=1).tolist(), y.tolist())
+
+    def test_softmax_over_first_axis(self) -> None:
+        x = Tensor.from_list([
+            [1.0, 2.0],
+            [3.0, 4.0],
+        ])
+
+        y = tensor_softmax(x, axis=0)
+
+        self.assertAlmostEqual(y[0, 0] + y[1, 0], 1.0)
+        self.assertAlmostEqual(y[0, 1] + y[1, 1], 1.0)
+        self.assertAlmostEqual(y[0, 0], math.exp(-2.0) / (math.exp(-2.0) + 1.0))
+        self.assertAlmostEqual(y[1, 1], 1.0 / (math.exp(-2.0) + 1.0))
+
     def test_exp_and_log(self) -> None:
         x = Tensor.from_list([
             [1.0, math.e],
@@ -1120,6 +1152,9 @@ class TensorTests(unittest.TestCase):
                     [1],
                 ],
             ]).sum(axis=3)
+
+        with self.assertRaises(ValueError):
+            Tensor.from_list([1, 2, 3]).softmax(axis=1)
 
         with self.assertRaises(ValueError):
             Tensor.from_list([1, 2, 3]).reshape((2, 2))

@@ -159,6 +159,9 @@ class Tensor:
     def mean(self, axis: int | None = None) -> "Tensor":
         return tensor_mean(self, axis=axis)
 
+    def softmax(self, axis: int = -1) -> "Tensor":
+        return tensor_softmax(self, axis=axis)
+
     def exp(self) -> "Tensor":
         return tensor_exp(self)
 
@@ -1084,6 +1087,57 @@ def tensor_mean(tensor: Tensor, axis: int | None = None) -> Tensor:
 
     axis = _normalize_axis(axis, len(tensor.shape))
     return tensor_sum(tensor, axis=axis) * (1 / tensor.shape[axis])
+
+
+def tensor_softmax(tensor: Tensor, axis: int = -1) -> Tensor:
+    """Softmax over one tensor axis."""
+
+    axis = _normalize_axis(axis, len(tensor.shape))
+    groups: dict[tuple[int, ...], list[int]] = {}
+    for flat_index in range(tensor.numel):
+        index = _unravel_index(flat_index, tensor.shape)
+        group_key = index[:axis] + index[axis + 1 :]
+        groups.setdefault(group_key, []).append(flat_index)
+
+    data = [0.0] * tensor.numel
+    for indices in groups.values():
+        values = [tensor.data[index] for index in indices]
+        row_max = max(values)
+        exp_values = [
+            math.exp(value - row_max)
+            for value in values
+        ]
+        exp_sum = sum(exp_values)
+        for index, value in zip(indices, exp_values):
+            data[index] = value / exp_sum
+
+    out = Tensor(
+        data,
+        tensor.shape,
+        requires_grad=tensor.requires_grad,
+        _children=(tensor,),
+        _op="softmax",
+    )
+
+    def _backward() -> None:
+        if not tensor.requires_grad:
+            return
+
+        grad = _grad_data(out)
+        tensor_grad = [0.0] * tensor.numel
+        for indices in groups.values():
+            weighted_grad = sum(
+                grad[index] * out.data[index]
+                for index in indices
+            )
+            for index in indices:
+                tensor_grad[index] += out.data[index] * (
+                    grad[index] - weighted_grad
+                )
+        _add_grad(tensor, tensor_grad)
+
+    out._backward = _backward
+    return out
 
 
 def tensor_exp(tensor: Tensor) -> Tensor:
