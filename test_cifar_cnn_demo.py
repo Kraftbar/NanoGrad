@@ -75,6 +75,19 @@ class CIFARCnnDemoTests(unittest.TestCase):
             self.assertEqual(find_cifar10_files(data_dir), [first, third])
             self.assertIsNone(find_cifar10_test_file(data_dir, required=False))
 
+    def test_find_cifar10_files_accepts_extracted_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            extracted_dir = data_dir / "cifar-10-batches-bin"
+            extracted_dir.mkdir()
+            train_path = extracted_dir / "data_batch_1.bin"
+            test_path = extracted_dir / "test_batch.bin"
+            train_path.write_bytes(b"")
+            test_path.write_bytes(b"")
+
+            self.assertEqual(find_cifar10_files(data_dir), [train_path])
+            self.assertEqual(find_cifar10_test_file(data_dir), test_path)
+
     def test_find_cifar10_files_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             with self.assertRaises(FileNotFoundError):

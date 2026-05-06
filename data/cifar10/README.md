@@ -1,6 +1,7 @@
 # Local CIFAR-10 Data
 
 Place CIFAR-10 binary batch files here before running CIFAR experiments.
+The standard extracted `cifar-10-batches-bin/` directory also works.
 
 Expected training files:
 

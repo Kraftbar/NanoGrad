@@ -21,6 +21,7 @@ TRAIN_BATCH_NAMES = (
 )
 TEST_BATCH_NAME = "test_batch.bin"
 CIFAR10_CLASSES = 10
+EXTRACTED_DIR_NAME = "cifar-10-batches-bin"
 
 
 def run(args: argparse.Namespace) -> None:
@@ -138,11 +139,15 @@ def print_dataset_summary(name: str, dataset) -> None:
 
 
 def find_cifar10_files(data_dir: Path, *, required: bool = True) -> list[Path]:
-    paths = [
-        data_dir / name
-        for name in TRAIN_BATCH_NAMES
-        if (data_dir / name).exists()
-    ]
+    paths = []
+    for candidate_dir in _cifar10_data_dirs(data_dir):
+        paths = [
+            candidate_dir / name
+            for name in TRAIN_BATCH_NAMES
+            if (candidate_dir / name).exists()
+        ]
+        if paths:
+            break
     if not paths and required:
         raise FileNotFoundError(
             f"CIFAR-10 batch files not found under {data_dir}."
@@ -155,12 +160,20 @@ def find_cifar10_test_file(
     *,
     required: bool = True,
 ) -> Path | None:
-    path = data_dir / TEST_BATCH_NAME
-    if path.exists():
-        return path
+    for candidate_dir in _cifar10_data_dirs(data_dir):
+        path = candidate_dir / TEST_BATCH_NAME
+        if path.exists():
+            return path
     if required:
         raise FileNotFoundError(f"CIFAR-10 test batch not found under {data_dir}.")
     return None
+
+
+def _cifar10_data_dirs(data_dir: Path) -> list[Path]:
+    return [
+        data_dir,
+        data_dir / EXTRACTED_DIR_NAME,
+    ]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
