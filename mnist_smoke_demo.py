@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from datasets import TinyDataset
-from tensor import Tensor, avg_pool2d
-from tensor_nn import TensorConv2D, TensorLinear
 from train import train_tensor_multiclass_dataset
+from vision import SimpleCNN
 
 
 def smoke_dataset() -> TinyDataset:
@@ -55,23 +54,18 @@ def smoke_dataset() -> TinyDataset:
     )
 
 
-class SmokeCNN:
+class SmokeCNN(SimpleCNN):
     """Tiny CNN used to exercise channel-first image batches."""
 
     def __init__(self, *, seed: int = 0) -> None:
-        self.conv = TensorConv2D((2, 1, 2, 2), seed=seed)
-        self.classifier = TensorLinear(inputs=2, outputs=2, seed=seed + 1)
-
-    def __call__(self, inputs: Tensor) -> Tensor:
-        features = self.conv(inputs).relu()
-        pooled = avg_pool2d(features, (3, 3))
-        return self.classifier(pooled.flatten(start_axis=1))
-
-    def parameters(self) -> list[Tensor]:
-        return [
-            *self.conv.parameters(),
-            *self.classifier.parameters(),
-        ]
+        super().__init__(
+            image_shape=(1, 4, 4),
+            classes=2,
+            filters=2,
+            kernel_size=2,
+            pool_size=3,
+            seed=seed,
+        )
 
 
 def main() -> None:
