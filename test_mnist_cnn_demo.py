@@ -9,6 +9,7 @@ from pathlib import Path
 from mnist_cnn_demo import (
     LeNetishCNN,
     MNISTCNN,
+    SimpleCNN,
     _activate,
     _apply_preset,
     build_model,
@@ -187,7 +188,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
 
         self.assertIsInstance(
             build_model(simple_args, image_shape=(1, 4, 4), classes=2),
-            MNISTCNN,
+            SimpleCNN,
         )
         self.assertIsInstance(
             build_model(lenet_args, image_shape=(1, 28, 28), classes=10),

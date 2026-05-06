@@ -37,8 +37,8 @@ CNN_PRESETS = {
 }
 
 
-class MNISTCNN(TensorModule):
-    """Small channel-first CNN for local MNIST experiments."""
+class SimpleCNN(TensorModule):
+    """Small channel-first CNN for local image experiments."""
 
     def __init__(
         self,
@@ -52,7 +52,7 @@ class MNISTCNN(TensorModule):
         seed: int = 0,
     ) -> None:
         if len(image_shape) != 3:
-            raise ValueError("MNISTCNN expects image_shape=(channels, rows, cols)")
+            raise ValueError("SimpleCNN expects image_shape=(channels, rows, cols)")
         if classes <= 0:
             raise ValueError("classes must be positive")
         if filters <= 0:
@@ -112,6 +112,9 @@ class MNISTCNN(TensorModule):
     def load_state_dict(self, state: dict) -> None:
         self.conv.load_state_dict(state["conv"])
         self.classifier.load_state_dict(state["classifier"])
+
+
+MNISTCNN = SimpleCNN
 
 
 class LeNetishCNN(TensorModule):
@@ -378,7 +381,7 @@ def build_model(
     classes: int,
 ) -> TensorModule:
     if args.architecture == "simple":
-        return MNISTCNN(
+        return SimpleCNN(
             image_shape=image_shape,
             classes=classes,
             filters=args.filters,
