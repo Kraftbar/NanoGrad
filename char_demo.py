@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from tensor import Tensor
 from tensor_nn import TensorLinear, TensorModule
@@ -41,7 +42,8 @@ class CharBigramModel(TensorModule):
 
 
 def run(args: argparse.Namespace) -> None:
-    dataset, vocab = next_char_dataset(args.text)
+    text = load_text(args)
+    dataset, vocab = next_char_dataset(text)
     model = CharBigramModel(len(vocab), seed=args.seed)
     summary = train_tensor_multiclass_dataset(
         model,
@@ -60,7 +62,8 @@ def run(args: argparse.Namespace) -> None:
     )
 
     print("Character bigram demo")
-    print(f"text length:   {len(args.text)}")
+    print(f"text source:   {text_source(args)}")
+    print(f"text length:   {len(text)}")
     print(f"vocab size:    {len(vocab)}")
     print(f"samples:       {len(dataset)}")
     print(f"parameters:    {model.num_parameters()}")
@@ -112,9 +115,22 @@ def _argmax(values: list[float]) -> int:
     return best_index
 
 
+def load_text(args: argparse.Namespace) -> str:
+    if args.text_file is not None:
+        return args.text_file.read_text(encoding="utf-8")
+    return args.text
+
+
+def text_source(args: argparse.Namespace) -> str:
+    if args.text_file is not None:
+        return str(args.text_file)
+    return "built-in"
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--text", default=DEFAULT_TEXT)
+    parser.add_argument("--text-file", type=Path)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=0.2)

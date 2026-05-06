@@ -4,7 +4,15 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from char_demo import CharBigramModel, _argmax, generate_text, parse_args, run
+from char_demo import (
+    CharBigramModel,
+    _argmax,
+    generate_text,
+    load_text,
+    parse_args,
+    run,
+    text_source,
+)
 from tensor import Tensor
 from text import CharVocab
 
@@ -14,6 +22,8 @@ class CharDemoTests(unittest.TestCase):
         args = parse_args([
             "--text",
             "abba",
+            "--text-file",
+            "tiny.txt",
             "--epochs",
             "3",
             "--batch-size",
@@ -29,6 +39,7 @@ class CharDemoTests(unittest.TestCase):
         ])
 
         self.assertEqual(args.text, "abba")
+        self.assertEqual(args.text_file, Path("tiny.txt"))
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
@@ -101,6 +112,20 @@ class CharDemoTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _argmax([])
 
+    def test_load_text_prefers_text_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "input.txt"
+            path.write_text("from file", encoding="utf-8")
+            args = parse_args([
+                "--text",
+                "from arg",
+                "--text-file",
+                str(path),
+            ])
+
+            self.assertEqual(load_text(args), "from file")
+            self.assertEqual(text_source(args), str(path))
+
     def test_run_trains_on_tiny_text(self) -> None:
         args = parse_args([
             "--text",
@@ -123,9 +148,37 @@ class CharDemoTests(unittest.TestCase):
 
         text = output.getvalue()
         self.assertIn("Character bigram demo", text)
+        self.assertIn("text source:   built-in", text)
         self.assertIn("vocab size:    2", text)
         self.assertIn("samples:       7", text)
         self.assertIn("generated:", text)
+
+    def test_run_trains_on_text_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "input.txt"
+            path.write_text("abababab", encoding="utf-8")
+            args = parse_args([
+                "--text-file",
+                str(path),
+                "--epochs",
+                "20",
+                "--batch-size",
+                "2",
+                "--lr",
+                "0.3",
+                "--seed-text",
+                "a",
+                "--generate",
+                "4",
+            ])
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                run(args)
+
+        text = output.getvalue()
+        self.assertIn(f"text source:   {path}", text)
+        self.assertIn("vocab size:    2", text)
 
 
 if __name__ == "__main__":
