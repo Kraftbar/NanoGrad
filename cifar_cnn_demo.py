@@ -26,9 +26,39 @@ TRAIN_BATCH_NAMES = (
 TEST_BATCH_NAME = "test_batch.bin"
 CIFAR10_CLASSES = 10
 EXTRACTED_DIR_NAME = "cifar-10-batches-bin"
+CIFAR_PRESETS = {
+    "tiny": {
+        "normalize": "none",
+        "architecture": "simple",
+        "activation": "relu",
+        "filters": 4,
+        "second_filters": 8,
+        "kernel_size": 3,
+        "pool_size": 2,
+    },
+    "tiny-normalized": {
+        "normalize": "train",
+        "architecture": "simple",
+        "activation": "relu",
+        "filters": 4,
+        "second_filters": 8,
+        "kernel_size": 3,
+        "pool_size": 2,
+    },
+    "two-conv-normalized": {
+        "normalize": "train",
+        "architecture": "two-conv",
+        "activation": "relu",
+        "filters": 4,
+        "second_filters": 8,
+        "kernel_size": 3,
+        "pool_size": 2,
+    },
+}
 
 
 def run(args: argparse.Namespace) -> None:
+    args = _apply_preset(args)
     train_paths = find_cifar10_files(args.data_dir)
     test_path = find_cifar10_test_file(args.data_dir, required=False)
     dataset = load_cifar10_batches(train_paths, limit=args.limit)
@@ -92,6 +122,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"samples:      {len(dataset)}")
     print(f"input shape:  {dataset.feature_shape}")
     print(f"classes:      {CIFAR10_CLASSES}")
+    print(f"preset:       {args.preset}")
     print(f"normalize:    {args.normalize}")
     if normalization_stats is not None:
         print_channel_stats(normalization_stats)
@@ -197,6 +228,25 @@ def build_model(
     raise ValueError(f"unknown architecture: {args.architecture}")
 
 
+def _apply_preset(args: argparse.Namespace) -> argparse.Namespace:
+    preset = CIFAR_PRESETS[args.preset]
+    if args.normalize is None:
+        args.normalize = preset["normalize"]
+    if args.architecture is None:
+        args.architecture = preset["architecture"]
+    if args.activation is None:
+        args.activation = preset["activation"]
+    if args.filters is None:
+        args.filters = preset["filters"]
+    if args.second_filters is None:
+        args.second_filters = preset["second_filters"]
+    if args.kernel_size is None:
+        args.kernel_size = preset["kernel_size"]
+    if args.pool_size is None:
+        args.pool_size = preset["pool_size"]
+    return args
+
+
 def find_cifar10_files(data_dir: Path, *, required: bool = True) -> list[Path]:
     paths = []
     for candidate_dir in _cifar10_data_dirs(data_dir):
@@ -243,22 +293,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=0.05)
+    parser.add_argument("--preset", choices=sorted(CIFAR_PRESETS), default="tiny")
     parser.add_argument(
         "--normalize",
         choices=("none", "train"),
-        default="none",
         help="Normalize channel-first images with stats from the training split.",
     )
     parser.add_argument(
         "--architecture",
         choices=("simple", "two-conv"),
-        default="simple",
     )
-    parser.add_argument("--activation", choices=("relu", "tanh"), default="relu")
-    parser.add_argument("--filters", type=int, default=4)
-    parser.add_argument("--second-filters", type=int, default=8)
-    parser.add_argument("--kernel-size", type=int, default=3)
-    parser.add_argument("--pool-size", type=int, default=2)
+    parser.add_argument("--activation", choices=("relu", "tanh"))
+    parser.add_argument("--filters", type=int)
+    parser.add_argument("--second-filters", type=int)
+    parser.add_argument("--kernel-size", type=int)
+    parser.add_argument("--pool-size", type=int)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--report-every", type=int, default=0)
     parser.add_argument("--save-model", type=Path)

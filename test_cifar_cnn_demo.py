@@ -5,6 +5,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from cifar_cnn_demo import (
+    _apply_preset,
     build_model,
     find_cifar10_files,
     find_cifar10_test_file,
@@ -29,6 +30,8 @@ class CIFARCnnDemoTests(unittest.TestCase):
             "1",
             "--lr",
             "0.1",
+            "--preset",
+            "two-conv-normalized",
             "--normalize",
             "train",
             "--architecture",
@@ -61,6 +64,7 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertEqual(args.epochs, 2)
         self.assertEqual(args.batch_size, 1)
         self.assertEqual(args.lr, 0.1)
+        self.assertEqual(args.preset, "two-conv-normalized")
         self.assertEqual(args.normalize, "train")
         self.assertEqual(args.architecture, "two-conv")
         self.assertEqual(args.activation, "tanh")
@@ -75,9 +79,48 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertTrue(args.show_confusion)
         self.assertTrue(args.check_data)
 
+    def test_preset_supplies_default_model_values(self) -> None:
+        args = _apply_preset(parse_args(["--preset", "two-conv-normalized"]))
+
+        self.assertEqual(args.normalize, "train")
+        self.assertEqual(args.architecture, "two-conv")
+        self.assertEqual(args.activation, "relu")
+        self.assertEqual(args.filters, 4)
+        self.assertEqual(args.second_filters, 8)
+        self.assertEqual(args.kernel_size, 3)
+        self.assertEqual(args.pool_size, 2)
+
+    def test_explicit_values_override_preset(self) -> None:
+        args = _apply_preset(parse_args([
+            "--preset",
+            "two-conv-normalized",
+            "--normalize",
+            "none",
+            "--architecture",
+            "simple",
+            "--activation",
+            "tanh",
+            "--filters",
+            "2",
+            "--second-filters",
+            "3",
+            "--kernel-size",
+            "5",
+            "--pool-size",
+            "1",
+        ]))
+
+        self.assertEqual(args.normalize, "none")
+        self.assertEqual(args.architecture, "simple")
+        self.assertEqual(args.activation, "tanh")
+        self.assertEqual(args.filters, 2)
+        self.assertEqual(args.second_filters, 3)
+        self.assertEqual(args.kernel_size, 5)
+        self.assertEqual(args.pool_size, 1)
+
     def test_build_model_uses_requested_architecture(self) -> None:
-        simple_args = parse_args([])
-        two_conv_args = parse_args(["--architecture", "two-conv"])
+        simple_args = _apply_preset(parse_args([]))
+        two_conv_args = _apply_preset(parse_args(["--architecture", "two-conv"]))
 
         self.assertIsInstance(
             build_model(simple_args, image_shape=(3, 32, 32), classes=10),
