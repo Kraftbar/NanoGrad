@@ -38,7 +38,8 @@ This note compares NanoGrad's tiny character transformer path with the local
   `--report-every` and `--validation-chars`.
 - Epoch metrics can also be written as CSV with `--metrics-file`.
 - Tensor training can use SGD or Adam with `--optimizer`, and optionally clip
-  global gradient norm with `--max-grad-norm`.
+  global gradient norm or apply weight decay with `--max-grad-norm` and
+  `--weight-decay`.
 - Character checkpoints include the vocabulary metadata needed for safe
   `--save-model` / `--load-model` round trips.
 - The same preset can run against local Tiny Shakespeare with an explicit seed:
