@@ -20,7 +20,6 @@ This note compares NanoGrad's tiny character transformer path with the local
   projection.
 - No dropout, optimizer scheduling, mixed precision, or GPU path.
 - Character-level vocabulary only.
-- The output projection is not weight-tied to token embeddings.
 
 ## Behavior Checks
 
@@ -31,6 +30,8 @@ This note compares NanoGrad's tiny character transformer path with the local
   context-only classifier path.
 - Causal attention supports one or more heads through `num_heads`.
 - Transformer feed-forward layers can use ReLU or GELU through `--activation`.
+- The language-model head can share token embedding weights with
+  `--tie-embeddings`.
 - The tiny transformer preset runs a capped character demo quickly:
   `python3 char_demo.py --preset tiny-transformer`.
 - Sampled generation supports temperature and optional top-k filtering.
