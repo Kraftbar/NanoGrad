@@ -30,9 +30,20 @@ class OptimizerTests(unittest.TestCase):
 
         self.assertEqual(parameter.data, [0.7, 0.6])
 
-    def test_tensor_sgd_rejects_nonpositive_max_grad_norm(self) -> None:
+    def test_tensor_sgd_applies_weight_decay(self) -> None:
+        parameter = Tensor.from_list([1.0], requires_grad=True)
+        parameter.grad = [0.0]
+
+        TensorSGD([parameter], lr=0.1, weight_decay=0.5).step()
+
+        self.assertAlmostEqual(parameter.data[0], 0.95)
+
+    def test_tensor_sgd_rejects_invalid_options(self) -> None:
         with self.assertRaises(ValueError):
             TensorSGD([], max_grad_norm=0.0)
+
+        with self.assertRaises(ValueError):
+            TensorSGD([], weight_decay=-0.1)
 
     def test_tensor_adam_updates_parameters(self) -> None:
         parameter = Tensor.from_list([1.0, -1.0], requires_grad=True)
@@ -55,6 +66,14 @@ class OptimizerTests(unittest.TestCase):
 
         self.assertEqual(parameter.grad, [0.0])
 
+    def test_tensor_adam_applies_decoupled_weight_decay(self) -> None:
+        parameter = Tensor.from_list([1.0], requires_grad=True)
+        parameter.grad = [0.0]
+
+        TensorAdam([parameter], lr=0.1, weight_decay=0.5).step()
+
+        self.assertAlmostEqual(parameter.data[0], 0.95)
+
     def test_tensor_adam_rejects_invalid_hyperparameters(self) -> None:
         with self.assertRaises(ValueError):
             TensorAdam([], lr=0.0)
@@ -67,6 +86,9 @@ class OptimizerTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             TensorAdam([], eps=0.0)
+
+        with self.assertRaises(ValueError):
+            TensorAdam([], weight_decay=-0.1)
 
         with self.assertRaises(ValueError):
             TensorAdam([], max_grad_norm=0.0)

@@ -287,6 +287,7 @@ def train_tensor_multiclass_dataset(
     shuffle: bool = True,
     seed: int | None = None,
     optimizer_name: str = "sgd",
+    weight_decay: float = 0.0,
     max_grad_norm: float | None = None,
     epoch_callback: Callable[[int, TrainingSummary], None] | None = None,
 ) -> TrainingSummary:
@@ -299,6 +300,7 @@ def train_tensor_multiclass_dataset(
         model.parameters(),
         name=optimizer_name,
         lr=lr,
+        weight_decay=weight_decay,
         max_grad_norm=max_grad_norm,
     )
     history = []
@@ -411,6 +413,7 @@ def train_tensor_sequence_multiclass_dataset(
     shuffle: bool = True,
     seed: int | None = None,
     optimizer_name: str = "sgd",
+    weight_decay: float = 0.0,
     max_grad_norm: float | None = None,
     epoch_callback: Callable[[int, TrainingSummary], None] | None = None,
 ) -> TrainingSummary:
@@ -423,6 +426,7 @@ def train_tensor_sequence_multiclass_dataset(
         model.parameters(),
         name=optimizer_name,
         lr=lr,
+        weight_decay=weight_decay,
         max_grad_norm=max_grad_norm,
     )
     history = []
@@ -611,12 +615,23 @@ def _tensor_optimizer(
     *,
     name: str,
     lr: float,
+    weight_decay: float,
     max_grad_norm: float | None,
 ):
     if name == "sgd":
-        return TensorSGD(parameters, lr=lr, max_grad_norm=max_grad_norm)
+        return TensorSGD(
+            parameters,
+            lr=lr,
+            weight_decay=weight_decay,
+            max_grad_norm=max_grad_norm,
+        )
     if name == "adam":
-        return TensorAdam(parameters, lr=lr, max_grad_norm=max_grad_norm)
+        return TensorAdam(
+            parameters,
+            lr=lr,
+            weight_decay=weight_decay,
+            max_grad_norm=max_grad_norm,
+        )
     raise ValueError(f"unknown tensor optimizer: {name}")
 
 

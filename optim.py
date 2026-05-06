@@ -32,12 +32,16 @@ class TensorSGD:
         parameters: list[Tensor],
         lr: float = 0.01,
         *,
+        weight_decay: float = 0.0,
         max_grad_norm: float | None = None,
     ) -> None:
+        if weight_decay < 0.0:
+            raise ValueError("weight_decay must be non-negative")
         if max_grad_norm is not None and max_grad_norm <= 0.0:
             raise ValueError("max_grad_norm must be positive")
         self.parameters = parameters
         self.lr = lr
+        self.weight_decay = weight_decay
         self.max_grad_norm = max_grad_norm
 
     def zero_grad(self) -> None:
@@ -50,6 +54,8 @@ class TensorSGD:
             if parameter.grad is None:
                 continue
             for i, grad in enumerate(parameter.grad):
+                if self.weight_decay:
+                    parameter.data[i] *= 1.0 - self.lr * self.weight_decay
                 parameter.data[i] -= self.lr * grad * grad_scale
 
 
@@ -64,6 +70,7 @@ class TensorAdam:
         beta1: float = 0.9,
         beta2: float = 0.999,
         eps: float = 1e-8,
+        weight_decay: float = 0.0,
         max_grad_norm: float | None = None,
     ) -> None:
         if lr <= 0.0:
@@ -74,6 +81,8 @@ class TensorAdam:
             raise ValueError("beta2 must be in [0, 1)")
         if eps <= 0.0:
             raise ValueError("eps must be positive")
+        if weight_decay < 0.0:
+            raise ValueError("weight_decay must be non-negative")
         if max_grad_norm is not None and max_grad_norm <= 0.0:
             raise ValueError("max_grad_norm must be positive")
 
@@ -82,6 +91,7 @@ class TensorAdam:
         self.beta1 = beta1
         self.beta2 = beta2
         self.eps = eps
+        self.weight_decay = weight_decay
         self.max_grad_norm = max_grad_norm
         self.step_count = 0
         self._m = [
@@ -110,6 +120,8 @@ class TensorAdam:
             first_moment = self._m[parameter_index]
             second_moment = self._v[parameter_index]
             for i, grad in enumerate(parameter.grad):
+                if self.weight_decay:
+                    parameter.data[i] *= 1.0 - self.lr * self.weight_decay
                 scaled_grad = grad * grad_scale
                 first_moment[i] = (
                     self.beta1 * first_moment[i]
