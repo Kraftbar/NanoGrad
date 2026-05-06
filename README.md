@@ -58,7 +58,7 @@ modules should prove that the core works on increasingly realistic checks.
 ### First Real Datasets
 
 - [x] Run and tune MNIST MLP on local data
-- [ ] Train a LeNet-style MNIST model
+- [x] Train a LeNet-style MNIST model
 - [ ] Try a small CIFAR CNN after the MNIST path is stable
 
 ### Later Branches
