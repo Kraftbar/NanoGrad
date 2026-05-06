@@ -7,6 +7,7 @@ from tensor import Tensor, avg_pool2d
 from tensor_nn import (
     TensorConv2D,
     TensorEmbedding,
+    TensorLayerNorm,
     TensorLinear,
     TensorMLP,
     binary_mlp,
@@ -270,6 +271,110 @@ class TensorNNTests(unittest.TestCase):
                 "vocab_size": 3,
                 "embedding_dim": 4,
                 "weight": layer.state_dict()["weight"],
+            })
+
+    def test_tensor_layer_norm_normalizes_last_dimension(self) -> None:
+        layer = TensorLayerNorm(
+            3,
+            eps=1e-5,
+            weight=Tensor.from_list([1, 1, 1], requires_grad=True),
+            bias=Tensor.from_list([0, 0, 0], requires_grad=True),
+        )
+
+        outputs = layer(Tensor.from_list([
+            [1, 2, 3],
+            [2, 2, 2],
+        ]))
+
+        scale = math.sqrt((2 / 3) + 1e-5)
+        expected = [
+            [-1 / scale, 0.0, 1 / scale],
+            [0.0, 0.0, 0.0],
+        ]
+        self.assertEqual(outputs.shape, (2, 3))
+        for actual, target in zip(outputs.data, Tensor.from_list(expected).data):
+            self.assertAlmostEqual(actual, target)
+
+    def test_tensor_layer_norm_accepts_sequence_batches(self) -> None:
+        layer = TensorLayerNorm(2, eps=1e-5)
+
+        outputs = layer(Tensor.from_list([
+            [
+                [1, 2],
+                [3, 5],
+            ],
+            [
+                [2, 4],
+                [6, 8],
+            ],
+        ]))
+
+        self.assertEqual(outputs.shape, (2, 2, 2))
+        self.assertEqual(layer.num_parameters(), 4)
+
+    def test_tensor_layer_norm_accumulates_gradients(self) -> None:
+        layer = TensorLayerNorm(3, eps=1e-5)
+        inputs = Tensor.from_list([
+            [1, 2, 3],
+            [2, 4, 6],
+        ], requires_grad=True)
+        weights = Tensor.from_list([
+            [1.0, 0.0, -1.0],
+            [0.5, 0.0, -0.5],
+        ])
+
+        loss = (layer(inputs) * weights).sum()
+        loss.backward()
+
+        self.assertIsNotNone(inputs.grad)
+        self.assertIsNotNone(layer.weight.grad)
+        self.assertIsNotNone(layer.bias.grad)
+        self.assertTrue(any(abs(value) > 0.0 for value in inputs.grad or []))
+        self.assertTrue(any(abs(value) > 0.0 for value in layer.weight.grad or []))
+        self.assertEqual(layer.bias.grad, [1.5, 0.0, -1.5])
+
+    def test_tensor_layer_norm_state_dict_round_trip(self) -> None:
+        source = TensorLayerNorm(
+            2,
+            eps=1e-4,
+            weight=Tensor.from_list([2, 3], requires_grad=True),
+            bias=Tensor.from_list([4, 5], requires_grad=True),
+        )
+        target = TensorLayerNorm(2, eps=1e-4)
+
+        target.load_state_dict(source.state_dict())
+
+        self.assertEqual(target.weight.tolist(), [2.0, 3.0])
+        self.assertEqual(target.bias.tolist(), [4.0, 5.0])
+
+    def test_tensor_layer_norm_errors(self) -> None:
+        with self.assertRaises(ValueError):
+            TensorLayerNorm(0)
+
+        with self.assertRaises(ValueError):
+            TensorLayerNorm(2, eps=0.0)
+
+        with self.assertRaises(ValueError):
+            TensorLayerNorm(2, weight=Tensor.zeros((2, 1), requires_grad=True))
+
+        layer = TensorLayerNorm(2)
+        with self.assertRaises(ValueError):
+            layer(Tensor.from_list([[1, 2, 3]]))
+
+        with self.assertRaises(ValueError):
+            layer.load_state_dict({
+                "normalized_shape": 3,
+                "eps": layer.eps,
+                "weight": layer.state_dict()["weight"],
+                "bias": layer.state_dict()["bias"],
+            })
+
+        with self.assertRaises(ValueError):
+            layer.load_state_dict({
+                "normalized_shape": 2,
+                "eps": 1e-4,
+                "weight": layer.state_dict()["weight"],
+                "bias": layer.state_dict()["bias"],
             })
 
     def test_tensor_conv2d_module_uses_parameters(self) -> None:

@@ -179,6 +179,69 @@ class TensorEmbedding(TensorModule):
         self.weight.data = _state_data(state, "weight", self.weight.shape)
 
 
+class TensorLayerNorm(TensorModule):
+    """Layer normalization over the last tensor dimension."""
+
+    def __init__(
+        self,
+        normalized_shape: int,
+        *,
+        eps: float = 1e-5,
+        weight: Tensor | None = None,
+        bias: Tensor | None = None,
+    ) -> None:
+        if normalized_shape <= 0:
+            raise ValueError("TensorLayerNorm normalized_shape must be positive")
+        if eps <= 0.0:
+            raise ValueError("TensorLayerNorm eps must be positive")
+
+        self.normalized_shape = normalized_shape
+        self.eps = eps
+        self.weight = weight or Tensor(
+            [1.0] * normalized_shape,
+            (normalized_shape,),
+            requires_grad=True,
+        )
+        self.bias = bias or Tensor.zeros((normalized_shape,), requires_grad=True)
+
+        _require_vector("weight", self.weight)
+        _require_vector("bias", self.bias)
+        if self.weight.shape != (normalized_shape,):
+            raise ValueError("weight shape must be (normalized_shape,)")
+        if self.bias.shape != (normalized_shape,):
+            raise ValueError("bias shape must be (normalized_shape,)")
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        if inputs.shape[-1] != self.normalized_shape:
+            raise ValueError("input last dimension must match normalized_shape")
+
+        mean = _restore_last_axis(inputs.mean(axis=-1), inputs.shape)
+        centered = inputs - mean
+        squared = centered * centered
+        variance = _restore_last_axis(squared.mean(axis=-1), inputs.shape)
+        std = ((variance + self.eps).log() * 0.5).exp()
+        return (centered / std) * self.weight + self.bias
+
+    def parameters(self) -> list[Tensor]:
+        return [self.weight, self.bias]
+
+    def state_dict(self) -> dict:
+        return {
+            "normalized_shape": self.normalized_shape,
+            "eps": self.eps,
+            "weight": _tensor_state(self.weight),
+            "bias": _tensor_state(self.bias),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        if state.get("normalized_shape") != self.normalized_shape:
+            raise ValueError("state normalized_shape does not match TensorLayerNorm")
+        if state.get("eps") != self.eps:
+            raise ValueError("state eps does not match TensorLayerNorm")
+        self.weight.data = _state_data(state, "weight", self.weight.shape)
+        self.bias.data = _state_data(state, "bias", self.bias.shape)
+
+
 class TensorMLP(TensorModule):
     """A compact multilayer perceptron for tensor experiments."""
 
@@ -417,6 +480,12 @@ def _one_hot_indices(indices: list[int], vocab_size: int) -> Tensor:
             raise ValueError("embedding index out of range")
         data[row * vocab_size + index] = 1.0
     return Tensor(data, (len(indices), vocab_size))
+
+
+def _restore_last_axis(tensor: Tensor, source_shape: tuple[int, ...]) -> Tensor:
+    if len(source_shape) == 1:
+        return tensor
+    return tensor.reshape((*source_shape[:-1], 1))
 
 
 def _is_sequence(value) -> bool:
