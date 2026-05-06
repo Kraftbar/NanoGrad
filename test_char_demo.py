@@ -63,6 +63,8 @@ class CharDemoTests(unittest.TestCase):
             "sample",
             "--temperature",
             "0.8",
+            "--top-k",
+            "3",
             "--sample-seed",
             "4",
         ])
@@ -83,6 +85,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.generate, 5)
         self.assertEqual(args.sample_mode, "sample")
         self.assertEqual(args.temperature, 0.8)
+        self.assertEqual(args.top_k, 3)
         self.assertEqual(args.sample_seed, 4)
 
     def test_tiny_transformer_preset_sets_smoke_defaults(self) -> None:
@@ -367,6 +370,16 @@ class CharDemoTests(unittest.TestCase):
             )
 
         with self.assertRaises(ValueError):
+            generate_text(
+                model,
+                vocab,
+                seed_text="a",
+                length=1,
+                sample_mode="sample",
+                top_k=0,
+            )
+
+        with self.assertRaises(ValueError):
             CharBigramModel(0)
 
         with self.assertRaises(ValueError):
@@ -439,12 +452,19 @@ class CharDemoTests(unittest.TestCase):
             _sample_from_logits([0.0, 4.0], rng=random.Random(0)),
             1,
         )
+        self.assertEqual(
+            _sample_from_logits([3.0, 2.0, 1.0], top_k=1, rng=random.Random(0)),
+            0,
+        )
 
         with self.assertRaises(ValueError):
             _sample_from_logits([])
 
         with self.assertRaises(ValueError):
             _sample_from_logits([1.0], temperature=0.0)
+
+        with self.assertRaises(ValueError):
+            _sample_from_logits([1.0], top_k=0)
 
     def test_load_text_prefers_text_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -554,6 +574,8 @@ class CharDemoTests(unittest.TestCase):
             "sample",
             "--temperature",
             "0.9",
+            "--top-k",
+            "1",
             "--sample-seed",
             "7",
         ])
@@ -568,6 +590,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("embedding dim: 4", text)
         self.assertIn("generation:    sample", text)
         self.assertIn("temperature:   0.9", text)
+        self.assertIn("top k:         1", text)
         self.assertIn("generated:", text)
 
     def test_run_trains_transformer_model_on_tiny_text(self) -> None:

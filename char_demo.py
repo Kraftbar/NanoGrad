@@ -68,6 +68,7 @@ def run(args: argparse.Namespace) -> None:
         input_mode=generation_input_mode(args.model),
         sample_mode=args.sample_mode,
         temperature=args.temperature,
+        top_k=args.top_k,
         rng=random.Random(
             args.sample_seed
             if args.sample_seed is not None
@@ -92,6 +93,8 @@ def run(args: argparse.Namespace) -> None:
     print(f"generation:    {args.sample_mode}")
     if args.sample_mode == "sample":
         print(f"temperature:   {args.temperature}")
+        if args.top_k is not None:
+            print(f"top k:         {args.top_k}")
     print(f"parameters:    {model.num_parameters()}")
     print(f"initial loss:  {summary.initial_loss:.6f}")
     print(f"final batch:   {summary.final_loss:.6f}")
@@ -114,6 +117,7 @@ def generate_text(
     input_mode: str = "bigram",
     sample_mode: str = "greedy",
     temperature: float = 1.0,
+    top_k: int | None = None,
     rng: random.Random | None = None,
 ) -> str:
     """Generate text from next-character logits."""
@@ -135,6 +139,7 @@ def generate_text(
             logits.data[: len(vocab)],
             sample_mode=sample_mode,
             temperature=temperature,
+            top_k=top_k,
             rng=rng,
         )
         text += vocab.decode([next_index])
@@ -146,12 +151,18 @@ def _select_next_index(
     *,
     sample_mode: str,
     temperature: float,
+    top_k: int | None,
     rng: random.Random | None,
 ) -> int:
     if sample_mode == "greedy":
         return _argmax(values)
     if sample_mode == "sample":
-        return _sample_from_logits(values, temperature=temperature, rng=rng)
+        return _sample_from_logits(
+            values,
+            temperature=temperature,
+            top_k=top_k,
+            rng=rng,
+        )
     raise ValueError(f"unknown sample mode: {sample_mode}")
 
 
@@ -171,27 +182,38 @@ def _sample_from_logits(
     values: list[float],
     *,
     temperature: float = 1.0,
+    top_k: int | None = None,
     rng: random.Random | None = None,
 ) -> int:
     if not values:
         raise ValueError("sample values must not be empty")
     if temperature <= 0.0:
         raise ValueError("temperature must be positive")
+    if top_k is not None and top_k <= 0:
+        raise ValueError("top_k must be positive")
 
     generator = rng or random.Random()
-    row_max = max(values)
+    indexed_values = list(enumerate(values))
+    if top_k is not None:
+        indexed_values = sorted(
+            indexed_values,
+            key=lambda item: item[1],
+            reverse=True,
+        )[:top_k]
+
+    row_max = max(value for _index, value in indexed_values)
     weights = [
         math.exp((value - row_max) / temperature)
-        for value in values
+        for _index, value in indexed_values
     ]
     total = sum(weights)
     threshold = generator.random() * total
     cumulative = 0.0
-    for index, weight in enumerate(weights):
+    for (index, _value), weight in zip(indexed_values, weights):
         cumulative += weight
         if threshold <= cumulative:
             return index
-    return len(values) - 1
+    return indexed_values[-1][0]
 
 
 def build_dataset(
@@ -308,6 +330,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--generate", type=int, default=DEFAULT_OPTIONS["generate"])
     parser.add_argument("--sample-mode", choices=("greedy", "sample"), default="greedy")
     parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--top-k", type=int)
     parser.add_argument("--sample-seed", type=int)
     explicit_options = _explicit_option_names(
         sys.argv[1:]

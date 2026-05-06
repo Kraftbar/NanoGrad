@@ -30,6 +30,7 @@ This note compares NanoGrad's tiny character transformer path with the local
   outputs.
 - The tiny transformer preset runs a capped character demo quickly:
   `python3 char_demo.py --preset tiny-transformer`.
+- Sampled generation supports temperature and optional top-k filtering.
 - The same preset can run against local Tiny Shakespeare with an explicit seed:
   ```bash
   python3 char_demo.py --preset tiny-transformer --text-file data/tinyshakespeare/input.txt --seed-text Firs
@@ -39,5 +40,5 @@ This note compares NanoGrad's tiny character transformer path with the local
 
 - Add per-position logits and loss for a closer GPT training objective.
 - Add multi-head attention once the single-head path is stable.
-- Add top-k sampling and better generation controls.
+- Compare top-k sampled output against the nanoGPT sampling path.
 - Compare training curves on the same capped Tiny Shakespeare slice.
