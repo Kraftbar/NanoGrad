@@ -80,6 +80,33 @@ def next_char_dataset(
     return TinyDataset(xs, ys), vocab
 
 
+def next_char_index_dataset(
+    text: str,
+    *,
+    vocab: CharVocab | None = None,
+    context_size: int = 1,
+) -> tuple[TinyDataset, CharVocab]:
+    """Build a next-character prediction dataset with integer id contexts."""
+
+    if context_size <= 0:
+        raise ValueError("context_size must be positive")
+    if len(text) <= context_size:
+        raise ValueError("text must be longer than context_size")
+
+    vocab = vocab or CharVocab.from_text(text)
+    encoded = vocab.encode(text)
+    xs = []
+    ys = []
+    for start in range(len(encoded) - context_size):
+        xs.append([
+            float(index)
+            for index in encoded[start : start + context_size]
+        ])
+        ys.append(float(encoded[start + context_size]))
+
+    return TinyDataset(xs, ys), vocab
+
+
 def _flatten_one_hot_context(context: list[int], vocab: CharVocab) -> list[float]:
     values = []
     for index in context:
