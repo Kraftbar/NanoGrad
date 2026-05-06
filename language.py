@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 from tensor import Tensor, matmul
-from tensor_nn import TensorEmbedding, TensorLinear, TensorModule
+from tensor_nn import TensorEmbedding, TensorLayerNorm, TensorLinear, TensorModule
 
 
 class TokenPositionEmbedding(TensorModule):
@@ -266,3 +266,98 @@ def _causal_attention_mask(batch_size: int, context_size: int) -> Tensor:
             )
             data.append(0.0 if can_attend else -1e9)
     return Tensor(data, (total_tokens, total_tokens))
+
+
+class TransformerBlock(TensorModule):
+    """Pre-norm transformer block for tiny causal language models."""
+
+    def __init__(
+        self,
+        embedding_dim: int,
+        context_size: int,
+        *,
+        hidden_dim: int | None = None,
+        seed: int = 0,
+    ) -> None:
+        if embedding_dim <= 0:
+            raise ValueError("embedding_dim must be positive")
+        if context_size <= 0:
+            raise ValueError("context_size must be positive")
+        if hidden_dim is None:
+            hidden_dim = embedding_dim * 4
+        if hidden_dim <= 0:
+            raise ValueError("hidden_dim must be positive")
+
+        self.embedding_dim = embedding_dim
+        self.context_size = context_size
+        self.hidden_dim = hidden_dim
+        self.norm1 = TensorLayerNorm(embedding_dim)
+        self.attention = CausalSelfAttention(
+            embedding_dim,
+            context_size,
+            seed=seed,
+        )
+        self.norm2 = TensorLayerNorm(embedding_dim)
+        self.feed_forward_in = TensorLinear(
+            embedding_dim,
+            hidden_dim,
+            seed=seed + 4,
+        )
+        self.feed_forward_out = TensorLinear(
+            hidden_dim,
+            embedding_dim,
+            seed=seed + 5,
+        )
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        if inputs.ndim != 3:
+            raise ValueError("TransformerBlock expects (batch, context, embedding)")
+
+        batch_size, context_size, embedding_dim = inputs.shape
+        if context_size != self.context_size:
+            raise ValueError("input context dimension must match context_size")
+        if embedding_dim != self.embedding_dim:
+            raise ValueError("input embedding dimension must match embedding_dim")
+
+        attended = self.attention(self.norm1(inputs))
+        residual = inputs + attended
+        normalized = self.norm2(residual)
+        flat = normalized.reshape((batch_size * context_size, embedding_dim))
+        hidden = self.feed_forward_in(flat).relu()
+        update = self.feed_forward_out(hidden)
+        update = update.reshape((batch_size, context_size, embedding_dim))
+        return residual + update
+
+    def parameters(self) -> list[Tensor]:
+        return [
+            *self.norm1.parameters(),
+            *self.attention.parameters(),
+            *self.norm2.parameters(),
+            *self.feed_forward_in.parameters(),
+            *self.feed_forward_out.parameters(),
+        ]
+
+    def state_dict(self) -> dict:
+        return {
+            "embedding_dim": self.embedding_dim,
+            "context_size": self.context_size,
+            "hidden_dim": self.hidden_dim,
+            "norm1": self.norm1.state_dict(),
+            "attention": self.attention.state_dict(),
+            "norm2": self.norm2.state_dict(),
+            "feed_forward_in": self.feed_forward_in.state_dict(),
+            "feed_forward_out": self.feed_forward_out.state_dict(),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        if state.get("embedding_dim") != self.embedding_dim:
+            raise ValueError("state embedding_dim does not match TransformerBlock")
+        if state.get("context_size") != self.context_size:
+            raise ValueError("state context_size does not match TransformerBlock")
+        if state.get("hidden_dim") != self.hidden_dim:
+            raise ValueError("state hidden_dim does not match TransformerBlock")
+        self.norm1.load_state_dict(state["norm1"])
+        self.attention.load_state_dict(state["attention"])
+        self.norm2.load_state_dict(state["norm2"])
+        self.feed_forward_in.load_state_dict(state["feed_forward_in"])
+        self.feed_forward_out.load_state_dict(state["feed_forward_out"])
