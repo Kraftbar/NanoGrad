@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from tensor import Tensor
+import math
+
+from tensor import Tensor, matmul
 from tensor_nn import TensorEmbedding, TensorLinear, TensorModule
 
 
@@ -174,3 +176,93 @@ class CharEmbeddingModel(TensorModule):
             raise ValueError("state embedding_dim does not match CharEmbeddingModel")
         self.embedding.load_state_dict(state["embedding"])
         self.projection.load_state_dict(state["projection"])
+
+
+class CausalSelfAttention(TensorModule):
+    """Single-head causal self-attention for tiny sequence models."""
+
+    def __init__(
+        self,
+        embedding_dim: int,
+        context_size: int,
+        *,
+        seed: int = 0,
+    ) -> None:
+        if embedding_dim <= 0:
+            raise ValueError("embedding_dim must be positive")
+        if context_size <= 0:
+            raise ValueError("context_size must be positive")
+
+        self.embedding_dim = embedding_dim
+        self.context_size = context_size
+        self.query = TensorLinear(embedding_dim, embedding_dim, seed=seed)
+        self.key = TensorLinear(embedding_dim, embedding_dim, seed=seed + 1)
+        self.value = TensorLinear(embedding_dim, embedding_dim, seed=seed + 2)
+        self.projection = TensorLinear(embedding_dim, embedding_dim, seed=seed + 3)
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        if inputs.ndim != 3:
+            raise ValueError("CausalSelfAttention expects (batch, context, embedding)")
+
+        batch_size, context_size, embedding_dim = inputs.shape
+        if context_size != self.context_size:
+            raise ValueError("input context dimension must match context_size")
+        if embedding_dim != self.embedding_dim:
+            raise ValueError("input embedding dimension must match embedding_dim")
+
+        flat_inputs = inputs.reshape((batch_size * context_size, embedding_dim))
+        query = self.query(flat_inputs)
+        key = self.key(flat_inputs)
+        value = self.value(flat_inputs)
+
+        scores = matmul(query, key.T) * (1 / math.sqrt(embedding_dim))
+        masked_scores = scores + _causal_attention_mask(batch_size, context_size)
+        weights = masked_scores.softmax(axis=1)
+        attended = matmul(weights, value)
+        output = self.projection(attended)
+        return output.reshape((batch_size, context_size, embedding_dim))
+
+    def parameters(self) -> list[Tensor]:
+        return [
+            *self.query.parameters(),
+            *self.key.parameters(),
+            *self.value.parameters(),
+            *self.projection.parameters(),
+        ]
+
+    def state_dict(self) -> dict:
+        return {
+            "embedding_dim": self.embedding_dim,
+            "context_size": self.context_size,
+            "query": self.query.state_dict(),
+            "key": self.key.state_dict(),
+            "value": self.value.state_dict(),
+            "projection": self.projection.state_dict(),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        if state.get("embedding_dim") != self.embedding_dim:
+            raise ValueError("state embedding_dim does not match CausalSelfAttention")
+        if state.get("context_size") != self.context_size:
+            raise ValueError("state context_size does not match CausalSelfAttention")
+        self.query.load_state_dict(state["query"])
+        self.key.load_state_dict(state["key"])
+        self.value.load_state_dict(state["value"])
+        self.projection.load_state_dict(state["projection"])
+
+
+def _causal_attention_mask(batch_size: int, context_size: int) -> Tensor:
+    total_tokens = batch_size * context_size
+    data = []
+    for query_index in range(total_tokens):
+        query_batch = query_index // context_size
+        query_position = query_index % context_size
+        for key_index in range(total_tokens):
+            key_batch = key_index // context_size
+            key_position = key_index % context_size
+            can_attend = (
+                query_batch == key_batch
+                and key_position <= query_position
+            )
+            data.append(0.0 if can_attend else -1e9)
+    return Tensor(data, (total_tokens, total_tokens))
