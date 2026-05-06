@@ -789,14 +789,17 @@ def _conv2d_image_value(
     col: int,
 ) -> float:
     if has_batch_axis:
-        return tensor[batch, channel, row, col]
+        _, channels, rows, cols = tensor.shape
+        return tensor.data[((batch * channels + channel) * rows + row) * cols + col]
     return _conv2d_value(tensor, channel, row, col)
 
 
 def _conv2d_value(tensor: Tensor, channel: int, row: int, col: int) -> float:
     if tensor.ndim == 2:
-        return tensor[row, col]
-    return tensor[channel, row, col]
+        _, cols = tensor.shape
+        return tensor.data[row * cols + col]
+    _, rows, cols = tensor.shape
+    return tensor.data[(channel * rows + row) * cols + col]
 
 
 def _conv2d_kernel_value(
@@ -808,12 +811,18 @@ def _conv2d_kernel_value(
     col: int,
 ) -> float:
     if kernel.ndim == 2:
-        return kernel[row, col]
+        _, cols = kernel.shape
+        return kernel.data[row * cols + col]
     if kernel.ndim == 3 and has_output_axis:
-        return kernel[output_channel, row, col]
+        _, rows, cols = kernel.shape
+        return kernel.data[(output_channel * rows + row) * cols + col]
     if kernel.ndim == 3:
-        return kernel[input_channel, row, col]
-    return kernel[output_channel, input_channel, row, col]
+        _, rows, cols = kernel.shape
+        return kernel.data[(input_channel * rows + row) * cols + col]
+    _, input_channels, rows, cols = kernel.shape
+    return kernel.data[
+        ((output_channel * input_channels + input_channel) * rows + row) * cols + col
+    ]
 
 
 def _conv2d_flat_index(
@@ -825,10 +834,13 @@ def _conv2d_flat_index(
     col: int,
 ) -> int:
     if has_batch_axis:
-        return _flat_index((batch, channel, row, col), shape)
+        _, channels, rows, cols = shape
+        return ((batch * channels + channel) * rows + row) * cols + col
     if len(shape) == 2:
-        return _flat_index((row, col), shape)
-    return _flat_index((channel, row, col), shape)
+        _, cols = shape
+        return row * cols + col
+    _, rows, cols = shape
+    return (channel * rows + row) * cols + col
 
 
 def _conv2d_kernel_flat_index(
@@ -840,12 +852,16 @@ def _conv2d_kernel_flat_index(
     col: int,
 ) -> int:
     if len(shape) == 2:
-        return _flat_index((row, col), shape)
+        _, cols = shape
+        return row * cols + col
     if len(shape) == 3 and has_output_axis:
-        return _flat_index((output_channel, row, col), shape)
+        _, rows, cols = shape
+        return (output_channel * rows + row) * cols + col
     if len(shape) == 3:
-        return _flat_index((input_channel, row, col), shape)
-    return _flat_index((output_channel, input_channel, row, col), shape)
+        _, rows, cols = shape
+        return (input_channel * rows + row) * cols + col
+    _, input_channels, rows, cols = shape
+    return ((output_channel * input_channels + input_channel) * rows + row) * cols + col
 
 
 def _conv2d_output_flat_index(
@@ -856,10 +872,13 @@ def _conv2d_output_flat_index(
     col: int,
 ) -> int:
     if len(shape) == 2:
-        return _flat_index((row, col), shape)
+        _, cols = shape
+        return row * cols + col
     if len(shape) == 4:
-        return _flat_index((batch, output_channel, row, col), shape)
-    return _flat_index((output_channel, row, col), shape)
+        _, channels, rows, cols = shape
+        return ((batch * channels + output_channel) * rows + row) * cols + col
+    _, rows, cols = shape
+    return (output_channel * rows + row) * cols + col
 
 
 def _pool2d_flat_index(
@@ -870,10 +889,13 @@ def _pool2d_flat_index(
     col: int,
 ) -> int:
     if len(shape) == 2:
-        return _flat_index((row, col), shape)
+        _, cols = shape
+        return row * cols + col
     if len(shape) == 4:
-        return _flat_index((batch, channel, row, col), shape)
-    return _flat_index((channel, row, col), shape)
+        _, channels, rows, cols = shape
+        return ((batch * channels + channel) * rows + row) * cols + col
+    _, rows, cols = shape
+    return (channel * rows + row) * cols + col
 
 
 def avg_pool2d(
