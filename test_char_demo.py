@@ -58,6 +58,8 @@ class CharDemoTests(unittest.TestCase):
             "2",
             "--lr",
             "0.1",
+            "--report-every",
+            "2",
             "--seed",
             "9",
             "--seed-text",
@@ -90,6 +92,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
+        self.assertEqual(args.report_every, 2)
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.seed_text, "a")
         self.assertEqual(args.generate, 5)
@@ -515,11 +518,13 @@ class CharDemoTests(unittest.TestCase):
             "--text",
             "abababab",
             "--epochs",
-            "20",
+            "2",
             "--batch-size",
             "2",
             "--lr",
             "0.3",
+            "--report-every",
+            "1",
             "--seed-text",
             "a",
             "--generate",
@@ -537,6 +542,8 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("text source:   built-in", text)
         self.assertIn("vocab size:    2", text)
         self.assertIn("samples:       7", text)
+        self.assertIn("epoch 1/2", text)
+        self.assertIn("epoch 2/2", text)
         self.assertIn("generated:", text)
 
     def test_run_saves_and_loads_model(self) -> None:

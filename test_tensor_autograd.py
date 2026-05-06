@@ -1133,6 +1133,52 @@ class TensorAutogradTests(unittest.TestCase):
             ],
         )
 
+    def test_tensor_sequence_multiclass_dataset_training_epoch_callback(self) -> None:
+        dataset = TinySequenceDataset(
+            xs=[
+                [[1.0, 0.0], [0.0, 1.0]],
+                [[0.0, 1.0], [1.0, 0.0]],
+            ],
+            ys=[
+                [0, 1],
+                [1, 0],
+            ],
+        )
+        model = _PositionWiseLinear(
+            inputs=2,
+            outputs=2,
+            weight=Tensor.zeros((2, 2), requires_grad=True),
+            bias=Tensor.zeros((2,), requires_grad=True),
+        )
+        reports = []
+
+        train_tensor_sequence_multiclass_dataset(
+            model,
+            dataset,
+            validation_dataset=dataset,
+            epochs=3,
+            batch_size=1,
+            lr=0.2,
+            shuffle=False,
+            epoch_callback=lambda epoch, summary: reports.append(
+                (
+                    epoch,
+                    summary.evaluation_loss,
+                    summary.accuracy,
+                    summary.examples_seen,
+                    summary.confusion_matrix,
+                    summary.validation_confusion_matrix,
+                )
+            ),
+        )
+
+        self.assertEqual([report[0] for report in reports], [1, 2, 3])
+        self.assertTrue(all(report[1] > 0.0 for report in reports))
+        self.assertTrue(all(report[2] is not None for report in reports))
+        self.assertEqual([report[3] for report in reports], [4, 8, 12])
+        self.assertTrue(all(report[4] is not None for report in reports))
+        self.assertTrue(all(report[5] is not None for report in reports))
+
     def test_tensor_sequence_multiclass_dataset_errors(self) -> None:
         dataset = TinySequenceDataset([[[1.0]]], [[0.0]])
         model = _PositionWiseLinear(inputs=1, outputs=2)

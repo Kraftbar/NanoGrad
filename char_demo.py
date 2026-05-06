@@ -37,6 +37,7 @@ DEFAULT_OPTIONS = {
     "epochs": 200,
     "batch_size": 8,
     "lr": 0.2,
+    "report_every": 0,
     "seed_text": "h",
     "generate": 32,
 }
@@ -83,6 +84,16 @@ def run(args: argparse.Namespace) -> None:
         lr=args.lr,
         shuffle=True,
         seed=args.seed,
+        epoch_callback=(
+            None
+            if args.report_every <= 0
+            else lambda epoch, summary: print_epoch_report(
+                epoch,
+                args.epochs,
+                summary,
+                report_every=args.report_every,
+            )
+        ),
     )
     generated = generate_text(
         model,
@@ -141,6 +152,29 @@ def run(args: argparse.Namespace) -> None:
             model_name=args.model,
         )
         print(f"saved model:   {args.save_model}")
+
+
+def print_epoch_report(
+    epoch: int,
+    epochs: int,
+    summary,
+    *,
+    report_every: int,
+) -> None:
+    if epoch % report_every != 0 and epoch != epochs:
+        return
+
+    print(
+        f"epoch {epoch}/{epochs} "
+        f"loss={_report_loss(summary):.6f} "
+        f"accuracy={summary.accuracy:.3f}"
+    )
+
+
+def _report_loss(summary) -> float:
+    if summary.evaluation_loss is None:
+        return summary.final_loss
+    return summary.evaluation_loss
 
 
 def save_checkpoint(
@@ -405,6 +439,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=DEFAULT_OPTIONS["epochs"])
     parser.add_argument("--batch-size", type=int, default=DEFAULT_OPTIONS["batch_size"])
     parser.add_argument("--lr", type=float, default=DEFAULT_OPTIONS["lr"])
+    parser.add_argument(
+        "--report-every",
+        type=int,
+        default=DEFAULT_OPTIONS["report_every"],
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seed-text", default=DEFAULT_OPTIONS["seed_text"])
     parser.add_argument("--generate", type=int, default=DEFAULT_OPTIONS["generate"])

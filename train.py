@@ -403,6 +403,7 @@ def train_tensor_sequence_multiclass_dataset(
     lr: float = 0.05,
     shuffle: bool = True,
     seed: int | None = None,
+    epoch_callback: Callable[[int, TrainingSummary], None] | None = None,
 ) -> TrainingSummary:
     """Train a sequence multiclass model on batched token targets."""
 
@@ -428,6 +429,47 @@ def train_tensor_sequence_multiclass_dataset(
             optimizer.step()
 
             history.append(loss[0])
+
+        if epoch_callback is not None:
+            epoch_elapsed = perf_counter() - start
+            train_eval = evaluate_tensor_sequence_multiclass_dataset(
+                model,
+                dataset,
+                batch_size=batch_size,
+            )
+            validation_eval = (
+                None
+                if validation_dataset is None
+                else evaluate_tensor_sequence_multiclass_dataset(
+                    model,
+                    validation_dataset,
+                    batch_size=batch_size,
+                )
+            )
+            epoch_summary = TrainingSummary(
+                history=history[:],
+                elapsed_seconds=epoch_elapsed,
+                accuracy=train_eval.accuracy,
+                validation_accuracy=(
+                    None
+                    if validation_eval is None
+                    else validation_eval.accuracy
+                ),
+                evaluation_loss=train_eval.loss,
+                validation_loss=(
+                    None
+                    if validation_eval is None
+                    else validation_eval.loss
+                ),
+                examples_seen=train_eval.examples_seen * (epoch + 1),
+                confusion_matrix=train_eval.confusion_matrix,
+                validation_confusion_matrix=(
+                    None
+                    if validation_eval is None
+                    else validation_eval.confusion_matrix
+                ),
+            )
+            epoch_callback(epoch + 1, epoch_summary)
 
     elapsed_seconds = perf_counter() - start
     train_eval = evaluate_tensor_sequence_multiclass_dataset(
