@@ -59,6 +59,7 @@ class CharDemoTests(unittest.TestCase):
             "2",
             "--lr",
             "0.1",
+            "--no-shuffle",
             "--optimizer",
             "adam",
             "--weight-decay",
@@ -103,6 +104,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
+        self.assertTrue(args.no_shuffle)
         self.assertEqual(args.optimizer, "adam")
         self.assertEqual(args.weight_decay, 0.01)
         self.assertEqual(args.report_every, 2)
@@ -567,6 +569,7 @@ class CharDemoTests(unittest.TestCase):
             "2",
             "--lr",
             "0.3",
+            "--no-shuffle",
             "--optimizer",
             "adam",
             "--weight-decay",
@@ -594,6 +597,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("samples:       7", text)
         self.assertIn("max grad norm: 1.0", text)
         self.assertIn("optimizer:     adam", text)
+        self.assertIn("shuffle:       False", text)
         self.assertIn("weight decay:  0.01", text)
         self.assertIn("epoch 1/2", text)
         self.assertIn("epoch 2/2", text)

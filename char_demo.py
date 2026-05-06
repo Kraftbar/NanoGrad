@@ -38,6 +38,7 @@ DEFAULT_OPTIONS = {
     "epochs": 200,
     "batch_size": 8,
     "lr": 0.2,
+    "no_shuffle": False,
     "optimizer": "sgd",
     "weight_decay": 0.0,
     "report_every": 0,
@@ -96,7 +97,7 @@ def run(args: argparse.Namespace) -> None:
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
-        shuffle=True,
+        shuffle=not args.no_shuffle,
         seed=args.seed,
         optimizer_name=args.optimizer,
         weight_decay=args.weight_decay,
@@ -145,6 +146,7 @@ def run(args: argparse.Namespace) -> None:
     if args.max_grad_norm is not None:
         print(f"max grad norm: {args.max_grad_norm}")
     print(f"optimizer:     {args.optimizer}")
+    print(f"shuffle:       {not args.no_shuffle}")
     if args.weight_decay:
         print(f"weight decay:  {args.weight_decay}")
     print(f"generation:    {args.sample_mode}")
@@ -546,6 +548,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=DEFAULT_OPTIONS["epochs"])
     parser.add_argument("--batch-size", type=int, default=DEFAULT_OPTIONS["batch_size"])
     parser.add_argument("--lr", type=float, default=DEFAULT_OPTIONS["lr"])
+    parser.add_argument("--no-shuffle", action="store_true")
     parser.add_argument(
         "--optimizer",
         choices=("sgd", "adam"),
