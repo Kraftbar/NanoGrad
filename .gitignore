@@ -27,3 +27,4 @@ data/mnist/*-idx*-ubyte
 data/mnist/*-idx*-ubyte.gz
 data/cifar10/*.bin
 data/cifar10/*.tar.gz
+data/cifar10/cifar-10-batches-bin/
