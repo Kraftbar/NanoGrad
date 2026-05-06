@@ -46,6 +46,8 @@ class CIFARCnnDemoTests(unittest.TestCase):
             "5",
             "--pool-size",
             "2",
+            "--pooling",
+            "max",
             "--seed",
             "9",
             "--report-every",
@@ -72,6 +74,7 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertEqual(args.second_filters, 3)
         self.assertEqual(args.kernel_size, 5)
         self.assertEqual(args.pool_size, 2)
+        self.assertEqual(args.pooling, "max")
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.report_every, 1)
         self.assertEqual(args.save_model, Path("model.json"))
@@ -89,6 +92,7 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertEqual(args.second_filters, 8)
         self.assertEqual(args.kernel_size, 3)
         self.assertEqual(args.pool_size, 2)
+        self.assertEqual(args.pooling, "avg")
 
     def test_explicit_values_override_preset(self) -> None:
         args = _apply_preset(parse_args([
@@ -108,6 +112,8 @@ class CIFARCnnDemoTests(unittest.TestCase):
             "5",
             "--pool-size",
             "1",
+            "--pooling",
+            "max",
         ]))
 
         self.assertEqual(args.normalize, "none")
@@ -117,6 +123,14 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertEqual(args.second_filters, 3)
         self.assertEqual(args.kernel_size, 5)
         self.assertEqual(args.pool_size, 1)
+        self.assertEqual(args.pooling, "max")
+
+    def test_maxpool_preset_supplies_pooling_mode(self) -> None:
+        args = _apply_preset(parse_args(["--preset", "two-conv-maxpool-normalized"]))
+
+        self.assertEqual(args.architecture, "two-conv")
+        self.assertEqual(args.normalize, "train")
+        self.assertEqual(args.pooling, "max")
 
     def test_build_model_uses_requested_architecture(self) -> None:
         simple_args = _apply_preset(parse_args([]))
@@ -129,6 +143,14 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertIsInstance(
             build_model(two_conv_args, image_shape=(3, 32, 32), classes=10),
             TwoConvCNN,
+        )
+        self.assertEqual(
+            build_model(
+                _apply_preset(parse_args(["--pooling", "max"])),
+                image_shape=(3, 32, 32),
+                classes=10,
+            ).pooling,
+            "max",
         )
 
     def test_find_cifar10_files(self) -> None:
@@ -251,6 +273,7 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertIn("classes:      10", text)
         self.assertIn("normalize:    train", text)
         self.assertIn("channel mean:", text)
+        self.assertIn("pooling:      avg", text)
         self.assertIn("parameters:", text)
         self.assertIn("train loss:", text)
         self.assertIn("val loss:", text)
@@ -283,6 +306,8 @@ class CIFARCnnDemoTests(unittest.TestCase):
                 "3",
                 "--pool-size",
                 "2",
+                "--pooling",
+                "max",
             ])
 
             output = io.StringIO()
@@ -291,6 +316,7 @@ class CIFARCnnDemoTests(unittest.TestCase):
 
         text = output.getvalue()
         self.assertIn("architecture: two-conv", text)
+        self.assertIn("pooling:      max", text)
         self.assertIn("filters 2:    1", text)
         self.assertIn("val loss:", text)
 

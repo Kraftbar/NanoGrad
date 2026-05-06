@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tensor import Tensor, avg_pool2d
+from tensor import Tensor, avg_pool2d, max_pool2d
 from tensor_nn import TensorConv2D, TensorLinear, TensorModule
 
 
@@ -37,6 +37,7 @@ class SimpleCNN(TensorModule):
         filters: int = 4,
         kernel_size: int = 3,
         pool_size: int = 2,
+        pooling: str = "avg",
         activation: str = "relu",
         seed: int = 0,
     ) -> None:
@@ -50,6 +51,8 @@ class SimpleCNN(TensorModule):
             raise ValueError("kernel_size must be positive")
         if pool_size <= 0:
             raise ValueError("pool_size must be positive")
+        if pooling not in ("avg", "max"):
+            raise ValueError("pooling must be 'avg' or 'max'")
         if activation not in ("relu", "tanh"):
             raise ValueError("activation must be 'relu' or 'tanh'")
 
@@ -66,6 +69,7 @@ class SimpleCNN(TensorModule):
         classifier_inputs = filters * pooled_rows * pooled_cols
 
         self.pool_size = pool_size
+        self.pooling = pooling
         self.activation = activation
         self.conv = TensorConv2D(
             (filters, channels, kernel_size, kernel_size),
@@ -79,11 +83,7 @@ class SimpleCNN(TensorModule):
 
     def __call__(self, inputs: Tensor) -> Tensor:
         features = _activate(self.conv(inputs), self.activation)
-        pooled = avg_pool2d(
-            features,
-            (self.pool_size, self.pool_size),
-            stride=(self.pool_size, self.pool_size),
-        )
+        pooled = _pool(features, self.pool_size, pooling=self.pooling)
         return self.classifier(pooled.flatten(start_axis=1))
 
     def parameters(self) -> list[Tensor]:
@@ -118,6 +118,7 @@ class TwoConvCNN(TensorModule):
         second_filters: int = 16,
         kernel_size: int = 5,
         pool_size: int = 2,
+        pooling: str = "avg",
         activation: str = "tanh",
         seed: int = 0,
     ) -> None:
@@ -131,6 +132,8 @@ class TwoConvCNN(TensorModule):
             raise ValueError("kernel_size must be positive")
         if pool_size <= 0:
             raise ValueError("pool_size must be positive")
+        if pooling not in ("avg", "max"):
+            raise ValueError("pooling must be 'avg' or 'max'")
         if activation not in ("relu", "tanh"):
             raise ValueError("activation must be 'relu' or 'tanh'")
 
@@ -142,6 +145,7 @@ class TwoConvCNN(TensorModule):
         classifier_inputs = second_filters * pool2_rows * pool2_cols
 
         self.pool_size = pool_size
+        self.pooling = pooling
         self.activation = activation
         self.conv1 = TensorConv2D(
             (filters, channels, kernel_size, kernel_size),
@@ -159,9 +163,9 @@ class TwoConvCNN(TensorModule):
 
     def __call__(self, inputs: Tensor) -> Tensor:
         features = _activate(self.conv1(inputs), self.activation)
-        pooled = _pool(features, self.pool_size)
+        pooled = _pool(features, self.pool_size, pooling=self.pooling)
         features = _activate(self.conv2(pooled), self.activation)
-        pooled = _pool(features, self.pool_size)
+        pooled = _pool(features, self.pool_size, pooling=self.pooling)
         return self.classifier(pooled.flatten(start_axis=1))
 
     def parameters(self) -> list[Tensor]:
@@ -201,12 +205,20 @@ def _pool_shape(rows: int, cols: int, pool_size: int) -> tuple[int, int]:
     return ((rows - pool_size) // pool_size) + 1, ((cols - pool_size) // pool_size) + 1
 
 
-def _pool(tensor: Tensor, pool_size: int) -> Tensor:
-    return avg_pool2d(
-        tensor,
-        (pool_size, pool_size),
-        stride=(pool_size, pool_size),
-    )
+def _pool(tensor: Tensor, pool_size: int, *, pooling: str = "avg") -> Tensor:
+    if pooling == "avg":
+        return avg_pool2d(
+            tensor,
+            (pool_size, pool_size),
+            stride=(pool_size, pool_size),
+        )
+    if pooling == "max":
+        return max_pool2d(
+            tensor,
+            (pool_size, pool_size),
+            stride=(pool_size, pool_size),
+        )
+    raise ValueError(f"unknown pooling: {pooling}")
 
 
 def _activate(tensor: Tensor, activation: str) -> Tensor:

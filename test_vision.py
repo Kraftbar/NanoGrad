@@ -60,6 +60,22 @@ class VisionModelTests(unittest.TestCase):
 
         self.assertEqual(logits.shape, (1, 2))
 
+    def test_simple_cnn_accepts_max_pooling(self) -> None:
+        model = SimpleCNN(
+            image_shape=(1, 4, 4),
+            classes=2,
+            filters=2,
+            kernel_size=2,
+            pool_size=2,
+            pooling="max",
+            seed=0,
+        )
+
+        logits = model(Tensor.zeros((1, 1, 4, 4)))
+
+        self.assertEqual(model.pooling, "max")
+        self.assertEqual(logits.shape, (1, 2))
+
     def test_two_conv_cnn_forward_shape(self) -> None:
         model = TwoConvCNN(
             image_shape=(1, 28, 28),
@@ -77,6 +93,23 @@ class VisionModelTests(unittest.TestCase):
         self.assertEqual(logits.shape, (2, 10))
         self.assertEqual(len(model.parameters()), 6)
         self.assertEqual(model.num_parameters(), 5142)
+
+    def test_two_conv_cnn_accepts_max_pooling(self) -> None:
+        model = TwoConvCNN(
+            image_shape=(1, 28, 28),
+            classes=10,
+            filters=6,
+            second_filters=16,
+            kernel_size=5,
+            pool_size=2,
+            pooling="max",
+            seed=0,
+        )
+
+        logits = model(Tensor.zeros((1, 1, 28, 28)))
+
+        self.assertEqual(model.pooling, "max")
+        self.assertEqual(logits.shape, (1, 10))
 
     def test_simple_cnn_shape_errors(self) -> None:
         with self.assertRaises(ValueError):
@@ -100,6 +133,13 @@ class VisionModelTests(unittest.TestCase):
                 classes=2,
                 kernel_size=2,
                 activation="sigmoid",
+            )
+        with self.assertRaises(ValueError):
+            SimpleCNN(
+                image_shape=(1, 2, 2),
+                classes=2,
+                kernel_size=2,
+                pooling="median",
             )
 
     def test_two_conv_cnn_shape_errors(self) -> None:

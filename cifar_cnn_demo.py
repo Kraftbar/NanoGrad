@@ -35,6 +35,7 @@ CIFAR_PRESETS = {
         "second_filters": 8,
         "kernel_size": 3,
         "pool_size": 2,
+        "pooling": "avg",
     },
     "tiny-normalized": {
         "normalize": "train",
@@ -44,6 +45,7 @@ CIFAR_PRESETS = {
         "second_filters": 8,
         "kernel_size": 3,
         "pool_size": 2,
+        "pooling": "avg",
     },
     "two-conv-normalized": {
         "normalize": "train",
@@ -53,6 +55,17 @@ CIFAR_PRESETS = {
         "second_filters": 8,
         "kernel_size": 3,
         "pool_size": 2,
+        "pooling": "avg",
+    },
+    "two-conv-maxpool-normalized": {
+        "normalize": "train",
+        "architecture": "two-conv",
+        "activation": "relu",
+        "filters": 4,
+        "second_filters": 8,
+        "kernel_size": 3,
+        "pool_size": 2,
+        "pooling": "max",
     },
 }
 
@@ -128,6 +141,7 @@ def run(args: argparse.Namespace) -> None:
         print_channel_stats(normalization_stats)
     print(f"architecture: {args.architecture}")
     print(f"activation:   {args.activation}")
+    print(f"pooling:      {args.pooling}")
     print(f"filters:      {args.filters}")
     if args.architecture == "two-conv":
         print(f"filters 2:    {args.second_filters}")
@@ -211,6 +225,7 @@ def build_model(
             filters=args.filters,
             kernel_size=args.kernel_size,
             pool_size=args.pool_size,
+            pooling=args.pooling,
             activation=args.activation,
             seed=args.seed,
         )
@@ -222,6 +237,7 @@ def build_model(
             second_filters=args.second_filters,
             kernel_size=args.kernel_size,
             pool_size=args.pool_size,
+            pooling=args.pooling,
             activation=args.activation,
             seed=args.seed,
         )
@@ -244,6 +260,8 @@ def _apply_preset(args: argparse.Namespace) -> argparse.Namespace:
         args.kernel_size = preset["kernel_size"]
     if args.pool_size is None:
         args.pool_size = preset["pool_size"]
+    if args.pooling is None:
+        args.pooling = preset["pooling"]
     return args
 
 
@@ -308,6 +326,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--second-filters", type=int)
     parser.add_argument("--kernel-size", type=int)
     parser.add_argument("--pool-size", type=int)
+    parser.add_argument("--pooling", choices=("avg", "max"))
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--report-every", type=int, default=0)
     parser.add_argument("--save-model", type=Path)
