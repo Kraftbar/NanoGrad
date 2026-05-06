@@ -8,7 +8,7 @@ from pathlib import Path
 from datasets import load_cifar10_batches
 from mnist_demo import print_confusion_matrix, print_epoch_report
 from train import train_tensor_multiclass_dataset
-from vision import SimpleCNN
+from vision import SimpleCNN, TwoConvCNN
 
 
 DATA_DIR = Path("data/cifar10")
@@ -43,14 +43,10 @@ def run(args: argparse.Namespace) -> None:
         )
         return
 
-    model = SimpleCNN(
+    model = build_model(
+        args,
         image_shape=dataset.feature_shape,
         classes=CIFAR10_CLASSES,
-        filters=args.filters,
-        kernel_size=args.kernel_size,
-        pool_size=args.pool_size,
-        activation=args.activation,
-        seed=args.seed,
     )
     if args.load_model is not None:
         model.load(args.load_model)
@@ -81,9 +77,11 @@ def run(args: argparse.Namespace) -> None:
     print(f"samples:      {len(dataset)}")
     print(f"input shape:  {dataset.feature_shape}")
     print(f"classes:      {CIFAR10_CLASSES}")
-    print(f"architecture: simple")
+    print(f"architecture: {args.architecture}")
     print(f"activation:   {args.activation}")
     print(f"filters:      {args.filters}")
+    if args.architecture == "two-conv":
+        print(f"filters 2:    {args.second_filters}")
     print(f"parameters:   {model.num_parameters()}")
     print(f"initial loss: {summary.initial_loss:.6f}")
     print(f"final batch:  {summary.final_loss:.6f}")
@@ -138,6 +136,36 @@ def print_dataset_summary(name: str, dataset) -> None:
     print(f"{name} labels:  {labels}")
 
 
+def build_model(
+    args: argparse.Namespace,
+    *,
+    image_shape: tuple[int, ...],
+    classes: int,
+):
+    if args.architecture == "simple":
+        return SimpleCNN(
+            image_shape=image_shape,
+            classes=classes,
+            filters=args.filters,
+            kernel_size=args.kernel_size,
+            pool_size=args.pool_size,
+            activation=args.activation,
+            seed=args.seed,
+        )
+    if args.architecture == "two-conv":
+        return TwoConvCNN(
+            image_shape=image_shape,
+            classes=classes,
+            filters=args.filters,
+            second_filters=args.second_filters,
+            kernel_size=args.kernel_size,
+            pool_size=args.pool_size,
+            activation=args.activation,
+            seed=args.seed,
+        )
+    raise ValueError(f"unknown architecture: {args.architecture}")
+
+
 def find_cifar10_files(data_dir: Path, *, required: bool = True) -> list[Path]:
     paths = []
     for candidate_dir in _cifar10_data_dirs(data_dir):
@@ -184,8 +212,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=0.05)
+    parser.add_argument(
+        "--architecture",
+        choices=("simple", "two-conv"),
+        default="simple",
+    )
     parser.add_argument("--activation", choices=("relu", "tanh"), default="relu")
     parser.add_argument("--filters", type=int, default=4)
+    parser.add_argument("--second-filters", type=int, default=8)
     parser.add_argument("--kernel-size", type=int, default=3)
     parser.add_argument("--pool-size", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)

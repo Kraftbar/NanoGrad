@@ -5,11 +5,13 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from cifar_cnn_demo import (
+    build_model,
     find_cifar10_files,
     find_cifar10_test_file,
     parse_args,
     run,
 )
+from vision import SimpleCNN, TwoConvCNN
 
 
 class CIFARCnnDemoTests(unittest.TestCase):
@@ -27,10 +29,14 @@ class CIFARCnnDemoTests(unittest.TestCase):
             "1",
             "--lr",
             "0.1",
+            "--architecture",
+            "two-conv",
             "--activation",
             "tanh",
             "--filters",
             "2",
+            "--second-filters",
+            "3",
             "--kernel-size",
             "5",
             "--pool-size",
@@ -53,8 +59,10 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertEqual(args.epochs, 2)
         self.assertEqual(args.batch_size, 1)
         self.assertEqual(args.lr, 0.1)
+        self.assertEqual(args.architecture, "two-conv")
         self.assertEqual(args.activation, "tanh")
         self.assertEqual(args.filters, 2)
+        self.assertEqual(args.second_filters, 3)
         self.assertEqual(args.kernel_size, 5)
         self.assertEqual(args.pool_size, 2)
         self.assertEqual(args.seed, 9)
@@ -63,6 +71,19 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertEqual(args.load_model, Path("model-in.json"))
         self.assertTrue(args.show_confusion)
         self.assertTrue(args.check_data)
+
+    def test_build_model_uses_requested_architecture(self) -> None:
+        simple_args = parse_args([])
+        two_conv_args = parse_args(["--architecture", "two-conv"])
+
+        self.assertIsInstance(
+            build_model(simple_args, image_shape=(3, 32, 32), classes=10),
+            SimpleCNN,
+        )
+        self.assertIsInstance(
+            build_model(two_conv_args, image_shape=(3, 32, 32), classes=10),
+            TwoConvCNN,
+        )
 
     def test_find_cifar10_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -161,6 +182,43 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertIn("val loss:", text)
         self.assertIn("train confusion:", text)
         self.assertIn("val confusion:", text)
+
+    def test_run_trains_with_two_conv_architecture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            _write_cifar10_batch(data_dir / "data_batch_1.bin", labels=[0])
+            _write_cifar10_batch(data_dir / "test_batch.bin", labels=[0])
+            args = parse_args([
+                "--data-dir",
+                str(data_dir),
+                "--limit",
+                "1",
+                "--validation-limit",
+                "1",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "1",
+                "--architecture",
+                "two-conv",
+                "--filters",
+                "1",
+                "--second-filters",
+                "1",
+                "--kernel-size",
+                "3",
+                "--pool-size",
+                "2",
+            ])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                run(args)
+
+        text = output.getvalue()
+        self.assertIn("architecture: two-conv", text)
+        self.assertIn("filters 2:    1", text)
+        self.assertIn("val loss:", text)
 
 
 def _write_cifar10_batch(path: Path, *, labels: list[int]) -> None:
