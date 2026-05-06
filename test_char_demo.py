@@ -6,7 +6,10 @@ from pathlib import Path
 
 from char_demo import (
     CharBigramModel,
+    CharEmbeddingModel,
     _argmax,
+    build_dataset,
+    build_model,
     generate_text,
     load_text,
     parse_args,
@@ -20,12 +23,18 @@ from text import CharVocab
 class CharDemoTests(unittest.TestCase):
     def test_parse_args(self) -> None:
         args = parse_args([
+            "--model",
+            "embedding",
             "--text",
             "abba",
             "--text-file",
             "tiny.txt",
             "--max-chars",
             "3",
+            "--context-size",
+            "2",
+            "--embedding-dim",
+            "4",
             "--epochs",
             "3",
             "--batch-size",
@@ -40,9 +49,12 @@ class CharDemoTests(unittest.TestCase):
             "5",
         ])
 
+        self.assertEqual(args.model, "embedding")
         self.assertEqual(args.text, "abba")
         self.assertEqual(args.text_file, Path("tiny.txt"))
         self.assertEqual(args.max_chars, 3)
+        self.assertEqual(args.context_size, 2)
+        self.assertEqual(args.embedding_dim, 4)
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
@@ -51,15 +63,48 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.generate, 5)
 
     def test_char_bigram_model_forward_shape(self) -> None:
-        model = CharBigramModel(3, seed=0)
+        model = CharBigramModel(3, context_size=2, seed=0)
 
         logits = model(Tensor.from_list([
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
         ]))
 
         self.assertEqual(logits.shape, (2, 3))
-        self.assertEqual(model.num_parameters(), 12)
+        self.assertEqual(model.num_parameters(), 21)
+
+    def test_char_embedding_model_forward_shape(self) -> None:
+        model = CharEmbeddingModel(
+            3,
+            context_size=2,
+            embedding_dim=4,
+            seed=0,
+        )
+
+        logits = model(Tensor.from_list([
+            [0, 1],
+            [1, 2],
+        ]))
+
+        self.assertEqual(logits.shape, (2, 3))
+        self.assertEqual(model.num_parameters(), 39)
+
+    def test_build_dataset_and_model_use_requested_type(self) -> None:
+        bigram_args = parse_args(["--model", "bigram", "--context-size", "2"])
+        embedding_args = parse_args(["--model", "embedding", "--context-size", "2"])
+
+        bigram_dataset, bigram_vocab = build_dataset("abca", bigram_args)
+        embedding_dataset, embedding_vocab = build_dataset("abca", embedding_args)
+
+        self.assertEqual(len(bigram_vocab), 3)
+        self.assertEqual(len(embedding_vocab), 3)
+        self.assertEqual(bigram_dataset.feature_shape, (6,))
+        self.assertEqual(embedding_dataset.feature_shape, (2,))
+        self.assertIsInstance(build_model(bigram_args, vocab_size=3), CharBigramModel)
+        self.assertIsInstance(
+            build_model(embedding_args, vocab_size=3),
+            CharEmbeddingModel,
+        )
 
     def test_generate_text_uses_argmax_predictions(self) -> None:
         vocab = CharVocab.from_text("ab")
@@ -73,6 +118,39 @@ class CharDemoTests(unittest.TestCase):
         model.projection.bias.data = [0.0, 0.0]
 
         self.assertEqual(generate_text(model, vocab, seed_text="a", length=3), "abab")
+
+    def test_generate_text_supports_embedding_model(self) -> None:
+        vocab = CharVocab.from_text("ab")
+        model = CharEmbeddingModel(
+            len(vocab),
+            context_size=1,
+            embedding_dim=2,
+            seed=0,
+        )
+        model.embedding.weight.data = [
+            1.0,
+            0.0,
+            0.0,
+            1.0,
+        ]
+        model.projection.weight.data = [
+            0.0,
+            1.0,
+            2.0,
+            0.0,
+        ]
+        model.projection.bias.data = [0.0, 0.0]
+
+        self.assertEqual(
+            generate_text(
+                model,
+                vocab,
+                seed_text="a",
+                length=3,
+                input_mode="embedding",
+            ),
+            "abab",
+        )
 
     def test_generate_text_errors(self) -> None:
         vocab = CharVocab.from_text("ab")
@@ -88,7 +166,31 @@ class CharDemoTests(unittest.TestCase):
             generate_text(model, vocab, seed_text="z", length=1)
 
         with self.assertRaises(ValueError):
+            generate_text(model, vocab, seed_text="a", length=1, context_size=2)
+
+        with self.assertRaises(ValueError):
+            generate_text(
+                model,
+                vocab,
+                seed_text="a",
+                length=1,
+                input_mode="unknown",
+            )
+
+        with self.assertRaises(ValueError):
             CharBigramModel(0)
+
+        with self.assertRaises(ValueError):
+            CharBigramModel(2, context_size=0)
+
+        with self.assertRaises(ValueError):
+            CharEmbeddingModel(0)
+
+        with self.assertRaises(ValueError):
+            CharEmbeddingModel(2, context_size=0)
+
+        with self.assertRaises(ValueError):
+            CharEmbeddingModel(2, embedding_dim=0)
 
     def test_state_dict_round_trip(self) -> None:
         model = CharBigramModel(2, seed=0)
@@ -164,7 +266,8 @@ class CharDemoTests(unittest.TestCase):
             run(args)
 
         text = output.getvalue()
-        self.assertIn("Character bigram demo", text)
+        self.assertIn("Character language demo", text)
+        self.assertIn("model:         bigram", text)
         self.assertIn("text source:   built-in", text)
         self.assertIn("vocab size:    2", text)
         self.assertIn("samples:       7", text)
@@ -196,6 +299,38 @@ class CharDemoTests(unittest.TestCase):
         text = output.getvalue()
         self.assertIn(f"text source:   {path}", text)
         self.assertIn("vocab size:    2", text)
+
+    def test_run_trains_embedding_model_on_tiny_text(self) -> None:
+        args = parse_args([
+            "--model",
+            "embedding",
+            "--text",
+            "abababab",
+            "--context-size",
+            "2",
+            "--embedding-dim",
+            "4",
+            "--epochs",
+            "20",
+            "--batch-size",
+            "2",
+            "--lr",
+            "0.3",
+            "--seed-text",
+            "ab",
+            "--generate",
+            "4",
+        ])
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            run(args)
+
+        text = output.getvalue()
+        self.assertIn("model:         embedding", text)
+        self.assertIn("context size:  2", text)
+        self.assertIn("embedding dim: 4", text)
+        self.assertIn("generated:", text)
 
 
 if __name__ == "__main__":
