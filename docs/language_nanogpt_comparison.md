@@ -18,7 +18,6 @@ This note compares NanoGrad's tiny character transformer path with the local
 
 - Separate per-head Q/K/V projections instead of nanoGPT's fused multi-head
   projection.
-- ReLU feed-forward activation instead of GELU.
 - No dropout, optimizer scheduling, mixed precision, or GPU path.
 - Character-level vocabulary only.
 - The output projection is not weight-tied to token embeddings.
@@ -31,6 +30,7 @@ This note compares NanoGrad's tiny character transformer path with the local
   matching nanoGPT's next-token objective more closely than the earlier
   context-only classifier path.
 - Causal attention supports one or more heads through `num_heads`.
+- Transformer feed-forward layers can use ReLU or GELU through `--activation`.
 - The tiny transformer preset runs a capped character demo quickly:
   `python3 char_demo.py --preset tiny-transformer`.
 - Sampled generation supports temperature and optional top-k filtering.
