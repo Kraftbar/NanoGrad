@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import math
+import random
 from pathlib import Path
 
 from tensor import Tensor
@@ -135,6 +137,13 @@ def run(args: argparse.Namespace) -> None:
         length=args.generate,
         context_size=args.context_size,
         input_mode=args.model,
+        sample_mode=args.sample_mode,
+        temperature=args.temperature,
+        rng=random.Random(
+            args.sample_seed
+            if args.sample_seed is not None
+            else args.seed
+        ),
     )
 
     print("Character language demo")
@@ -146,6 +155,9 @@ def run(args: argparse.Namespace) -> None:
     print(f"context size:  {args.context_size}")
     if args.model == "embedding":
         print(f"embedding dim: {args.embedding_dim}")
+    print(f"generation:    {args.sample_mode}")
+    if args.sample_mode == "sample":
+        print(f"temperature:   {args.temperature}")
     print(f"parameters:    {model.num_parameters()}")
     print(f"initial loss:  {summary.initial_loss:.6f}")
     print(f"final batch:   {summary.final_loss:.6f}")
@@ -166,8 +178,11 @@ def generate_text(
     length: int,
     context_size: int = 1,
     input_mode: str = "bigram",
+    sample_mode: str = "greedy",
+    temperature: float = 1.0,
+    rng: random.Random | None = None,
 ) -> str:
-    """Generate text by repeatedly taking the highest-logit next character."""
+    """Generate text from next-character logits."""
 
     if not seed_text:
         raise ValueError("seed_text must not be empty")
@@ -182,9 +197,28 @@ def generate_text(
     for _ in range(length):
         context = vocab.encode(text[-context_size:])
         logits = model(_generation_inputs(context, vocab, input_mode=input_mode))
-        next_index = _argmax(logits.data[: len(vocab)])
+        next_index = _select_next_index(
+            logits.data[: len(vocab)],
+            sample_mode=sample_mode,
+            temperature=temperature,
+            rng=rng,
+        )
         text += vocab.decode([next_index])
     return text
+
+
+def _select_next_index(
+    values: list[float],
+    *,
+    sample_mode: str,
+    temperature: float,
+    rng: random.Random | None,
+) -> int:
+    if sample_mode == "greedy":
+        return _argmax(values)
+    if sample_mode == "sample":
+        return _sample_from_logits(values, temperature=temperature, rng=rng)
+    raise ValueError(f"unknown sample mode: {sample_mode}")
 
 
 def _argmax(values: list[float]) -> int:
@@ -197,6 +231,33 @@ def _argmax(values: list[float]) -> int:
             best_index = index
             best_value = value
     return best_index
+
+
+def _sample_from_logits(
+    values: list[float],
+    *,
+    temperature: float = 1.0,
+    rng: random.Random | None = None,
+) -> int:
+    if not values:
+        raise ValueError("sample values must not be empty")
+    if temperature <= 0.0:
+        raise ValueError("temperature must be positive")
+
+    generator = rng or random.Random()
+    row_max = max(values)
+    weights = [
+        math.exp((value - row_max) / temperature)
+        for value in values
+    ]
+    total = sum(weights)
+    threshold = generator.random() * total
+    cumulative = 0.0
+    for index, weight in enumerate(weights):
+        cumulative += weight
+        if threshold <= cumulative:
+            return index
+    return len(values) - 1
 
 
 def build_dataset(
@@ -279,6 +340,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seed-text", default="h")
     parser.add_argument("--generate", type=int, default=32)
+    parser.add_argument("--sample-mode", choices=("greedy", "sample"), default="greedy")
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--sample-seed", type=int)
     return parser.parse_args(argv)
 
 

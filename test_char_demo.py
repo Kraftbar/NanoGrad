@@ -1,4 +1,5 @@
 import io
+import random
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -8,6 +9,7 @@ from char_demo import (
     CharBigramModel,
     CharEmbeddingModel,
     _argmax,
+    _sample_from_logits,
     build_dataset,
     build_model,
     generate_text,
@@ -47,6 +49,12 @@ class CharDemoTests(unittest.TestCase):
             "a",
             "--generate",
             "5",
+            "--sample-mode",
+            "sample",
+            "--temperature",
+            "0.8",
+            "--sample-seed",
+            "4",
         ])
 
         self.assertEqual(args.model, "embedding")
@@ -61,6 +69,9 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.seed_text, "a")
         self.assertEqual(args.generate, 5)
+        self.assertEqual(args.sample_mode, "sample")
+        self.assertEqual(args.temperature, 0.8)
+        self.assertEqual(args.sample_seed, 4)
 
     def test_char_bigram_model_forward_shape(self) -> None:
         model = CharBigramModel(3, context_size=2, seed=0)
@@ -152,6 +163,24 @@ class CharDemoTests(unittest.TestCase):
             "abab",
         )
 
+    def test_generate_text_can_sample_with_seed(self) -> None:
+        vocab = CharVocab.from_text("ab")
+        model = CharBigramModel(len(vocab), seed=0)
+        model.projection.weight.data = [0.0, 0.0, 0.0, 0.0]
+        model.projection.bias.data = [0.0, 0.0]
+
+        self.assertEqual(
+            generate_text(
+                model,
+                vocab,
+                seed_text="a",
+                length=3,
+                sample_mode="sample",
+                rng=random.Random(0),
+            ),
+            "abba",
+        )
+
     def test_generate_text_errors(self) -> None:
         vocab = CharVocab.from_text("ab")
         model = CharBigramModel(len(vocab), seed=0)
@@ -175,6 +204,25 @@ class CharDemoTests(unittest.TestCase):
                 seed_text="a",
                 length=1,
                 input_mode="unknown",
+            )
+
+        with self.assertRaises(ValueError):
+            generate_text(
+                model,
+                vocab,
+                seed_text="a",
+                length=1,
+                sample_mode="unknown",
+            )
+
+        with self.assertRaises(ValueError):
+            generate_text(
+                model,
+                vocab,
+                seed_text="a",
+                length=1,
+                sample_mode="sample",
+                temperature=0.0,
             )
 
         with self.assertRaises(ValueError):
@@ -216,6 +264,22 @@ class CharDemoTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             _argmax([])
+
+    def test_sample_from_logits(self) -> None:
+        self.assertEqual(
+            _sample_from_logits([0.0, 0.0], rng=random.Random(0)),
+            1,
+        )
+        self.assertEqual(
+            _sample_from_logits([0.0, 4.0], rng=random.Random(0)),
+            1,
+        )
+
+        with self.assertRaises(ValueError):
+            _sample_from_logits([])
+
+        with self.assertRaises(ValueError):
+            _sample_from_logits([1.0], temperature=0.0)
 
     def test_load_text_prefers_text_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -268,6 +332,7 @@ class CharDemoTests(unittest.TestCase):
         text = output.getvalue()
         self.assertIn("Character language demo", text)
         self.assertIn("model:         bigram", text)
+        self.assertIn("generation:    greedy", text)
         self.assertIn("text source:   built-in", text)
         self.assertIn("vocab size:    2", text)
         self.assertIn("samples:       7", text)
@@ -320,6 +385,12 @@ class CharDemoTests(unittest.TestCase):
             "ab",
             "--generate",
             "4",
+            "--sample-mode",
+            "sample",
+            "--temperature",
+            "0.9",
+            "--sample-seed",
+            "7",
         ])
         output = io.StringIO()
 
@@ -330,6 +401,8 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("model:         embedding", text)
         self.assertIn("context size:  2", text)
         self.assertIn("embedding dim: 4", text)
+        self.assertIn("generation:    sample", text)
+        self.assertIn("temperature:   0.9", text)
         self.assertIn("generated:", text)
 
 
