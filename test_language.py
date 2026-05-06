@@ -276,9 +276,39 @@ class LanguageModuleTests(unittest.TestCase):
             [0, 1],
             [1, 2],
         ]))
+        sequence_logits = model.sequence_logits(Tensor.from_list([
+            [0, 1],
+            [1, 2],
+        ]))
 
         self.assertEqual(logits.shape, (2, 3))
-        self.assertEqual(model.num_parameters(), 83)
+        self.assertEqual(sequence_logits.shape, (2, 2, 3))
+        self.assertEqual(
+            logits.data,
+            sequence_logits.data[3:6] + sequence_logits.data[9:12],
+        )
+        self.assertEqual(model.num_parameters(), 77)
+
+    def test_char_transformer_model_next_logits_accumulates_gradients(self) -> None:
+        model = CharTransformerModel(
+            vocab_size=3,
+            context_size=2,
+            embedding_dim=2,
+            hidden_dim=4,
+            num_layers=1,
+            seed=0,
+        )
+        inputs = Tensor.from_list([
+            [0, 1],
+            [1, 2],
+        ])
+
+        loss = model(inputs).sum()
+        loss.backward()
+
+        self.assertTrue(
+            any(parameter.grad is not None for parameter in model.parameters()),
+        )
 
     def test_char_transformer_model_state_dict_round_trip(self) -> None:
         model = CharTransformerModel(

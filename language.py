@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from tensor import Tensor, matmul
+from tensor import Tensor, _add_grad, _grad_data, matmul
 from tensor_nn import TensorEmbedding, TensorLayerNorm, TensorLinear, TensorModule
 
 
@@ -411,17 +411,24 @@ class CharTransformerModel(TensorModule):
         ]
         self.norm = TensorLayerNorm(embedding_dim)
         self.projection = TensorLinear(
-            embedding_dim * context_size,
+            embedding_dim,
             vocab_size,
             seed=seed + 2 + num_layers * 8,
         )
 
     def __call__(self, inputs: Tensor) -> Tensor:
+        return _last_time_step(self.sequence_logits(inputs))
+
+    def sequence_logits(self, inputs: Tensor) -> Tensor:
         hidden = self.embedding(inputs)
         for block in self.blocks:
             hidden = block(hidden)
         hidden = self.norm(hidden)
-        return self.projection(hidden.flatten(start_axis=1))
+        batch_size, context_size, embedding_dim = hidden.shape
+        logits = self.projection(
+            hidden.reshape((batch_size * context_size, embedding_dim)),
+        )
+        return logits.reshape((batch_size, context_size, self.vocab_size))
 
     def parameters(self) -> list[Tensor]:
         block_parameters = [
@@ -472,3 +479,38 @@ class CharTransformerModel(TensorModule):
             block.load_state_dict(block_state)
         self.norm.load_state_dict(state["norm"])
         self.projection.load_state_dict(state["projection"])
+
+
+def _last_time_step(sequence: Tensor) -> Tensor:
+    if sequence.ndim != 3:
+        raise ValueError("last time step expects a 3D tensor")
+
+    batch_size, context_size, width = sequence.shape
+    data = []
+    for batch in range(batch_size):
+        start = (batch * context_size + context_size - 1) * width
+        data.extend(sequence.data[start : start + width])
+
+    out = Tensor(
+        data,
+        (batch_size, width),
+        requires_grad=sequence.requires_grad,
+        _children=(sequence,),
+        _op="last_time_step",
+    )
+
+    def _backward() -> None:
+        if not sequence.requires_grad:
+            return
+
+        grad = _grad_data(out)
+        sequence_grad = [0.0] * sequence.numel
+        for batch in range(batch_size):
+            source_start = (batch * context_size + context_size - 1) * width
+            grad_start = batch * width
+            for offset in range(width):
+                sequence_grad[source_start + offset] += grad[grad_start + offset]
+        _add_grad(sequence, sequence_grad)
+
+    out._backward = _backward
+    return out

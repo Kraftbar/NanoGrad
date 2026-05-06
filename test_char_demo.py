@@ -242,6 +242,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(bigram_dataset.feature_shape, (6,))
         self.assertEqual(embedding_dataset.feature_shape, (2,))
         self.assertEqual(transformer_dataset.feature_shape, (2,))
+        self.assertEqual(transformer_dataset.target_shape, (2,))
         self.assertIsInstance(build_model(bigram_args, vocab_size=3), CharBigramModel)
         self.assertIsInstance(
             build_model(embedding_args, vocab_size=3),
@@ -627,6 +628,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("embedding dim: 4", text)
         self.assertIn("hidden dim:    8", text)
         self.assertIn("layers:        1", text)
+        self.assertIn("objective:     sequence", text)
         self.assertIn("generated:", text)
 
 

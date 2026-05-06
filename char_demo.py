@@ -11,8 +11,16 @@ from pathlib import Path
 from language import CharBigramModel, CharEmbeddingModel, CharTransformerModel
 from tensor import Tensor
 from tensor_nn import TensorModule
-from text import CharVocab, next_char_dataset, next_char_index_dataset
-from train import train_tensor_multiclass_dataset
+from text import (
+    CharVocab,
+    next_char_dataset,
+    next_char_index_dataset,
+    next_char_sequence_dataset,
+)
+from train import (
+    train_tensor_multiclass_dataset,
+    train_tensor_sequence_multiclass_dataset,
+)
 
 
 DEFAULT_TEXT = "hello nanograd\nhello tiny models\n"
@@ -50,7 +58,12 @@ def run(args: argparse.Namespace) -> None:
     text = load_text(args)
     dataset, vocab = build_dataset(text, args)
     model = build_model(args, vocab_size=len(vocab))
-    summary = train_tensor_multiclass_dataset(
+    train_fn = (
+        train_tensor_sequence_multiclass_dataset
+        if args.model == "transformer"
+        else train_tensor_multiclass_dataset
+    )
+    summary = train_fn(
         model,
         dataset,
         epochs=args.epochs,
@@ -90,6 +103,7 @@ def run(args: argparse.Namespace) -> None:
     if args.model == "transformer":
         print(f"hidden dim:    {args.hidden_dim or args.embedding_dim * 4}")
         print(f"layers:        {args.layers}")
+        print("objective:     sequence")
     print(f"generation:    {args.sample_mode}")
     if args.sample_mode == "sample":
         print(f"temperature:   {args.temperature}")
@@ -103,7 +117,8 @@ def run(args: argparse.Namespace) -> None:
     print(f"accuracy:      {summary.accuracy:.3f}")
     print(f"runtime:       {summary.elapsed_seconds:.4f}s")
     if summary.examples_per_second is not None:
-        print(f"samples/s:     {summary.examples_per_second:.1f}")
+        rate_label = "tokens/s" if args.model == "transformer" else "samples/s"
+        print(f"{rate_label}:     {summary.examples_per_second:.1f}")
     print(f"generated:     {generated!r}")
 
 
@@ -222,8 +237,10 @@ def build_dataset(
 ):
     if args.model == "bigram":
         return next_char_dataset(text, context_size=args.context_size)
-    if args.model in ("embedding", "transformer"):
+    if args.model == "embedding":
         return next_char_index_dataset(text, context_size=args.context_size)
+    if args.model == "transformer":
+        return next_char_sequence_dataset(text, context_size=args.context_size)
     raise ValueError(f"unknown char model: {args.model}")
 
 
