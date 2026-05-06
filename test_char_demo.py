@@ -8,6 +8,7 @@ from pathlib import Path
 from char_demo import (
     _argmax,
     _sample_from_logits,
+    apply_preset,
     build_dataset,
     build_model,
     generate_text,
@@ -83,6 +84,46 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.sample_mode, "sample")
         self.assertEqual(args.temperature, 0.8)
         self.assertEqual(args.sample_seed, 4)
+
+    def test_tiny_transformer_preset_sets_smoke_defaults(self) -> None:
+        args = parse_args(["--preset", "tiny-transformer"])
+
+        self.assertEqual(args.preset, "tiny-transformer")
+        self.assertEqual(args.model, "transformer")
+        self.assertEqual(args.max_chars, 128)
+        self.assertEqual(args.context_size, 4)
+        self.assertEqual(args.embedding_dim, 8)
+        self.assertEqual(args.hidden_dim, 16)
+        self.assertEqual(args.layers, 1)
+        self.assertEqual(args.epochs, 1)
+        self.assertEqual(args.batch_size, 4)
+        self.assertEqual(args.lr, 0.05)
+        self.assertEqual(args.seed_text, "hell")
+        self.assertEqual(args.generate, 24)
+
+    def test_tiny_transformer_preset_keeps_explicit_values(self) -> None:
+        args = parse_args([
+            "--preset",
+            "tiny-transformer",
+            "--embedding-dim",
+            "6",
+            "--max-chars",
+            "32",
+            "--seed-text",
+            "abcd",
+            "--generate",
+            "2",
+        ])
+
+        self.assertEqual(args.model, "transformer")
+        self.assertEqual(args.context_size, 4)
+        self.assertEqual(args.embedding_dim, 6)
+        self.assertEqual(args.max_chars, 32)
+        self.assertEqual(args.seed_text, "abcd")
+        self.assertEqual(args.generate, 2)
+
+        args.preset = None
+        self.assertIs(apply_preset(args), args)
 
     def test_char_bigram_model_forward_shape(self) -> None:
         model = CharBigramModel(3, context_size=2, seed=0)

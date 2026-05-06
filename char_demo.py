@@ -15,6 +15,34 @@ from train import train_tensor_multiclass_dataset
 
 
 DEFAULT_TEXT = "hello nanograd\nhello tiny models\n"
+DEFAULT_OPTIONS = {
+    "model": "bigram",
+    "max_chars": None,
+    "context_size": 1,
+    "embedding_dim": 16,
+    "hidden_dim": None,
+    "layers": 1,
+    "epochs": 200,
+    "batch_size": 8,
+    "lr": 0.2,
+    "seed_text": "h",
+    "generate": 32,
+}
+PRESETS = {
+    "tiny-transformer": {
+        "model": "transformer",
+        "max_chars": 128,
+        "context_size": 4,
+        "embedding_dim": 8,
+        "hidden_dim": 16,
+        "layers": 1,
+        "epochs": 1,
+        "batch_size": 4,
+        "lr": 0.05,
+        "seed_text": "hell",
+        "generate": 24,
+    },
+}
 
 
 def run(args: argparse.Namespace) -> None:
@@ -47,6 +75,8 @@ def run(args: argparse.Namespace) -> None:
     )
 
     print("Character language demo")
+    if args.preset is not None:
+        print(f"preset:        {args.preset}")
     print(f"model:         {args.model}")
     print(f"text source:   {text_source(args)}")
     print(f"text length:   {len(text)}")
@@ -248,28 +278,47 @@ def text_source(args: argparse.Namespace) -> str:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--preset", choices=tuple(PRESETS))
     parser.add_argument(
         "--model",
         choices=("bigram", "embedding", "transformer"),
-        default="bigram",
+        default=DEFAULT_OPTIONS["model"],
     )
     parser.add_argument("--text", default=DEFAULT_TEXT)
     parser.add_argument("--text-file", type=Path)
-    parser.add_argument("--max-chars", type=int)
-    parser.add_argument("--context-size", type=int, default=1)
-    parser.add_argument("--embedding-dim", type=int, default=16)
-    parser.add_argument("--hidden-dim", type=int)
-    parser.add_argument("--layers", type=int, default=1)
-    parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=0.2)
+    parser.add_argument("--max-chars", type=int, default=DEFAULT_OPTIONS["max_chars"])
+    parser.add_argument(
+        "--context-size",
+        type=int,
+        default=DEFAULT_OPTIONS["context_size"],
+    )
+    parser.add_argument(
+        "--embedding-dim",
+        type=int,
+        default=DEFAULT_OPTIONS["embedding_dim"],
+    )
+    parser.add_argument("--hidden-dim", type=int, default=DEFAULT_OPTIONS["hidden_dim"])
+    parser.add_argument("--layers", type=int, default=DEFAULT_OPTIONS["layers"])
+    parser.add_argument("--epochs", type=int, default=DEFAULT_OPTIONS["epochs"])
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_OPTIONS["batch_size"])
+    parser.add_argument("--lr", type=float, default=DEFAULT_OPTIONS["lr"])
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--seed-text", default="h")
-    parser.add_argument("--generate", type=int, default=32)
+    parser.add_argument("--seed-text", default=DEFAULT_OPTIONS["seed_text"])
+    parser.add_argument("--generate", type=int, default=DEFAULT_OPTIONS["generate"])
     parser.add_argument("--sample-mode", choices=("greedy", "sample"), default="greedy")
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--sample-seed", type=int)
-    return parser.parse_args(argv)
+    return apply_preset(parser.parse_args(argv))
+
+
+def apply_preset(args: argparse.Namespace) -> argparse.Namespace:
+    if args.preset is None:
+        return args
+
+    for name, value in PRESETS[args.preset].items():
+        if getattr(args, name) == DEFAULT_OPTIONS[name]:
+            setattr(args, name, value)
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
