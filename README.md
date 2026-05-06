@@ -59,7 +59,7 @@ modules should prove that the core works on increasingly realistic checks.
 
 - [x] Run and tune MNIST MLP on local data
 - [x] Train a LeNet-style MNIST model
-- [ ] Try a small CIFAR CNN after the MNIST path is stable
+- [x] Try a small CIFAR CNN after the MNIST path is stable
 
 ### Later Branches
 
@@ -123,6 +123,7 @@ benchmark.py     # small core operation timing checks
 mnist_demo.py    # local-file MNIST MLP demo
 mnist_cnn_demo.py # local-file MNIST CNN demo
 mnist_smoke_demo.py # no-download MNIST-style CNN smoke demo
+cifar_cnn_demo.py # local-file CIFAR-10 CNN demo
 ```
 
 ## Reference Implementations
@@ -153,7 +154,8 @@ python3 mnist_smoke_demo.py
 Use the test suite as the main correctness check. The demos are small examples
 for inspecting the scalar-autograd and tensor paths by eye.
 
-For local MNIST files, see [data/mnist](./data/mnist). The CNN demo can use
+For local MNIST and CIFAR-10 files, see [data/mnist](./data/mnist) and
+[data/cifar10](./data/cifar10). The MNIST CNN demo can use
 `python3 mnist_cnn_demo.py --preset lenet-ish`.
 
 ## Status
