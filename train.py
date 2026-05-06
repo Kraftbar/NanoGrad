@@ -286,6 +286,7 @@ def train_tensor_multiclass_dataset(
     lr: float = 0.05,
     shuffle: bool = True,
     seed: int | None = None,
+    max_grad_norm: float | None = None,
     epoch_callback: Callable[[int, TrainingSummary], None] | None = None,
 ) -> TrainingSummary:
     """Train a tensor multiclass model on TinyDataset batches."""
@@ -293,7 +294,11 @@ def train_tensor_multiclass_dataset(
     if epochs <= 0:
         raise ValueError("epochs must be positive")
 
-    optimizer = TensorSGD(model.parameters(), lr=lr)
+    optimizer = TensorSGD(
+        model.parameters(),
+        lr=lr,
+        max_grad_norm=max_grad_norm,
+    )
     history = []
     start = perf_counter()
 
@@ -403,6 +408,7 @@ def train_tensor_sequence_multiclass_dataset(
     lr: float = 0.05,
     shuffle: bool = True,
     seed: int | None = None,
+    max_grad_norm: float | None = None,
     epoch_callback: Callable[[int, TrainingSummary], None] | None = None,
 ) -> TrainingSummary:
     """Train a sequence multiclass model on batched token targets."""
@@ -410,7 +416,11 @@ def train_tensor_sequence_multiclass_dataset(
     if epochs <= 0:
         raise ValueError("epochs must be positive")
 
-    optimizer = TensorSGD(model.parameters(), lr=lr)
+    optimizer = TensorSGD(
+        model.parameters(),
+        lr=lr,
+        max_grad_norm=max_grad_norm,
+    )
     history = []
     start = perf_counter()
 

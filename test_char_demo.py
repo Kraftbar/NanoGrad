@@ -63,6 +63,8 @@ class CharDemoTests(unittest.TestCase):
             "2",
             "--validation-chars",
             "3",
+            "--max-grad-norm",
+            "1.5",
             "--seed",
             "9",
             "--seed-text",
@@ -97,6 +99,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.lr, 0.1)
         self.assertEqual(args.report_every, 2)
         self.assertEqual(args.validation_chars, 3)
+        self.assertEqual(args.max_grad_norm, 1.5)
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.seed_text, "a")
         self.assertEqual(args.generate, 5)
@@ -557,6 +560,8 @@ class CharDemoTests(unittest.TestCase):
             "0.3",
             "--report-every",
             "1",
+            "--max-grad-norm",
+            "1.0",
             "--seed-text",
             "a",
             "--generate",
@@ -574,6 +579,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("text source:   built-in", text)
         self.assertIn("vocab size:    2", text)
         self.assertIn("samples:       7", text)
+        self.assertIn("max grad norm: 1.0", text)
         self.assertIn("epoch 1/2", text)
         self.assertIn("epoch 2/2", text)
         self.assertIn("generated:", text)

@@ -39,6 +39,7 @@ DEFAULT_OPTIONS = {
     "lr": 0.2,
     "report_every": 0,
     "validation_chars": 0,
+    "max_grad_norm": None,
     "seed_text": "h",
     "generate": 32,
 }
@@ -92,6 +93,7 @@ def run(args: argparse.Namespace) -> None:
         lr=args.lr,
         shuffle=True,
         seed=args.seed,
+        max_grad_norm=args.max_grad_norm,
         validation_dataset=validation_dataset,
         epoch_callback=(
             None
@@ -139,6 +141,8 @@ def run(args: argparse.Namespace) -> None:
         print(f"heads:         {args.heads}")
         print(f"layers:        {args.layers}")
         print("objective:     sequence")
+    if args.max_grad_norm is not None:
+        print(f"max grad norm: {args.max_grad_norm}")
     print(f"generation:    {args.sample_mode}")
     if args.sample_mode == "sample":
         print(f"temperature:   {args.temperature}")
@@ -498,6 +502,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--validation-chars",
         type=int,
         default=DEFAULT_OPTIONS["validation_chars"],
+    )
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=DEFAULT_OPTIONS["max_grad_norm"],
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seed-text", default=DEFAULT_OPTIONS["seed_text"])
