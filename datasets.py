@@ -13,6 +13,11 @@ from pathlib import Path
 Feature = list
 Batch = tuple[list[Feature], list[float]]
 Sample = tuple[Feature, float]
+CIFAR10_CHANNELS = 3
+CIFAR10_ROWS = 32
+CIFAR10_COLS = 32
+CIFAR10_IMAGE_SIZE = CIFAR10_CHANNELS * CIFAR10_ROWS * CIFAR10_COLS
+CIFAR10_RECORD_SIZE = 1 + CIFAR10_IMAGE_SIZE
 
 
 class TinyDataset:
@@ -188,6 +193,113 @@ def read_mnist_labels(
         if len(raw) != count:
             raise ValueError("MNIST label file ended early")
         return [float(label) for label in raw]
+
+
+def load_cifar10_batches(
+    paths: Sequence[str | Path],
+    *,
+    limit: int | None = None,
+    channel_first: bool = True,
+) -> TinyDataset:
+    """Load one or more local CIFAR-10 binary batch files."""
+
+    xs, ys = read_cifar10_batches(
+        paths,
+        limit=limit,
+        channel_first=channel_first,
+    )
+    return TinyDataset(xs, ys)
+
+
+def read_cifar10_batches(
+    paths: Sequence[str | Path],
+    *,
+    limit: int | None = None,
+    channel_first: bool = True,
+) -> tuple[list, list[float]]:
+    """Read local CIFAR-10 binary batch files as values in [0, 1]."""
+
+    if not paths:
+        raise ValueError("CIFAR-10 paths must not be empty")
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be non-negative")
+
+    images = []
+    labels = []
+    remaining = limit
+
+    for path in paths:
+        batch_images, batch_labels = read_cifar10_batch(
+            path,
+            limit=remaining,
+            channel_first=channel_first,
+        )
+        images.extend(batch_images)
+        labels.extend(batch_labels)
+
+        if remaining is not None:
+            remaining -= len(batch_labels)
+            if remaining <= 0:
+                break
+
+    return images, labels
+
+
+def read_cifar10_batch(
+    path: str | Path,
+    *,
+    limit: int | None = None,
+    channel_first: bool = True,
+) -> tuple[list, list[float]]:
+    """Read a local CIFAR-10 binary batch file."""
+
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be non-negative")
+
+    path = Path(path)
+    size = path.stat().st_size
+    if size % CIFAR10_RECORD_SIZE != 0:
+        raise ValueError("CIFAR-10 binary batch has invalid byte length")
+
+    count = _limited_count(size // CIFAR10_RECORD_SIZE, limit)
+    images = []
+    labels = []
+
+    with path.open("rb") as file:
+        for _ in range(count):
+            record = file.read(CIFAR10_RECORD_SIZE)
+            if len(record) != CIFAR10_RECORD_SIZE:
+                raise ValueError("CIFAR-10 binary batch ended early")
+
+            labels.append(float(record[0]))
+            images.append(
+                _cifar10_image(record[1:], channel_first=channel_first)
+            )
+
+    return images, labels
+
+
+def _cifar10_image(raw: bytes, *, channel_first: bool) -> list:
+    channels = [
+        [
+            pixel / 255.0
+            for pixel in raw[start : start + CIFAR10_ROWS * CIFAR10_COLS]
+        ]
+        for start in range(0, CIFAR10_IMAGE_SIZE, CIFAR10_ROWS * CIFAR10_COLS)
+    ]
+    if channel_first:
+        return [
+            [
+                channel[row * CIFAR10_COLS : (row + 1) * CIFAR10_COLS]
+                for row in range(CIFAR10_ROWS)
+            ]
+            for channel in channels
+        ]
+    return [
+        value
+        for channel in channels
+        for value in channel
+    ]
 
 
 def line_fitting() -> tuple[list[list[float]], list[float]]:

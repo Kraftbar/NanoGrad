@@ -6,8 +6,11 @@ from pathlib import Path
 
 from datasets import (
     TinyDataset,
+    load_cifar10_batches,
     load_mnist,
     make_batches,
+    read_cifar10_batch,
+    read_cifar10_batches,
     read_mnist_images,
     read_mnist_labels,
     tiny_2d_clusters,
@@ -214,6 +217,63 @@ class DatasetTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 read_mnist_labels(labels_path)
 
+    def test_load_cifar10_from_local_binary_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            batch_path = Path(tmpdir) / "data_batch_1.bin"
+            _write_cifar10_batch(batch_path, labels=[3, 7])
+
+            dataset = load_cifar10_batches([batch_path])
+
+        self.assertEqual(len(dataset), 2)
+        self.assertEqual(dataset.feature_shape, (3, 32, 32))
+        self.assertEqual(dataset[0][1], 3.0)
+        self.assertEqual(dataset[1][1], 7.0)
+        self.assertEqual(dataset[0][0][0][0][0], 0.0)
+        self.assertEqual(dataset[0][0][1][0][0], 1.0)
+        self.assertEqual(dataset[0][0][2][0][0], 128.0 / 255.0)
+
+    def test_read_cifar10_flat_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            batch_path = Path(tmpdir) / "data_batch_1.bin"
+            _write_cifar10_batch(batch_path, labels=[4])
+
+            images, labels = read_cifar10_batch(batch_path, channel_first=False)
+
+        self.assertEqual(labels, [4.0])
+        self.assertEqual(len(images[0]), 3 * 32 * 32)
+        self.assertEqual(images[0][0], 0.0)
+        self.assertEqual(images[0][1024], 1.0)
+        self.assertEqual(images[0][2048], 128.0 / 255.0)
+
+    def test_read_cifar10_multiple_batches_and_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first_path = Path(tmpdir) / "data_batch_1.bin"
+            second_path = Path(tmpdir) / "data_batch_2.bin"
+            _write_cifar10_batch(first_path, labels=[1, 2])
+            _write_cifar10_batch(second_path, labels=[3, 4])
+
+            images, labels = read_cifar10_batches(
+                [first_path, second_path],
+                limit=3,
+            )
+
+        self.assertEqual(len(images), 3)
+        self.assertEqual(labels, [1.0, 2.0, 3.0])
+
+    def test_cifar10_validation_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            batch_path = Path(tmpdir) / "bad_batch.bin"
+            batch_path.write_bytes(b"\x00")
+
+            with self.assertRaises(ValueError):
+                read_cifar10_batch(batch_path)
+
+            with self.assertRaises(ValueError):
+                read_cifar10_batch(batch_path, limit=-1)
+
+            with self.assertRaises(ValueError):
+                read_cifar10_batches([])
+
 
 def _flatten_batches(batches) -> list[tuple[tuple[float, ...], float]]:
     return [
@@ -240,6 +300,17 @@ def _write_mnist_images(path: Path, *, gzip_output: bool = False) -> None:
 def _write_mnist_labels(path: Path, *, gzip_output: bool = False) -> None:
     payload = struct.pack(">II", 2049, 2) + bytes([7, 3])
     _write_bytes(path, payload, gzip_output=gzip_output)
+
+
+def _write_cifar10_batch(path: Path, *, labels: list[int]) -> None:
+    payload = b"".join(
+        bytes([label])
+        + bytes([0] * (32 * 32))
+        + bytes([255] * (32 * 32))
+        + bytes([128] * (32 * 32))
+        for label in labels
+    )
+    path.write_bytes(payload)
 
 
 def _write_bytes(path: Path, payload: bytes, *, gzip_output: bool) -> None:

@@ -25,3 +25,5 @@ ref_pytorch/
 # Local datasets
 data/mnist/*-idx*-ubyte
 data/mnist/*-idx*-ubyte.gz
+data/cifar10/*.bin
+data/cifar10/*.tar.gz
