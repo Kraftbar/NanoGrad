@@ -34,6 +34,8 @@ This note compares NanoGrad's tiny character transformer path with the local
   `--tie-embeddings`.
 - The tiny transformer preset runs a capped character demo quickly:
   `python3 char_demo.py --preset tiny-transformer`.
+- A more GPT-like smoke preset enables GELU, Adam, weight decay, grad clipping,
+  and tied embeddings: `python3 char_demo.py --preset tiny-gpt`.
 - Sampled generation supports temperature and optional top-k filtering.
 - Character runs can report per-epoch train/validation metrics with
   `--report-every` and `--validation-chars`; `--no-shuffle` keeps batch order
