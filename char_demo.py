@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import math
 import random
+import sys
 from pathlib import Path
 
 from language import CharBigramModel, CharEmbeddingModel, CharTransformerModel
@@ -308,17 +309,40 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sample-mode", choices=("greedy", "sample"), default="greedy")
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--sample-seed", type=int)
-    return apply_preset(parser.parse_args(argv))
+    explicit_options = _explicit_option_names(
+        sys.argv[1:]
+        if argv is None
+        else argv,
+    )
+    return apply_preset(parser.parse_args(argv), explicit_options=explicit_options)
 
 
-def apply_preset(args: argparse.Namespace) -> argparse.Namespace:
+def apply_preset(
+    args: argparse.Namespace,
+    *,
+    explicit_options: set[str] | None = None,
+) -> argparse.Namespace:
     if args.preset is None:
         return args
 
+    explicit_options = explicit_options or set()
     for name, value in PRESETS[args.preset].items():
-        if getattr(args, name) == DEFAULT_OPTIONS[name]:
+        if (
+            name not in explicit_options
+            and getattr(args, name) == DEFAULT_OPTIONS[name]
+        ):
             setattr(args, name, value)
     return args
+
+
+def _explicit_option_names(argv: list[str]) -> set[str]:
+    names = set()
+    for token in argv:
+        if not token.startswith("--"):
+            continue
+        name = token.split("=", 1)[0]
+        names.add(name.removeprefix("--").replace("-", "_"))
+    return names
 
 
 def main(argv: list[str] | None = None) -> None:

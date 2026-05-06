@@ -125,6 +125,23 @@ class CharDemoTests(unittest.TestCase):
         args.preset = None
         self.assertIs(apply_preset(args), args)
 
+    def test_tiny_transformer_preset_keeps_explicit_default_values(self) -> None:
+        args = parse_args([
+            "--preset",
+            "tiny-transformer",
+            "--model",
+            "bigram",
+            "--context-size",
+            "1",
+            "--seed-text",
+            "h",
+        ])
+
+        self.assertEqual(args.model, "bigram")
+        self.assertEqual(args.context_size, 1)
+        self.assertEqual(args.seed_text, "h")
+        self.assertEqual(args.embedding_dim, 8)
+
     def test_char_bigram_model_forward_shape(self) -> None:
         model = CharBigramModel(3, context_size=2, seed=0)
 
