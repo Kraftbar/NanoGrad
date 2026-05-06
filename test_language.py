@@ -43,6 +43,25 @@ class LanguageModuleTests(unittest.TestCase):
         self.assertEqual(outputs.shape, inputs.shape)
         self.assertEqual(attention.num_parameters(), 24)
 
+    def test_causal_self_attention_supports_multiple_heads(self) -> None:
+        attention = CausalSelfAttention(
+            embedding_dim=4,
+            context_size=2,
+            num_heads=2,
+            seed=0,
+        )
+        inputs = Tensor.from_list([
+            [
+                [1.0, 0.0, 0.5, -0.5],
+                [0.0, 1.0, -0.25, 0.25],
+            ],
+        ])
+
+        outputs = attention(inputs)
+
+        self.assertEqual(outputs.shape, inputs.shape)
+        self.assertEqual(attention.num_parameters(), 80)
+
     def test_causal_self_attention_does_not_use_future_tokens(self) -> None:
         attention = CausalSelfAttention(embedding_dim=2, context_size=3, seed=0)
         base = Tensor.from_list([
@@ -102,6 +121,12 @@ class LanguageModuleTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             CausalSelfAttention(embedding_dim=1, context_size=0)
 
+        with self.assertRaises(ValueError):
+            CausalSelfAttention(embedding_dim=2, context_size=1, num_heads=0)
+
+        with self.assertRaises(ValueError):
+            CausalSelfAttention(embedding_dim=3, context_size=1, num_heads=2)
+
         attention = CausalSelfAttention(embedding_dim=2, context_size=3)
         with self.assertRaises(ValueError):
             attention(Tensor.from_list([[1.0, 2.0]]))
@@ -123,6 +148,33 @@ class LanguageModuleTests(unittest.TestCase):
                 "embedding_dim": 2,
                 "context_size": 2,
             })
+
+        with self.assertRaises(ValueError):
+            attention.load_state_dict({
+                "embedding_dim": 2,
+                "context_size": 3,
+                "num_heads": 2,
+            })
+
+    def test_transformer_block_supports_multiple_heads(self) -> None:
+        block = TransformerBlock(
+            embedding_dim=4,
+            context_size=2,
+            hidden_dim=8,
+            num_heads=2,
+            seed=0,
+        )
+        inputs = Tensor.from_list([
+            [
+                [1.0, 0.0, 0.5, -0.5],
+                [0.0, 1.0, -0.25, 0.25],
+            ],
+        ])
+
+        outputs = block(inputs)
+
+        self.assertEqual(outputs.shape, inputs.shape)
+        self.assertEqual(block.num_parameters(), 172)
 
     def test_transformer_block_forward_shape(self) -> None:
         block = TransformerBlock(
@@ -262,6 +314,14 @@ class LanguageModuleTests(unittest.TestCase):
                 "hidden_dim": 8,
             })
 
+        with self.assertRaises(ValueError):
+            block.load_state_dict({
+                "embedding_dim": 2,
+                "context_size": 3,
+                "hidden_dim": 4,
+                "num_heads": 2,
+            })
+
     def test_char_transformer_model_forward_shape(self) -> None:
         model = CharTransformerModel(
             vocab_size=3,
@@ -310,6 +370,22 @@ class LanguageModuleTests(unittest.TestCase):
             any(parameter.grad is not None for parameter in model.parameters()),
         )
 
+    def test_char_transformer_model_supports_multiple_heads(self) -> None:
+        model = CharTransformerModel(
+            vocab_size=3,
+            context_size=2,
+            embedding_dim=4,
+            hidden_dim=8,
+            num_heads=2,
+            num_layers=1,
+            seed=0,
+        )
+
+        logits = model.sequence_logits(Tensor.from_list([[0, 1]]))
+
+        self.assertEqual(logits.shape, (1, 2, 3))
+        self.assertEqual(model.num_parameters(), 215)
+
     def test_char_transformer_model_state_dict_round_trip(self) -> None:
         model = CharTransformerModel(
             vocab_size=3,
@@ -346,6 +422,12 @@ class LanguageModuleTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             CharTransformerModel(2, hidden_dim=0)
+
+        with self.assertRaises(ValueError):
+            CharTransformerModel(2, embedding_dim=2, num_heads=0)
+
+        with self.assertRaises(ValueError):
+            CharTransformerModel(2, embedding_dim=3, num_heads=2)
 
         with self.assertRaises(ValueError):
             CharTransformerModel(2, num_layers=0)
@@ -390,6 +472,16 @@ class LanguageModuleTests(unittest.TestCase):
                 "context_size": 2,
                 "embedding_dim": 2,
                 "hidden_dim": 8,
+                "num_layers": 1,
+            })
+
+        with self.assertRaises(ValueError):
+            model.load_state_dict({
+                "vocab_size": 3,
+                "context_size": 2,
+                "embedding_dim": 2,
+                "hidden_dim": 4,
+                "num_heads": 2,
                 "num_layers": 1,
             })
 

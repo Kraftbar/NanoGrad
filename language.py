@@ -179,26 +179,46 @@ class CharEmbeddingModel(TensorModule):
 
 
 class CausalSelfAttention(TensorModule):
-    """Single-head causal self-attention for tiny sequence models."""
+    """Causal self-attention for tiny sequence models."""
 
     def __init__(
         self,
         embedding_dim: int,
         context_size: int,
         *,
+        num_heads: int = 1,
         seed: int = 0,
     ) -> None:
         if embedding_dim <= 0:
             raise ValueError("embedding_dim must be positive")
         if context_size <= 0:
             raise ValueError("context_size must be positive")
+        if num_heads <= 0:
+            raise ValueError("num_heads must be positive")
+        if embedding_dim % num_heads != 0:
+            raise ValueError("embedding_dim must be divisible by num_heads")
 
         self.embedding_dim = embedding_dim
         self.context_size = context_size
-        self.query = TensorLinear(embedding_dim, embedding_dim, seed=seed)
-        self.key = TensorLinear(embedding_dim, embedding_dim, seed=seed + 1)
-        self.value = TensorLinear(embedding_dim, embedding_dim, seed=seed + 2)
-        self.projection = TensorLinear(embedding_dim, embedding_dim, seed=seed + 3)
+        self.num_heads = num_heads
+        self.head_dim = embedding_dim // num_heads
+        self.queries = [
+            TensorLinear(embedding_dim, self.head_dim, seed=seed + head * 3)
+            for head in range(num_heads)
+        ]
+        self.keys = [
+            TensorLinear(embedding_dim, self.head_dim, seed=seed + head * 3 + 1)
+            for head in range(num_heads)
+        ]
+        self.values = [
+            TensorLinear(embedding_dim, self.head_dim, seed=seed + head * 3 + 2)
+            for head in range(num_heads)
+        ]
+        self.projection = TensorLinear(
+            embedding_dim,
+            embedding_dim,
+            seed=seed + num_heads * 3,
+        )
 
     def __call__(self, inputs: Tensor) -> Tensor:
         if inputs.ndim != 3:
@@ -211,22 +231,42 @@ class CausalSelfAttention(TensorModule):
             raise ValueError("input embedding dimension must match embedding_dim")
 
         flat_inputs = inputs.reshape((batch_size * context_size, embedding_dim))
-        query = self.query(flat_inputs)
-        key = self.key(flat_inputs)
-        value = self.value(flat_inputs)
+        mask = _causal_attention_mask(batch_size, context_size)
+        head_outputs = []
+        for query_layer, key_layer, value_layer in zip(
+            self.queries,
+            self.keys,
+            self.values,
+        ):
+            query = query_layer(flat_inputs)
+            key = key_layer(flat_inputs)
+            value = value_layer(flat_inputs)
+            scores = matmul(query, key.T) * (1 / math.sqrt(self.head_dim))
+            masked_scores = scores + mask
+            weights = masked_scores.softmax(axis=1)
+            head_outputs.append(matmul(weights, value))
 
-        scores = matmul(query, key.T) * (1 / math.sqrt(embedding_dim))
-        masked_scores = scores + _causal_attention_mask(batch_size, context_size)
-        weights = masked_scores.softmax(axis=1)
-        attended = matmul(weights, value)
+        attended = _concat_feature_tensors(head_outputs)
         output = self.projection(attended)
         return output.reshape((batch_size, context_size, embedding_dim))
 
     def parameters(self) -> list[Tensor]:
         return [
-            *self.query.parameters(),
-            *self.key.parameters(),
-            *self.value.parameters(),
+            *[
+                parameter
+                for layer in self.queries
+                for parameter in layer.parameters()
+            ],
+            *[
+                parameter
+                for layer in self.keys
+                for parameter in layer.parameters()
+            ],
+            *[
+                parameter
+                for layer in self.values
+                for parameter in layer.parameters()
+            ],
             *self.projection.parameters(),
         ]
 
@@ -234,9 +274,19 @@ class CausalSelfAttention(TensorModule):
         return {
             "embedding_dim": self.embedding_dim,
             "context_size": self.context_size,
-            "query": self.query.state_dict(),
-            "key": self.key.state_dict(),
-            "value": self.value.state_dict(),
+            "num_heads": self.num_heads,
+            "queries": [
+                layer.state_dict()
+                for layer in self.queries
+            ],
+            "keys": [
+                layer.state_dict()
+                for layer in self.keys
+            ],
+            "values": [
+                layer.state_dict()
+                for layer in self.values
+            ],
             "projection": self.projection.state_dict(),
         }
 
@@ -245,9 +295,11 @@ class CausalSelfAttention(TensorModule):
             raise ValueError("state embedding_dim does not match CausalSelfAttention")
         if state.get("context_size") != self.context_size:
             raise ValueError("state context_size does not match CausalSelfAttention")
-        self.query.load_state_dict(state["query"])
-        self.key.load_state_dict(state["key"])
-        self.value.load_state_dict(state["value"])
+        if state.get("num_heads") != self.num_heads:
+            raise ValueError("state num_heads does not match CausalSelfAttention")
+        _load_layer_list(self.queries, state.get("queries"), "queries")
+        _load_layer_list(self.keys, state.get("keys"), "keys")
+        _load_layer_list(self.values, state.get("values"), "values")
         self.projection.load_state_dict(state["projection"])
 
 
@@ -268,6 +320,69 @@ def _causal_attention_mask(batch_size: int, context_size: int) -> Tensor:
     return Tensor(data, (total_tokens, total_tokens))
 
 
+def _concat_feature_tensors(tensors: list[Tensor]) -> Tensor:
+    if not tensors:
+        raise ValueError("feature concatenation needs at least one tensor")
+    if len(tensors) == 1:
+        return tensors[0]
+    if any(tensor.ndim != 2 for tensor in tensors):
+        raise ValueError("feature concatenation expects 2D tensors")
+
+    rows = tensors[0].shape[0]
+    if any(tensor.shape[0] != rows for tensor in tensors):
+        raise ValueError("feature tensors must have the same row count")
+
+    widths = [
+        tensor.shape[1]
+        for tensor in tensors
+    ]
+    out_width = sum(widths)
+    data = []
+    for row in range(rows):
+        for tensor, width in zip(tensors, widths):
+            start = row * width
+            data.extend(tensor.data[start : start + width])
+
+    out = Tensor(
+        data,
+        (rows, out_width),
+        requires_grad=any(tensor.requires_grad for tensor in tensors),
+        _children=tuple(tensors),
+        _op="concat_features",
+    )
+
+    def _backward() -> None:
+        grad = _grad_data(out)
+        tensor_grads = [
+            [0.0] * tensor.numel
+            for tensor in tensors
+        ]
+        for row in range(rows):
+            out_offset = row * out_width
+            width_offset = 0
+            for tensor_index, width in enumerate(widths):
+                tensor_offset = row * width
+                for col in range(width):
+                    tensor_grads[tensor_index][tensor_offset + col] += (
+                        grad[out_offset + width_offset + col]
+                    )
+                width_offset += width
+
+        for tensor, tensor_grad in zip(tensors, tensor_grads):
+            if tensor.requires_grad:
+                _add_grad(tensor, tensor_grad)
+
+    out._backward = _backward
+    return out
+
+
+def _load_layer_list(layers: list[TensorLinear], state, name: str) -> None:
+    if not isinstance(state, list) or len(state) != len(layers):
+        raise ValueError(f"state {name} do not match CausalSelfAttention")
+    for layer, layer_state in zip(layers, state):
+        layer.load_state_dict(layer_state)
+
+
 class TransformerBlock(TensorModule):
     """Pre-norm transformer block for tiny causal language models."""
 
@@ -277,6 +392,7 @@ class TransformerBlock(TensorModule):
         context_size: int,
         *,
         hidden_dim: int | None = None,
+        num_heads: int = 1,
         seed: int = 0,
     ) -> None:
         if embedding_dim <= 0:
@@ -291,10 +407,12 @@ class TransformerBlock(TensorModule):
         self.embedding_dim = embedding_dim
         self.context_size = context_size
         self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
         self.norm1 = TensorLayerNorm(embedding_dim)
         self.attention = CausalSelfAttention(
             embedding_dim,
             context_size,
+            num_heads=num_heads,
             seed=seed,
         )
         self.norm2 = TensorLayerNorm(embedding_dim)
@@ -342,6 +460,7 @@ class TransformerBlock(TensorModule):
             "embedding_dim": self.embedding_dim,
             "context_size": self.context_size,
             "hidden_dim": self.hidden_dim,
+            "num_heads": self.num_heads,
             "norm1": self.norm1.state_dict(),
             "attention": self.attention.state_dict(),
             "norm2": self.norm2.state_dict(),
@@ -356,6 +475,8 @@ class TransformerBlock(TensorModule):
             raise ValueError("state context_size does not match TransformerBlock")
         if state.get("hidden_dim") != self.hidden_dim:
             raise ValueError("state hidden_dim does not match TransformerBlock")
+        if state.get("num_heads") != self.num_heads:
+            raise ValueError("state num_heads does not match TransformerBlock")
         self.norm1.load_state_dict(state["norm1"])
         self.attention.load_state_dict(state["attention"])
         self.norm2.load_state_dict(state["norm2"])
@@ -373,6 +494,7 @@ class CharTransformerModel(TensorModule):
         context_size: int = 4,
         embedding_dim: int = 16,
         hidden_dim: int | None = None,
+        num_heads: int = 1,
         num_layers: int = 1,
         seed: int = 0,
     ) -> None:
@@ -393,6 +515,7 @@ class CharTransformerModel(TensorModule):
         self.context_size = context_size
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
         self.num_layers = num_layers
         self.embedding = TokenPositionEmbedding(
             vocab_size,
@@ -405,6 +528,7 @@ class CharTransformerModel(TensorModule):
                 embedding_dim,
                 context_size,
                 hidden_dim=hidden_dim,
+                num_heads=num_heads,
                 seed=seed + 2 + layer_index * 8,
             )
             for layer_index in range(num_layers)
@@ -449,6 +573,7 @@ class CharTransformerModel(TensorModule):
             "context_size": self.context_size,
             "embedding_dim": self.embedding_dim,
             "hidden_dim": self.hidden_dim,
+            "num_heads": self.num_heads,
             "num_layers": self.num_layers,
             "embedding": self.embedding.state_dict(),
             "blocks": [
@@ -468,6 +593,8 @@ class CharTransformerModel(TensorModule):
             raise ValueError("state embedding_dim does not match CharTransformerModel")
         if state.get("hidden_dim") != self.hidden_dim:
             raise ValueError("state hidden_dim does not match CharTransformerModel")
+        if state.get("num_heads") != self.num_heads:
+            raise ValueError("state num_heads does not match CharTransformerModel")
         if state.get("num_layers") != self.num_layers:
             raise ValueError("state num_layers does not match CharTransformerModel")
         blocks = state.get("blocks")

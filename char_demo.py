@@ -30,6 +30,7 @@ DEFAULT_OPTIONS = {
     "context_size": 1,
     "embedding_dim": 16,
     "hidden_dim": None,
+    "heads": 1,
     "layers": 1,
     "epochs": 200,
     "batch_size": 8,
@@ -44,6 +45,7 @@ PRESETS = {
         "context_size": 4,
         "embedding_dim": 8,
         "hidden_dim": 16,
+        "heads": 1,
         "layers": 1,
         "epochs": 1,
         "batch_size": 4,
@@ -102,6 +104,7 @@ def run(args: argparse.Namespace) -> None:
         print(f"embedding dim: {args.embedding_dim}")
     if args.model == "transformer":
         print(f"hidden dim:    {args.hidden_dim or args.embedding_dim * 4}")
+        print(f"heads:         {args.heads}")
         print(f"layers:        {args.layers}")
         print("objective:     sequence")
     print(f"generation:    {args.sample_mode}")
@@ -264,6 +267,7 @@ def build_model(args: argparse.Namespace, *, vocab_size: int) -> TensorModule:
             context_size=args.context_size,
             embedding_dim=args.embedding_dim,
             hidden_dim=args.hidden_dim,
+            num_heads=args.heads,
             num_layers=args.layers,
             seed=args.seed,
         )
@@ -338,6 +342,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_OPTIONS["embedding_dim"],
     )
     parser.add_argument("--hidden-dim", type=int, default=DEFAULT_OPTIONS["hidden_dim"])
+    parser.add_argument("--heads", type=int, default=DEFAULT_OPTIONS["heads"])
     parser.add_argument("--layers", type=int, default=DEFAULT_OPTIONS["layers"])
     parser.add_argument("--epochs", type=int, default=DEFAULT_OPTIONS["epochs"])
     parser.add_argument("--batch-size", type=int, default=DEFAULT_OPTIONS["batch_size"])

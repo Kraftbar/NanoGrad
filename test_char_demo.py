@@ -45,6 +45,8 @@ class CharDemoTests(unittest.TestCase):
             "4",
             "--hidden-dim",
             "8",
+            "--heads",
+            "2",
             "--layers",
             "2",
             "--epochs",
@@ -76,6 +78,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.context_size, 2)
         self.assertEqual(args.embedding_dim, 4)
         self.assertEqual(args.hidden_dim, 8)
+        self.assertEqual(args.heads, 2)
         self.assertEqual(args.layers, 2)
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
@@ -97,6 +100,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.context_size, 4)
         self.assertEqual(args.embedding_dim, 8)
         self.assertEqual(args.hidden_dim, 16)
+        self.assertEqual(args.heads, 1)
         self.assertEqual(args.layers, 1)
         self.assertEqual(args.epochs, 1)
         self.assertEqual(args.batch_size, 4)
@@ -227,6 +231,8 @@ class CharDemoTests(unittest.TestCase):
             "4",
             "--hidden-dim",
             "8",
+            "--heads",
+            "2",
         ])
 
         bigram_dataset, bigram_vocab = build_dataset("abca", bigram_args)
@@ -606,6 +612,8 @@ class CharDemoTests(unittest.TestCase):
             "4",
             "--hidden-dim",
             "8",
+            "--heads",
+            "2",
             "--epochs",
             "1",
             "--batch-size",
@@ -627,6 +635,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("context size:  2", text)
         self.assertIn("embedding dim: 4", text)
         self.assertIn("hidden dim:    8", text)
+        self.assertIn("heads:         2", text)
         self.assertIn("layers:        1", text)
         self.assertIn("objective:     sequence", text)
         self.assertIn("generated:", text)

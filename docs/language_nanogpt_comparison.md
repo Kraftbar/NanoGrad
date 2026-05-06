@@ -16,7 +16,8 @@ This note compares NanoGrad's tiny character transformer path with the local
 
 ## Intentional Simplifications
 
-- Single attention head instead of fused multi-head QKV projection.
+- Separate per-head Q/K/V projections instead of nanoGPT's fused multi-head
+  projection.
 - ReLU feed-forward activation instead of GELU.
 - No dropout, optimizer scheduling, mixed precision, or GPU path.
 - Character-level vocabulary only.
@@ -29,6 +30,7 @@ This note compares NanoGrad's tiny character transformer path with the local
 - Transformer training uses per-position logits and shifted sequence targets,
   matching nanoGPT's next-token objective more closely than the earlier
   context-only classifier path.
+- Causal attention supports one or more heads through `num_heads`.
 - The tiny transformer preset runs a capped character demo quickly:
   `python3 char_demo.py --preset tiny-transformer`.
 - Sampled generation supports temperature and optional top-k filtering.
@@ -39,6 +41,5 @@ This note compares NanoGrad's tiny character transformer path with the local
 
 ## Next Gaps
 
-- Add multi-head attention once the single-head path is stable.
 - Compare top-k sampled output against the nanoGPT sampling path.
 - Compare training curves on the same capped Tiny Shakespeare slice.
