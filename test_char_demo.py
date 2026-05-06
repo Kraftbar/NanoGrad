@@ -6,8 +6,6 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from char_demo import (
-    CharBigramModel,
-    CharEmbeddingModel,
     _argmax,
     _sample_from_logits,
     build_dataset,
@@ -18,6 +16,7 @@ from char_demo import (
     run,
     text_source,
 )
+from language import CharBigramModel, CharEmbeddingModel
 from tensor import Tensor
 from text import CharVocab
 

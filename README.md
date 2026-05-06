@@ -126,7 +126,8 @@ mnist_cnn_demo.py # local-file MNIST CNN demo
 mnist_smoke_demo.py # no-download MNIST-style CNN smoke demo
 cifar_cnn_demo.py # local-file CIFAR-10 CNN demo
 text.py          # character text encoding and dataset helpers
-char_demo.py     # tiny character-level bigram demo
+language.py      # reusable small language model implementations
+char_demo.py     # tiny character-level language model demo
 ```
 
 ## Reference Implementations
