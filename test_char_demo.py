@@ -53,6 +53,8 @@ class CharDemoTests(unittest.TestCase):
             "2",
             "--layers",
             "2",
+            "--activation",
+            "gelu",
             "--epochs",
             "3",
             "--batch-size",
@@ -101,6 +103,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.hidden_dim, 8)
         self.assertEqual(args.heads, 2)
         self.assertEqual(args.layers, 2)
+        self.assertEqual(args.activation, "gelu")
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
@@ -132,6 +135,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.hidden_dim, 16)
         self.assertEqual(args.heads, 1)
         self.assertEqual(args.layers, 1)
+        self.assertEqual(args.activation, "relu")
         self.assertEqual(args.epochs, 1)
         self.assertEqual(args.batch_size, 4)
         self.assertEqual(args.lr, 0.05)
@@ -263,6 +267,8 @@ class CharDemoTests(unittest.TestCase):
             "8",
             "--heads",
             "2",
+            "--activation",
+            "gelu",
         ])
 
         bigram_dataset, bigram_vocab = build_dataset("abca", bigram_args)
@@ -284,10 +290,9 @@ class CharDemoTests(unittest.TestCase):
             build_model(embedding_args, vocab_size=3),
             CharEmbeddingModel,
         )
-        self.assertIsInstance(
-            build_model(transformer_args, vocab_size=3),
-            CharTransformerModel,
-        )
+        transformer_model = build_model(transformer_args, vocab_size=3)
+        self.assertIsInstance(transformer_model, CharTransformerModel)
+        self.assertEqual(transformer_model.feed_forward_activation, "gelu")
 
     def test_generation_input_mode(self) -> None:
         self.assertEqual(generation_input_mode("bigram"), "bigram")
@@ -834,6 +839,8 @@ class CharDemoTests(unittest.TestCase):
             "8",
             "--heads",
             "2",
+            "--activation",
+            "gelu",
             "--epochs",
             "1",
             "--batch-size",
@@ -857,6 +864,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("hidden dim:    8", text)
         self.assertIn("heads:         2", text)
         self.assertIn("layers:        1", text)
+        self.assertIn("activation:    gelu", text)
         self.assertIn("objective:     sequence", text)
         self.assertIn("generated:", text)
 

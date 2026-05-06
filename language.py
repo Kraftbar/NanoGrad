@@ -393,6 +393,7 @@ class TransformerBlock(TensorModule):
         *,
         hidden_dim: int | None = None,
         num_heads: int = 1,
+        feed_forward_activation: str = "relu",
         seed: int = 0,
     ) -> None:
         if embedding_dim <= 0:
@@ -403,11 +404,14 @@ class TransformerBlock(TensorModule):
             hidden_dim = embedding_dim * 4
         if hidden_dim <= 0:
             raise ValueError("hidden_dim must be positive")
+        if feed_forward_activation not in ("relu", "gelu"):
+            raise ValueError("feed_forward_activation must be 'relu' or 'gelu'")
 
         self.embedding_dim = embedding_dim
         self.context_size = context_size
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
+        self.feed_forward_activation = feed_forward_activation
         self.norm1 = TensorLayerNorm(embedding_dim)
         self.attention = CausalSelfAttention(
             embedding_dim,
@@ -441,7 +445,10 @@ class TransformerBlock(TensorModule):
         residual = inputs + attended
         normalized = self.norm2(residual)
         flat = normalized.reshape((batch_size * context_size, embedding_dim))
-        hidden = self.feed_forward_in(flat).relu()
+        hidden = _feed_forward_activation(
+            self.feed_forward_in(flat),
+            self.feed_forward_activation,
+        )
         update = self.feed_forward_out(hidden)
         update = update.reshape((batch_size, context_size, embedding_dim))
         return residual + update
@@ -461,6 +468,7 @@ class TransformerBlock(TensorModule):
             "context_size": self.context_size,
             "hidden_dim": self.hidden_dim,
             "num_heads": self.num_heads,
+            "feed_forward_activation": self.feed_forward_activation,
             "norm1": self.norm1.state_dict(),
             "attention": self.attention.state_dict(),
             "norm2": self.norm2.state_dict(),
@@ -477,6 +485,10 @@ class TransformerBlock(TensorModule):
             raise ValueError("state hidden_dim does not match TransformerBlock")
         if state.get("num_heads") != self.num_heads:
             raise ValueError("state num_heads does not match TransformerBlock")
+        if state.get("feed_forward_activation", "relu") != self.feed_forward_activation:
+            raise ValueError(
+                "state feed_forward_activation does not match TransformerBlock"
+            )
         self.norm1.load_state_dict(state["norm1"])
         self.attention.load_state_dict(state["attention"])
         self.norm2.load_state_dict(state["norm2"])
@@ -496,6 +508,7 @@ class CharTransformerModel(TensorModule):
         hidden_dim: int | None = None,
         num_heads: int = 1,
         num_layers: int = 1,
+        feed_forward_activation: str = "relu",
         seed: int = 0,
     ) -> None:
         if vocab_size <= 0:
@@ -510,6 +523,8 @@ class CharTransformerModel(TensorModule):
             raise ValueError("hidden_dim must be positive")
         if num_layers <= 0:
             raise ValueError("num_layers must be positive")
+        if feed_forward_activation not in ("relu", "gelu"):
+            raise ValueError("feed_forward_activation must be 'relu' or 'gelu'")
 
         self.vocab_size = vocab_size
         self.context_size = context_size
@@ -517,6 +532,7 @@ class CharTransformerModel(TensorModule):
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         self.num_layers = num_layers
+        self.feed_forward_activation = feed_forward_activation
         self.embedding = TokenPositionEmbedding(
             vocab_size,
             context_size,
@@ -529,6 +545,7 @@ class CharTransformerModel(TensorModule):
                 context_size,
                 hidden_dim=hidden_dim,
                 num_heads=num_heads,
+                feed_forward_activation=feed_forward_activation,
                 seed=seed + 2 + layer_index * 8,
             )
             for layer_index in range(num_layers)
@@ -575,6 +592,7 @@ class CharTransformerModel(TensorModule):
             "hidden_dim": self.hidden_dim,
             "num_heads": self.num_heads,
             "num_layers": self.num_layers,
+            "feed_forward_activation": self.feed_forward_activation,
             "embedding": self.embedding.state_dict(),
             "blocks": [
                 block.state_dict()
@@ -597,6 +615,10 @@ class CharTransformerModel(TensorModule):
             raise ValueError("state num_heads does not match CharTransformerModel")
         if state.get("num_layers") != self.num_layers:
             raise ValueError("state num_layers does not match CharTransformerModel")
+        if state.get("feed_forward_activation", "relu") != self.feed_forward_activation:
+            raise ValueError(
+                "state feed_forward_activation does not match CharTransformerModel"
+            )
         blocks = state.get("blocks")
         if not isinstance(blocks, list) or len(blocks) != len(self.blocks):
             raise ValueError("state blocks do not match CharTransformerModel")
@@ -641,3 +663,11 @@ def _last_time_step(sequence: Tensor) -> Tensor:
 
     out._backward = _backward
     return out
+
+
+def _feed_forward_activation(tensor: Tensor, activation: str) -> Tensor:
+    if activation == "relu":
+        return tensor.relu()
+    if activation == "gelu":
+        return tensor.gelu()
+    raise ValueError(f"unknown feed-forward activation: {activation}")

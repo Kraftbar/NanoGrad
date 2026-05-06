@@ -171,6 +171,9 @@ class Tensor:
     def relu(self) -> "Tensor":
         return tensor_relu(self)
 
+    def gelu(self) -> "Tensor":
+        return tensor_gelu(self)
+
     def sigmoid(self) -> "Tensor":
         return tensor_sigmoid(self)
 
@@ -1162,6 +1165,23 @@ def tensor_relu(tensor: Tensor) -> Tensor:
         lambda value: max(0.0, value),
         lambda value: 1.0 if value > 0 else 0.0,
         "relu",
+    )
+
+
+def tensor_gelu(tensor: Tensor) -> Tensor:
+    """Elementwise Gaussian error linear unit."""
+
+    sqrt_two = math.sqrt(2.0)
+    sqrt_two_pi = math.sqrt(2.0 * math.pi)
+
+    return _map(
+        tensor,
+        lambda value: 0.5 * value * (1.0 + math.erf(value / sqrt_two)),
+        lambda value: (
+            0.5 * (1.0 + math.erf(value / sqrt_two))
+            + value * math.exp(-0.5 * value * value) / sqrt_two_pi
+        ),
+        "gelu",
     )
 
 

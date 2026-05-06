@@ -518,6 +518,8 @@ def _apply_activation(tensor: Tensor, activation: str) -> Tensor:
         return tensor
     if activation == "relu":
         return tensor.relu()
+    if activation == "gelu":
+        return tensor.gelu()
     if activation == "sigmoid":
         return tensor.sigmoid()
     if activation == "tanh":

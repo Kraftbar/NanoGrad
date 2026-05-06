@@ -201,6 +201,26 @@ class LanguageModuleTests(unittest.TestCase):
         self.assertEqual(outputs.shape, inputs.shape)
         self.assertEqual(block.num_parameters(), 54)
 
+    def test_transformer_block_supports_gelu_activation(self) -> None:
+        block = TransformerBlock(
+            embedding_dim=2,
+            context_size=2,
+            hidden_dim=4,
+            feed_forward_activation="gelu",
+            seed=0,
+        )
+        inputs = Tensor.from_list([
+            [
+                [1.0, 0.0],
+                [0.0, 1.0],
+            ],
+        ])
+
+        outputs = block(inputs)
+
+        self.assertEqual(outputs.shape, inputs.shape)
+        self.assertEqual(block.state_dict()["feed_forward_activation"], "gelu")
+
     def test_transformer_block_does_not_use_future_tokens(self) -> None:
         block = TransformerBlock(
             embedding_dim=2,
@@ -283,6 +303,13 @@ class LanguageModuleTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             TransformerBlock(embedding_dim=1, context_size=1, hidden_dim=0)
 
+        with self.assertRaises(ValueError):
+            TransformerBlock(
+                embedding_dim=1,
+                context_size=1,
+                feed_forward_activation="unknown",
+            )
+
         block = TransformerBlock(embedding_dim=2, context_size=3, hidden_dim=4)
         with self.assertRaises(ValueError):
             block(Tensor.from_list([[1.0, 2.0]]))
@@ -320,6 +347,15 @@ class LanguageModuleTests(unittest.TestCase):
                 "context_size": 3,
                 "hidden_dim": 4,
                 "num_heads": 2,
+            })
+
+        with self.assertRaises(ValueError):
+            block.load_state_dict({
+                "embedding_dim": 2,
+                "context_size": 3,
+                "hidden_dim": 4,
+                "num_heads": 1,
+                "feed_forward_activation": "gelu",
             })
 
     def test_char_transformer_model_forward_shape(self) -> None:
@@ -386,6 +422,21 @@ class LanguageModuleTests(unittest.TestCase):
         self.assertEqual(logits.shape, (1, 2, 3))
         self.assertEqual(model.num_parameters(), 215)
 
+    def test_char_transformer_model_supports_gelu_activation(self) -> None:
+        model = CharTransformerModel(
+            vocab_size=3,
+            context_size=2,
+            embedding_dim=2,
+            hidden_dim=4,
+            feed_forward_activation="gelu",
+            seed=0,
+        )
+
+        logits = model.sequence_logits(Tensor.from_list([[0, 1]]))
+
+        self.assertEqual(logits.shape, (1, 2, 3))
+        self.assertEqual(model.state_dict()["feed_forward_activation"], "gelu")
+
     def test_char_transformer_model_state_dict_round_trip(self) -> None:
         model = CharTransformerModel(
             vocab_size=3,
@@ -431,6 +482,9 @@ class LanguageModuleTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             CharTransformerModel(2, num_layers=0)
+
+        with self.assertRaises(ValueError):
+            CharTransformerModel(2, feed_forward_activation="unknown")
 
         model = CharTransformerModel(
             vocab_size=3,
@@ -492,6 +546,17 @@ class LanguageModuleTests(unittest.TestCase):
                 "embedding_dim": 2,
                 "hidden_dim": 4,
                 "num_layers": 2,
+            })
+
+        with self.assertRaises(ValueError):
+            model.load_state_dict({
+                "vocab_size": 3,
+                "context_size": 2,
+                "embedding_dim": 2,
+                "hidden_dim": 4,
+                "num_heads": 1,
+                "num_layers": 1,
+                "feed_forward_activation": "gelu",
             })
 
 

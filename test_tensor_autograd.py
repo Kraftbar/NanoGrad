@@ -1,3 +1,4 @@
+import math
 import unittest
 
 from datasets import TinyDataset, TinySequenceDataset, and_gate, or_gate, xor_gate
@@ -756,6 +757,22 @@ class TensorAutogradTests(unittest.TestCase):
             return (x.tanh() * weights).sum()[0]
 
         self.assert_grad_close(x, loss_fn)
+
+    def test_gelu_gradient_matches_finite_difference(self) -> None:
+        x = Tensor.from_list([-1.0, 0.0, 1.0], requires_grad=True)
+        y = x.gelu()
+
+        expected = [
+            0.5 * value * (1.0 + math.erf(value / math.sqrt(2.0)))
+            for value in x.data
+        ]
+        for actual, expected_value in zip(y.data, expected):
+            self.assertAlmostEqual(actual, expected_value)
+
+        loss = y.sum()
+        loss.backward()
+
+        self.assert_grad_close(x, lambda: x.gelu().sum()[0])
 
     def test_softmax_gradient_matches_finite_difference(self) -> None:
         x = Tensor.from_list([
