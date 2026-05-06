@@ -34,6 +34,10 @@ This note compares NanoGrad's tiny character transformer path with the local
 - The tiny transformer preset runs a capped character demo quickly:
   `python3 char_demo.py --preset tiny-transformer`.
 - Sampled generation supports temperature and optional top-k filtering.
+- Character runs can report per-epoch train/validation metrics with
+  `--report-every` and `--validation-chars`.
+- Character checkpoints include the vocabulary metadata needed for safe
+  `--save-model` / `--load-model` round trips.
 - The same preset can run against local Tiny Shakespeare with an explicit seed:
   ```bash
   python3 char_demo.py --preset tiny-transformer --text-file data/tinyshakespeare/input.txt --seed-text Firs
@@ -42,4 +46,4 @@ This note compares NanoGrad's tiny character transformer path with the local
 ## Next Gaps
 
 - Compare top-k sampled output against the nanoGPT sampling path.
-- Compare training curves on the same capped Tiny Shakespeare slice.
+- Compare train/validation curves on the same capped Tiny Shakespeare slice.
