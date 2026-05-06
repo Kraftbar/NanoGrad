@@ -19,3 +19,9 @@ test_batch.bin
 ```
 
 Dataset binaries are ignored by git.
+
+Check local files without training:
+
+```bash
+python3 cifar_cnn_demo.py --check-data
+```
