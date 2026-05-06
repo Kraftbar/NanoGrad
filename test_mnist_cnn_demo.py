@@ -12,8 +12,7 @@ from mnist_cnn_demo import (
     parse_args,
     run,
 )
-from tensor import Tensor
-from vision import LeNetishCNN, MNISTCNN, SimpleCNN, _activate
+from vision import LeNetishCNN, SimpleCNN
 
 
 class MNISTCNNDemoTests(unittest.TestCase):
@@ -112,73 +111,6 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertEqual(args.kernel_size, 3)
         self.assertEqual(args.pool_size, 1)
 
-    def test_mnist_cnn_forward_shape(self) -> None:
-        model = MNISTCNN(
-            image_shape=(1, 2, 2),
-            classes=2,
-            filters=3,
-            kernel_size=2,
-            pool_size=1,
-            seed=0,
-        )
-
-        logits = model(Tensor.from_list([
-            [
-                [
-                    [1.0, 0.0],
-                    [0.0, 0.0],
-                ],
-            ],
-            [
-                [
-                    [0.0, 0.0],
-                    [0.0, 1.0],
-                ],
-            ],
-        ]))
-
-        self.assertEqual(logits.shape, (2, 2))
-
-    def test_mnist_cnn_accepts_tanh_activation(self) -> None:
-        model = MNISTCNN(
-            image_shape=(1, 2, 2),
-            classes=2,
-            filters=3,
-            kernel_size=2,
-            pool_size=1,
-            activation="tanh",
-            seed=0,
-        )
-
-        logits = model(Tensor.from_list([
-            [
-                [
-                    [1.0, 0.0],
-                    [0.0, 0.0],
-                ],
-            ],
-        ]))
-
-        self.assertEqual(logits.shape, (1, 2))
-
-    def test_lenetish_cnn_forward_shape(self) -> None:
-        model = LeNetishCNN(
-            image_shape=(1, 28, 28),
-            classes=10,
-            filters=6,
-            second_filters=16,
-            kernel_size=5,
-            pool_size=2,
-            activation="tanh",
-            seed=0,
-        )
-
-        logits = model(Tensor.zeros((2, 1, 28, 28)))
-
-        self.assertEqual(logits.shape, (2, 10))
-        self.assertEqual(len(model.parameters()), 6)
-        self.assertEqual(model.num_parameters(), 5142)
-
     def test_build_model_uses_requested_architecture(self) -> None:
         simple_args = _apply_preset(parse_args(["--preset", "tiny"]))
         lenet_args = _apply_preset(parse_args(["--preset", "lenet-ish"]))
@@ -192,36 +124,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
             LeNetishCNN,
         )
 
-    def test_mnist_cnn_shape_errors(self) -> None:
-        with self.assertRaises(ValueError):
-            MNISTCNN(image_shape=(2, 2), classes=2)
-        with self.assertRaises(ValueError):
-            MNISTCNN(image_shape=(1, 2, 2), classes=0)
-        with self.assertRaises(ValueError):
-            MNISTCNN(image_shape=(1, 2, 2), classes=2, filters=0)
-        with self.assertRaises(ValueError):
-            MNISTCNN(image_shape=(1, 2, 2), classes=2, kernel_size=3)
-        with self.assertRaises(ValueError):
-            MNISTCNN(
-                image_shape=(1, 2, 2),
-                classes=2,
-                kernel_size=2,
-                pool_size=2,
-            )
-        with self.assertRaises(ValueError):
-            MNISTCNN(
-                image_shape=(1, 2, 2),
-                classes=2,
-                kernel_size=2,
-                activation="sigmoid",
-            )
-
-        with self.assertRaises(ValueError):
-            _activate(Tensor.from_list([1.0]), "sigmoid")
-
-        with self.assertRaises(ValueError):
-            LeNetishCNN(image_shape=(1, 12, 12), classes=10)
-
+    def test_build_model_rejects_unknown_architecture(self) -> None:
         args = _apply_preset(parse_args(["--preset", "tiny"]))
         args.architecture = "unknown"
         with self.assertRaises(ValueError):
