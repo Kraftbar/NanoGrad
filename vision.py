@@ -106,8 +106,8 @@ class SimpleCNN(TensorModule):
 MNISTCNN = SimpleCNN
 
 
-class LeNetishCNN(TensorModule):
-    """Two-convolution MNIST CNN shaped after the early LeNet pattern."""
+class TwoConvCNN(TensorModule):
+    """Two-convolution channel-first CNN for small image experiments."""
 
     def __init__(
         self,
@@ -122,7 +122,7 @@ class LeNetishCNN(TensorModule):
         seed: int = 0,
     ) -> None:
         if len(image_shape) != 3:
-            raise ValueError("LeNetishCNN expects image_shape=(channels, rows, cols)")
+            raise ValueError("TwoConvCNN expects image_shape=(channels, rows, cols)")
         if classes <= 0:
             raise ValueError("classes must be positive")
         if filters <= 0 or second_filters <= 0:
@@ -182,6 +182,9 @@ class LeNetishCNN(TensorModule):
         self.conv1.load_state_dict(state["conv1"])
         self.conv2.load_state_dict(state["conv2"])
         self.classifier.load_state_dict(state["classifier"])
+
+
+LeNetishCNN = TwoConvCNN
 
 
 def _valid_conv_shape(rows: int, cols: int, kernel_size: int) -> tuple[int, int]:

@@ -14,7 +14,7 @@ from mnist_demo import (
 )
 from tensor_nn import TensorModule
 from train import train_tensor_multiclass_dataset
-from vision import CNN_PRESETS, LeNetishCNN, SimpleCNN
+from vision import CNN_PRESETS, SimpleCNN, TwoConvCNN
 
 
 def run(args: argparse.Namespace) -> None:
@@ -213,7 +213,7 @@ def build_model(
             seed=args.seed,
         )
     if args.architecture == "lenet-ish":
-        return LeNetishCNN(
+        return TwoConvCNN(
             image_shape=image_shape,
             classes=classes,
             filters=args.filters,

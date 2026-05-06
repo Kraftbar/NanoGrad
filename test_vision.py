@@ -1,12 +1,15 @@
 import unittest
 
 from tensor import Tensor
-from vision import LeNetishCNN, MNISTCNN, SimpleCNN, _activate
+from vision import LeNetishCNN, MNISTCNN, SimpleCNN, TwoConvCNN, _activate
 
 
 class VisionModelTests(unittest.TestCase):
     def test_mnist_cnn_alias_points_to_simple_cnn(self) -> None:
         self.assertIs(MNISTCNN, SimpleCNN)
+
+    def test_lenetish_cnn_alias_points_to_two_conv_cnn(self) -> None:
+        self.assertIs(LeNetishCNN, TwoConvCNN)
 
     def test_simple_cnn_forward_shape(self) -> None:
         model = SimpleCNN(
@@ -57,8 +60,8 @@ class VisionModelTests(unittest.TestCase):
 
         self.assertEqual(logits.shape, (1, 2))
 
-    def test_lenetish_cnn_forward_shape(self) -> None:
-        model = LeNetishCNN(
+    def test_two_conv_cnn_forward_shape(self) -> None:
+        model = TwoConvCNN(
             image_shape=(1, 28, 28),
             classes=10,
             filters=6,
@@ -99,9 +102,9 @@ class VisionModelTests(unittest.TestCase):
                 activation="sigmoid",
             )
 
-    def test_lenetish_cnn_shape_errors(self) -> None:
+    def test_two_conv_cnn_shape_errors(self) -> None:
         with self.assertRaises(ValueError):
-            LeNetishCNN(image_shape=(1, 12, 12), classes=10)
+            TwoConvCNN(image_shape=(1, 12, 12), classes=10)
 
     def test_activation_errors(self) -> None:
         with self.assertRaises(ValueError):

@@ -12,7 +12,7 @@ from mnist_cnn_demo import (
     parse_args,
     run,
 )
-from vision import LeNetishCNN, SimpleCNN
+from vision import SimpleCNN, TwoConvCNN
 
 
 class MNISTCNNDemoTests(unittest.TestCase):
@@ -121,7 +121,7 @@ class MNISTCNNDemoTests(unittest.TestCase):
         )
         self.assertIsInstance(
             build_model(lenet_args, image_shape=(1, 28, 28), classes=10),
-            LeNetishCNN,
+            TwoConvCNN,
         )
 
     def test_build_model_rejects_unknown_architecture(self) -> None:
