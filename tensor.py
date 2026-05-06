@@ -330,11 +330,14 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
         if shared != right.shape[0]:
             raise ValueError("matrix-vector inner dimensions must match")
 
+        left_data = left.data
+        right_data = right.data
         data = []
         for row in range(rows):
+            row_offset = row * shared
             total = 0.0
             for col in range(shared):
-                total += left[row, col] * right[col]
+                total += left_data[row_offset + col] * right_data[col]
             data.append(total)
         out = Tensor(
             data,
@@ -350,7 +353,7 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
                 _add_grad(
                     left,
                     [
-                        grad[row] * right[col]
+                        grad[row] * right_data[col]
                         for row in range(rows)
                         for col in range(shared)
                     ],
@@ -358,8 +361,9 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
             if right.requires_grad:
                 right_grad = [0.0] * shared
                 for row in range(rows):
+                    row_offset = row * shared
                     for col in range(shared):
-                        right_grad[col] += left[row, col] * grad[row]
+                        right_grad[col] += left_data[row_offset + col] * grad[row]
                 _add_grad(right, right_grad)
 
         out._backward = _backward
@@ -371,11 +375,13 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
         if shared != right_rows:
             raise ValueError("vector-matrix inner dimensions must match")
 
+        left_data = left.data
+        right_data = right.data
         data = []
         for col in range(cols):
             total = 0.0
             for inner in range(shared):
-                total += left[inner] * right[inner, col]
+                total += left_data[inner] * right_data[inner * cols + col]
             data.append(total)
         out = Tensor(
             data,
@@ -390,14 +396,15 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
             if left.requires_grad:
                 left_grad = [0.0] * shared
                 for inner in range(shared):
+                    right_offset = inner * cols
                     for col in range(cols):
-                        left_grad[inner] += grad[col] * right[inner, col]
+                        left_grad[inner] += grad[col] * right_data[right_offset + col]
                 _add_grad(left, left_grad)
             if right.requires_grad:
                 _add_grad(
                     right,
                     [
-                        left[inner] * grad[col]
+                        left_data[inner] * grad[col]
                         for inner in range(shared)
                         for col in range(cols)
                     ],
@@ -412,12 +419,18 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
         if shared != right_rows:
             raise ValueError("matrix-matrix inner dimensions must match")
 
+        left_data = left.data
+        right_data = right.data
         data = []
         for row in range(rows):
+            left_row_offset = row * shared
             for col in range(cols):
                 total = 0.0
                 for inner in range(shared):
-                    total += left[row, inner] * right[inner, col]
+                    total += (
+                        left_data[left_row_offset + inner]
+                        * right_data[inner * cols + col]
+                    )
                 data.append(total)
         out = Tensor(
             data,
@@ -432,20 +445,30 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
             if left.requires_grad:
                 left_grad = [0.0] * len(left.data)
                 for row in range(rows):
+                    left_row_offset = row * shared
+                    grad_row_offset = row * cols
                     for inner in range(shared):
                         total = 0.0
+                        right_row_offset = inner * cols
                         for col in range(cols):
-                            total += grad[row * cols + col] * right[inner, col]
-                        left_grad[row * shared + inner] += total
+                            total += (
+                                grad[grad_row_offset + col]
+                                * right_data[right_row_offset + col]
+                            )
+                        left_grad[left_row_offset + inner] += total
                 _add_grad(left, left_grad)
             if right.requires_grad:
                 right_grad = [0.0] * len(right.data)
                 for inner in range(shared):
+                    right_row_offset = inner * cols
                     for col in range(cols):
                         total = 0.0
                         for row in range(rows):
-                            total += left[row, inner] * grad[row * cols + col]
-                        right_grad[inner * cols + col] += total
+                            total += (
+                                left_data[row * shared + inner]
+                                * grad[row * cols + col]
+                            )
+                        right_grad[right_row_offset + col] += total
                 _add_grad(right, right_grad)
 
         out._backward = _backward
