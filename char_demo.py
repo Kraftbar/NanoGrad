@@ -7,7 +7,7 @@ import math
 import random
 from pathlib import Path
 
-from language import CharBigramModel, CharEmbeddingModel
+from language import CharBigramModel, CharEmbeddingModel, CharTransformerModel
 from tensor import Tensor
 from tensor_nn import TensorModule
 from text import CharVocab, next_char_dataset, next_char_index_dataset
@@ -36,7 +36,7 @@ def run(args: argparse.Namespace) -> None:
         seed_text=args.seed_text,
         length=args.generate,
         context_size=args.context_size,
-        input_mode=args.model,
+        input_mode=generation_input_mode(args.model),
         sample_mode=args.sample_mode,
         temperature=args.temperature,
         rng=random.Random(
@@ -53,8 +53,11 @@ def run(args: argparse.Namespace) -> None:
     print(f"vocab size:    {len(vocab)}")
     print(f"samples:       {len(dataset)}")
     print(f"context size:  {args.context_size}")
-    if args.model == "embedding":
+    if args.model in ("embedding", "transformer"):
         print(f"embedding dim: {args.embedding_dim}")
+    if args.model == "transformer":
+        print(f"hidden dim:    {args.hidden_dim or args.embedding_dim * 4}")
+        print(f"layers:        {args.layers}")
     print(f"generation:    {args.sample_mode}")
     if args.sample_mode == "sample":
         print(f"temperature:   {args.temperature}")
@@ -166,7 +169,7 @@ def build_dataset(
 ):
     if args.model == "bigram":
         return next_char_dataset(text, context_size=args.context_size)
-    if args.model == "embedding":
+    if args.model in ("embedding", "transformer"):
         return next_char_index_dataset(text, context_size=args.context_size)
     raise ValueError(f"unknown char model: {args.model}")
 
@@ -185,7 +188,24 @@ def build_model(args: argparse.Namespace, *, vocab_size: int) -> TensorModule:
             embedding_dim=args.embedding_dim,
             seed=args.seed,
         )
+    if args.model == "transformer":
+        return CharTransformerModel(
+            vocab_size,
+            context_size=args.context_size,
+            embedding_dim=args.embedding_dim,
+            hidden_dim=args.hidden_dim,
+            num_layers=args.layers,
+            seed=args.seed,
+        )
     raise ValueError(f"unknown char model: {args.model}")
+
+
+def generation_input_mode(model_name: str) -> str:
+    if model_name == "bigram":
+        return "bigram"
+    if model_name in ("embedding", "transformer"):
+        return "embedding"
+    raise ValueError(f"unknown char model: {model_name}")
 
 
 def _generation_inputs(
@@ -228,12 +248,18 @@ def text_source(args: argparse.Namespace) -> str:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=("bigram", "embedding"), default="bigram")
+    parser.add_argument(
+        "--model",
+        choices=("bigram", "embedding", "transformer"),
+        default="bigram",
+    )
     parser.add_argument("--text", default=DEFAULT_TEXT)
     parser.add_argument("--text-file", type=Path)
     parser.add_argument("--max-chars", type=int)
     parser.add_argument("--context-size", type=int, default=1)
     parser.add_argument("--embedding-dim", type=int, default=16)
+    parser.add_argument("--hidden-dim", type=int)
+    parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=0.2)

@@ -361,3 +361,114 @@ class TransformerBlock(TensorModule):
         self.norm2.load_state_dict(state["norm2"])
         self.feed_forward_in.load_state_dict(state["feed_forward_in"])
         self.feed_forward_out.load_state_dict(state["feed_forward_out"])
+
+
+class CharTransformerModel(TensorModule):
+    """Tiny causal transformer that predicts the next character after a context."""
+
+    def __init__(
+        self,
+        vocab_size: int,
+        *,
+        context_size: int = 4,
+        embedding_dim: int = 16,
+        hidden_dim: int | None = None,
+        num_layers: int = 1,
+        seed: int = 0,
+    ) -> None:
+        if vocab_size <= 0:
+            raise ValueError("vocab_size must be positive")
+        if context_size <= 0:
+            raise ValueError("context_size must be positive")
+        if embedding_dim <= 0:
+            raise ValueError("embedding_dim must be positive")
+        if hidden_dim is None:
+            hidden_dim = embedding_dim * 4
+        if hidden_dim <= 0:
+            raise ValueError("hidden_dim must be positive")
+        if num_layers <= 0:
+            raise ValueError("num_layers must be positive")
+
+        self.vocab_size = vocab_size
+        self.context_size = context_size
+        self.embedding_dim = embedding_dim
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.embedding = TokenPositionEmbedding(
+            vocab_size,
+            context_size,
+            embedding_dim,
+            seed=seed,
+        )
+        self.blocks = [
+            TransformerBlock(
+                embedding_dim,
+                context_size,
+                hidden_dim=hidden_dim,
+                seed=seed + 2 + layer_index * 8,
+            )
+            for layer_index in range(num_layers)
+        ]
+        self.norm = TensorLayerNorm(embedding_dim)
+        self.projection = TensorLinear(
+            embedding_dim * context_size,
+            vocab_size,
+            seed=seed + 2 + num_layers * 8,
+        )
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        hidden = self.embedding(inputs)
+        for block in self.blocks:
+            hidden = block(hidden)
+        hidden = self.norm(hidden)
+        return self.projection(hidden.flatten(start_axis=1))
+
+    def parameters(self) -> list[Tensor]:
+        block_parameters = [
+            parameter
+            for block in self.blocks
+            for parameter in block.parameters()
+        ]
+        return [
+            *self.embedding.parameters(),
+            *block_parameters,
+            *self.norm.parameters(),
+            *self.projection.parameters(),
+        ]
+
+    def state_dict(self) -> dict:
+        return {
+            "vocab_size": self.vocab_size,
+            "context_size": self.context_size,
+            "embedding_dim": self.embedding_dim,
+            "hidden_dim": self.hidden_dim,
+            "num_layers": self.num_layers,
+            "embedding": self.embedding.state_dict(),
+            "blocks": [
+                block.state_dict()
+                for block in self.blocks
+            ],
+            "norm": self.norm.state_dict(),
+            "projection": self.projection.state_dict(),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        if state.get("vocab_size") != self.vocab_size:
+            raise ValueError("state vocab_size does not match CharTransformerModel")
+        if state.get("context_size") != self.context_size:
+            raise ValueError("state context_size does not match CharTransformerModel")
+        if state.get("embedding_dim") != self.embedding_dim:
+            raise ValueError("state embedding_dim does not match CharTransformerModel")
+        if state.get("hidden_dim") != self.hidden_dim:
+            raise ValueError("state hidden_dim does not match CharTransformerModel")
+        if state.get("num_layers") != self.num_layers:
+            raise ValueError("state num_layers does not match CharTransformerModel")
+        blocks = state.get("blocks")
+        if not isinstance(blocks, list) or len(blocks) != len(self.blocks):
+            raise ValueError("state blocks do not match CharTransformerModel")
+
+        self.embedding.load_state_dict(state["embedding"])
+        for block, block_state in zip(self.blocks, blocks):
+            block.load_state_dict(block_state)
+        self.norm.load_state_dict(state["norm"])
+        self.projection.load_state_dict(state["projection"])

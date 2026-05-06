@@ -2,7 +2,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from language import CausalSelfAttention, TransformerBlock, _causal_attention_mask
+from language import (
+    CausalSelfAttention,
+    CharTransformerModel,
+    TransformerBlock,
+    _causal_attention_mask,
+)
 from tensor import Tensor
 
 
@@ -255,6 +260,116 @@ class LanguageModuleTests(unittest.TestCase):
                 "embedding_dim": 2,
                 "context_size": 3,
                 "hidden_dim": 8,
+            })
+
+    def test_char_transformer_model_forward_shape(self) -> None:
+        model = CharTransformerModel(
+            vocab_size=3,
+            context_size=2,
+            embedding_dim=2,
+            hidden_dim=4,
+            num_layers=1,
+            seed=0,
+        )
+
+        logits = model(Tensor.from_list([
+            [0, 1],
+            [1, 2],
+        ]))
+
+        self.assertEqual(logits.shape, (2, 3))
+        self.assertEqual(model.num_parameters(), 83)
+
+    def test_char_transformer_model_state_dict_round_trip(self) -> None:
+        model = CharTransformerModel(
+            vocab_size=3,
+            context_size=2,
+            embedding_dim=2,
+            hidden_dim=4,
+            num_layers=1,
+            seed=0,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "char-transformer.json"
+            model.save(path)
+            loaded = CharTransformerModel(
+                vocab_size=3,
+                context_size=2,
+                embedding_dim=2,
+                hidden_dim=4,
+                num_layers=1,
+                seed=1,
+            )
+            loaded.load(path)
+
+        self.assertEqual(loaded.state_dict(), model.state_dict())
+
+    def test_char_transformer_model_errors(self) -> None:
+        with self.assertRaises(ValueError):
+            CharTransformerModel(0)
+
+        with self.assertRaises(ValueError):
+            CharTransformerModel(2, context_size=0)
+
+        with self.assertRaises(ValueError):
+            CharTransformerModel(2, embedding_dim=0)
+
+        with self.assertRaises(ValueError):
+            CharTransformerModel(2, hidden_dim=0)
+
+        with self.assertRaises(ValueError):
+            CharTransformerModel(2, num_layers=0)
+
+        model = CharTransformerModel(
+            vocab_size=3,
+            context_size=2,
+            embedding_dim=2,
+            hidden_dim=4,
+            num_layers=1,
+        )
+        with self.assertRaises(ValueError):
+            model.load_state_dict({
+                "vocab_size": 4,
+                "context_size": 2,
+                "embedding_dim": 2,
+                "hidden_dim": 4,
+                "num_layers": 1,
+            })
+
+        with self.assertRaises(ValueError):
+            model.load_state_dict({
+                "vocab_size": 3,
+                "context_size": 3,
+                "embedding_dim": 2,
+                "hidden_dim": 4,
+                "num_layers": 1,
+            })
+
+        with self.assertRaises(ValueError):
+            model.load_state_dict({
+                "vocab_size": 3,
+                "context_size": 2,
+                "embedding_dim": 3,
+                "hidden_dim": 4,
+                "num_layers": 1,
+            })
+
+        with self.assertRaises(ValueError):
+            model.load_state_dict({
+                "vocab_size": 3,
+                "context_size": 2,
+                "embedding_dim": 2,
+                "hidden_dim": 8,
+                "num_layers": 1,
+            })
+
+        with self.assertRaises(ValueError):
+            model.load_state_dict({
+                "vocab_size": 3,
+                "context_size": 2,
+                "embedding_dim": 2,
+                "hidden_dim": 4,
+                "num_layers": 2,
             })
 
 

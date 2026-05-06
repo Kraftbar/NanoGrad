@@ -11,12 +11,18 @@ from char_demo import (
     build_dataset,
     build_model,
     generate_text,
+    generation_input_mode,
     load_text,
     parse_args,
     run,
     text_source,
 )
-from language import CharBigramModel, CharEmbeddingModel, TokenPositionEmbedding
+from language import (
+    CharBigramModel,
+    CharEmbeddingModel,
+    CharTransformerModel,
+    TokenPositionEmbedding,
+)
 from tensor import Tensor
 from text import CharVocab
 
@@ -36,6 +42,10 @@ class CharDemoTests(unittest.TestCase):
             "2",
             "--embedding-dim",
             "4",
+            "--hidden-dim",
+            "8",
+            "--layers",
+            "2",
             "--epochs",
             "3",
             "--batch-size",
@@ -62,6 +72,8 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.max_chars, 3)
         self.assertEqual(args.context_size, 2)
         self.assertEqual(args.embedding_dim, 4)
+        self.assertEqual(args.hidden_dim, 8)
+        self.assertEqual(args.layers, 2)
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
@@ -145,19 +157,47 @@ class CharDemoTests(unittest.TestCase):
     def test_build_dataset_and_model_use_requested_type(self) -> None:
         bigram_args = parse_args(["--model", "bigram", "--context-size", "2"])
         embedding_args = parse_args(["--model", "embedding", "--context-size", "2"])
+        transformer_args = parse_args([
+            "--model",
+            "transformer",
+            "--context-size",
+            "2",
+            "--embedding-dim",
+            "4",
+            "--hidden-dim",
+            "8",
+        ])
 
         bigram_dataset, bigram_vocab = build_dataset("abca", bigram_args)
         embedding_dataset, embedding_vocab = build_dataset("abca", embedding_args)
+        transformer_dataset, transformer_vocab = build_dataset(
+            "abca",
+            transformer_args,
+        )
 
         self.assertEqual(len(bigram_vocab), 3)
         self.assertEqual(len(embedding_vocab), 3)
+        self.assertEqual(len(transformer_vocab), 3)
         self.assertEqual(bigram_dataset.feature_shape, (6,))
         self.assertEqual(embedding_dataset.feature_shape, (2,))
+        self.assertEqual(transformer_dataset.feature_shape, (2,))
         self.assertIsInstance(build_model(bigram_args, vocab_size=3), CharBigramModel)
         self.assertIsInstance(
             build_model(embedding_args, vocab_size=3),
             CharEmbeddingModel,
         )
+        self.assertIsInstance(
+            build_model(transformer_args, vocab_size=3),
+            CharTransformerModel,
+        )
+
+    def test_generation_input_mode(self) -> None:
+        self.assertEqual(generation_input_mode("bigram"), "bigram")
+        self.assertEqual(generation_input_mode("embedding"), "embedding")
+        self.assertEqual(generation_input_mode("transformer"), "embedding")
+
+        with self.assertRaises(ValueError):
+            generation_input_mode("unknown")
 
     def test_generate_text_uses_argmax_predictions(self) -> None:
         vocab = CharVocab.from_text("ab")
@@ -470,6 +510,42 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("embedding dim: 4", text)
         self.assertIn("generation:    sample", text)
         self.assertIn("temperature:   0.9", text)
+        self.assertIn("generated:", text)
+
+    def test_run_trains_transformer_model_on_tiny_text(self) -> None:
+        args = parse_args([
+            "--model",
+            "transformer",
+            "--text",
+            "abababab",
+            "--context-size",
+            "2",
+            "--embedding-dim",
+            "4",
+            "--hidden-dim",
+            "8",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "2",
+            "--lr",
+            "0.1",
+            "--seed-text",
+            "ab",
+            "--generate",
+            "2",
+        ])
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            run(args)
+
+        text = output.getvalue()
+        self.assertIn("model:         transformer", text)
+        self.assertIn("context size:  2", text)
+        self.assertIn("embedding dim: 4", text)
+        self.assertIn("hidden dim:    8", text)
+        self.assertIn("layers:        1", text)
         self.assertIn("generated:", text)
 
 

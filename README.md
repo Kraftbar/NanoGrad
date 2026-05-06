@@ -66,7 +66,7 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Explore a small AlexNet-inspired CIFAR model after convolution basics work
 - [x] Train a tiny character-level language model
 - [x] Add Tiny Shakespeare as the first language dataset
-- [ ] Add transformer/GPT-style components later
+- [x] Add transformer/GPT-style components later
 - [ ] Compare tiny language-model structure and behavior against nanoGPT
 - [ ] Explore camera geometry and pose estimation
 - [ ] Keep ORB-SLAM3 and DROID-SLAM as distant reference points
