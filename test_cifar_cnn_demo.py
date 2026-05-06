@@ -29,6 +29,8 @@ class CIFARCnnDemoTests(unittest.TestCase):
             "1",
             "--lr",
             "0.1",
+            "--normalize",
+            "train",
             "--architecture",
             "two-conv",
             "--activation",
@@ -59,6 +61,7 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertEqual(args.epochs, 2)
         self.assertEqual(args.batch_size, 1)
         self.assertEqual(args.lr, 0.1)
+        self.assertEqual(args.normalize, "train")
         self.assertEqual(args.architecture, "two-conv")
         self.assertEqual(args.activation, "tanh")
         self.assertEqual(args.filters, 2)
@@ -143,6 +146,30 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertIn("train shape:   (3, 32, 32)", text)
         self.assertIn("test samples: 1", text)
 
+    def test_run_check_data_with_train_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            _write_cifar10_batch(data_dir / "data_batch_1.bin", labels=[0, 1])
+            args = parse_args([
+                "--data-dir",
+                str(data_dir),
+                "--limit",
+                "2",
+                "--normalize",
+                "train",
+                "--check-data",
+            ])
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                run(args)
+
+        text = output.getvalue()
+        self.assertIn("normalize:     train", text)
+        self.assertIn("channel mean:", text)
+        self.assertIn("channel std:", text)
+        self.assertIn("test:          not found", text)
+
     def test_run_trains_on_tiny_binary_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             data_dir = Path(tmpdir)
@@ -159,6 +186,8 @@ class CIFARCnnDemoTests(unittest.TestCase):
                 "1",
                 "--batch-size",
                 "1",
+                "--normalize",
+                "train",
                 "--filters",
                 "1",
                 "--kernel-size",
@@ -177,6 +206,8 @@ class CIFARCnnDemoTests(unittest.TestCase):
         self.assertIn("samples:      2", text)
         self.assertIn("input shape:  (3, 32, 32)", text)
         self.assertIn("classes:      10", text)
+        self.assertIn("normalize:    train", text)
+        self.assertIn("channel mean:", text)
         self.assertIn("parameters:", text)
         self.assertIn("train loss:", text)
         self.assertIn("val loss:", text)

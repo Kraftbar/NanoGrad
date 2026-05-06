@@ -6,9 +6,11 @@ from pathlib import Path
 
 from datasets import (
     TinyDataset,
+    channel_first_stats,
     load_cifar10_batches,
     load_mnist,
     make_batches,
+    normalize_channel_first,
     read_cifar10_batch,
     read_cifar10_batches,
     read_mnist_images,
@@ -125,6 +127,69 @@ class DatasetTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             list(make_batches([[1]], [0], batch_size=0))
+
+    def test_channel_first_stats_and_normalization(self) -> None:
+        dataset = TinyDataset(
+            xs=[
+                [
+                    [
+                        [1, 3],
+                        [5, 7],
+                    ],
+                    [
+                        [2, 4],
+                        [6, 8],
+                    ],
+                ],
+                [
+                    [
+                        [9, 11],
+                        [13, 15],
+                    ],
+                    [
+                        [10, 12],
+                        [14, 16],
+                    ],
+                ],
+            ],
+            ys=[0, 1],
+        )
+
+        means, stds = channel_first_stats(dataset)
+        normalized = normalize_channel_first(dataset, means, stds)
+        normalized_means, normalized_stds = channel_first_stats(normalized)
+
+        self.assertEqual(means, [8.0, 9.0])
+        self.assertAlmostEqual(stds[0], 21.0 ** 0.5)
+        self.assertAlmostEqual(stds[1], 21.0 ** 0.5)
+        self.assertAlmostEqual(normalized[0][0][0][0][0], -7.0 / (21.0 ** 0.5))
+        self.assertEqual(normalized.ys, [0.0, 1.0])
+        for mean in normalized_means:
+            self.assertAlmostEqual(mean, 0.0)
+        for std in normalized_stds:
+            self.assertAlmostEqual(std, 1.0)
+
+    def test_channel_first_normalization_errors(self) -> None:
+        dataset = TinyDataset(xs=[[1, 2]], ys=[0])
+        image_dataset = TinyDataset(
+            xs=[
+                [
+                    [
+                        [1, 2],
+                    ],
+                ],
+            ],
+            ys=[0],
+        )
+
+        with self.assertRaises(ValueError):
+            channel_first_stats(dataset)
+
+        with self.assertRaises(ValueError):
+            normalize_channel_first(image_dataset, means=[0, 0], stds=[1, 1])
+
+        with self.assertRaises(ValueError):
+            normalize_channel_first(image_dataset, means=[0], stds=[-1])
 
     def test_load_mnist_from_local_idx_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

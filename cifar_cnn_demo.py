@@ -5,7 +5,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from datasets import load_cifar10_batches
+from datasets import (
+    channel_first_stats,
+    load_cifar10_batches,
+    normalize_channel_first,
+)
 from mnist_demo import print_confusion_matrix, print_epoch_report
 from train import train_tensor_multiclass_dataset
 from vision import SimpleCNN, TwoConvCNN
@@ -33,6 +37,15 @@ def run(args: argparse.Namespace) -> None:
         if test_path is None
         else load_cifar10_batches([test_path], limit=args.validation_limit)
     )
+    normalization_stats = None
+    if args.normalize == "train":
+        normalization_stats = channel_first_stats(dataset)
+        dataset = normalize_channel_first(dataset, *normalization_stats)
+        if validation_dataset is not None:
+            validation_dataset = normalize_channel_first(
+                validation_dataset,
+                *normalization_stats,
+            )
 
     if args.check_data:
         print_data_check(
@@ -40,6 +53,8 @@ def run(args: argparse.Namespace) -> None:
             train_paths,
             validation_dataset=validation_dataset,
             test_path=test_path,
+            normalization=args.normalize,
+            normalization_stats=normalization_stats,
         )
         return
 
@@ -77,6 +92,9 @@ def run(args: argparse.Namespace) -> None:
     print(f"samples:      {len(dataset)}")
     print(f"input shape:  {dataset.feature_shape}")
     print(f"classes:      {CIFAR10_CLASSES}")
+    print(f"normalize:    {args.normalize}")
+    if normalization_stats is not None:
+        print_channel_stats(normalization_stats)
     print(f"architecture: {args.architecture}")
     print(f"activation:   {args.activation}")
     print(f"filters:      {args.filters}")
@@ -114,11 +132,16 @@ def print_data_check(
     *,
     validation_dataset=None,
     test_path: Path | None = None,
+    normalization: str = "none",
+    normalization_stats: tuple[list[float], list[float]] | None = None,
 ) -> None:
     """Print local CIFAR-10 file and shape information without training."""
 
     print("CIFAR-10 data check")
     print(f"train batches: {len(train_paths)}")
+    print(f"normalize:     {normalization}")
+    if normalization_stats is not None:
+        print_channel_stats(normalization_stats)
     print_dataset_summary("train", dataset)
 
     if validation_dataset is None or test_path is None:
@@ -134,6 +157,14 @@ def print_dataset_summary(name: str, dataset) -> None:
     print(f"{name} samples: {len(dataset)}")
     print(f"{name} shape:   {dataset.feature_shape}")
     print(f"{name} labels:  {labels}")
+
+
+def print_channel_stats(stats: tuple[list[float], list[float]]) -> None:
+    means, stds = stats
+    mean_text = ", ".join(f"{value:.4f}" for value in means)
+    std_text = ", ".join(f"{value:.4f}" for value in stds)
+    print(f"channel mean: [{mean_text}]")
+    print(f"channel std:  [{std_text}]")
 
 
 def build_model(
@@ -212,6 +243,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=0.05)
+    parser.add_argument(
+        "--normalize",
+        choices=("none", "train"),
+        default="none",
+        help="Normalize channel-first images with stats from the training split.",
+    )
     parser.add_argument(
         "--architecture",
         choices=("simple", "two-conv"),

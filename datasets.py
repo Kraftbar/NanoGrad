@@ -92,6 +92,60 @@ def make_batches(
     )
 
 
+def channel_first_stats(dataset: TinyDataset) -> tuple[list[float], list[float]]:
+    """Return per-channel mean and std for channel-first image samples."""
+
+    channels, rows, cols = _require_channel_first_images(dataset)
+    sums = [0.0 for _ in range(channels)]
+    squared_sums = [0.0 for _ in range(channels)]
+    count = len(dataset) * rows * cols
+
+    for sample in dataset.xs:
+        for channel_index, channel in enumerate(sample):
+            for row in channel:
+                for value in row:
+                    sums[channel_index] += value
+                    squared_sums[channel_index] += value * value
+
+    means = [total / count for total in sums]
+    stds = []
+    for mean, squared_sum in zip(means, squared_sums):
+        variance = max((squared_sum / count) - (mean * mean), 0.0)
+        stds.append(variance ** 0.5)
+    return means, stds
+
+
+def normalize_channel_first(
+    dataset: TinyDataset,
+    means: Sequence[float],
+    stds: Sequence[float],
+    *,
+    eps: float = 1e-12,
+) -> TinyDataset:
+    """Return a channel-first image dataset normalized by per-channel stats."""
+
+    channels, _, _ = _require_channel_first_images(dataset)
+    if len(means) != channels or len(stds) != channels:
+        raise ValueError("normalization stats must match the channel count")
+    if any(std < 0.0 for std in stds):
+        raise ValueError("normalization stds must be non-negative")
+
+    xs = [
+        [
+            [
+                [
+                    (value - means[channel_index]) / max(stds[channel_index], eps)
+                    for value in row
+                ]
+                for row in channel
+            ]
+            for channel_index, channel in enumerate(sample)
+        ]
+        for sample in dataset.xs
+    ]
+    return TinyDataset(xs, dataset.ys)
+
+
 def _feature_shape(feature) -> tuple[int, ...]:
     if not _is_sequence(feature):
         raise ValueError("feature samples must be non-empty sequences")
@@ -122,6 +176,13 @@ def _copy_feature(feature):
 
 def _is_sequence(value) -> bool:
     return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+
+
+def _require_channel_first_images(dataset: TinyDataset) -> tuple[int, int, int]:
+    if len(dataset.feature_shape) != 3:
+        raise ValueError("dataset must have channel-first image features")
+    channels, rows, cols = dataset.feature_shape
+    return channels, rows, cols
 
 
 def load_mnist(
