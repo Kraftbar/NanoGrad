@@ -63,7 +63,7 @@ modules should prove that the core works on increasingly realistic checks.
 
 ### Later Branches
 
-- [ ] Explore a small AlexNet-inspired CIFAR model after convolution basics work
+- [x] Explore a small AlexNet-inspired CIFAR model after convolution basics work
 - [ ] Train a tiny character-level language model
 - [ ] Add Tiny Shakespeare as the first language dataset
 - [ ] Add transformer/GPT-style components later
