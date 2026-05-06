@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import random
 import sys
@@ -24,6 +25,7 @@ from train import (
 
 
 DEFAULT_TEXT = "hello nanograd\nhello tiny models\n"
+CHECKPOINT_FORMAT = "nanollm.char_demo.v1"
 DEFAULT_OPTIONS = {
     "model": "bigram",
     "max_chars": None,
@@ -61,7 +63,12 @@ def run(args: argparse.Namespace) -> None:
     dataset, vocab = build_dataset(text, args)
     model = build_model(args, vocab_size=len(vocab))
     if args.load_model is not None:
-        model.load(args.load_model)
+        load_checkpoint(
+            args.load_model,
+            model,
+            vocab,
+            model_name=args.model,
+        )
 
     train_fn = (
         train_tensor_sequence_multiclass_dataset
@@ -127,8 +134,53 @@ def run(args: argparse.Namespace) -> None:
         print(f"{rate_label}:     {summary.examples_per_second:.1f}")
     print(f"generated:     {generated!r}")
     if args.save_model is not None:
-        model.save(args.save_model)
+        save_checkpoint(
+            args.save_model,
+            model,
+            vocab,
+            model_name=args.model,
+        )
         print(f"saved model:   {args.save_model}")
+
+
+def save_checkpoint(
+    path: str | Path,
+    model: TensorModule,
+    vocab: CharVocab,
+    *,
+    model_name: str,
+) -> None:
+    """Save model state plus the vocabulary needed to interpret logits."""
+
+    payload = {
+        "format": CHECKPOINT_FORMAT,
+        "model": model_name,
+        "vocab": vocab.itos,
+        "state": model.state_dict(),
+    }
+    Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def load_checkpoint(
+    path: str | Path,
+    model: TensorModule,
+    vocab: CharVocab,
+    *,
+    model_name: str,
+) -> None:
+    """Load a char-demo checkpoint, accepting older raw state files."""
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if "format" not in payload:
+        model.load_state_dict(payload)
+        return
+    if payload.get("format") != CHECKPOINT_FORMAT:
+        raise ValueError("unsupported char checkpoint format")
+    if payload.get("model") != model_name:
+        raise ValueError("checkpoint model does not match requested char model")
+    if payload.get("vocab") != vocab.itos:
+        raise ValueError("checkpoint vocabulary does not match text vocabulary")
+    model.load_state_dict(payload["state"])
 
 
 def generate_text(

@@ -1,4 +1,5 @@
 import io
+import json
 import random
 import tempfile
 import unittest
@@ -13,9 +14,11 @@ from char_demo import (
     build_model,
     generate_text,
     generation_input_mode,
+    load_checkpoint,
     load_text,
     parse_args,
     run,
+    save_checkpoint,
     text_source,
 )
 from language import (
@@ -583,7 +586,39 @@ class CharDemoTests(unittest.TestCase):
 
             self.assertTrue(save_path.exists())
             self.assertTrue(reload_path.exists())
+            payload = json.loads(save_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["format"], "nanollm.char_demo.v1")
+            self.assertEqual(payload["model"], "bigram")
+            self.assertEqual(payload["vocab"], ["a", "b"])
             self.assertIn("saved model:", output.getvalue())
+
+    def test_checkpoint_rejects_wrong_vocabulary(self) -> None:
+        vocab = CharVocab.from_text("ab")
+        model = CharBigramModel(len(vocab), seed=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "char-model.json"
+            save_checkpoint(path, model, vocab, model_name="bigram")
+
+            target_vocab = CharVocab.from_text("cd")
+            target = CharBigramModel(len(target_vocab), seed=1)
+            with self.assertRaises(ValueError):
+                load_checkpoint(
+                    path,
+                    target,
+                    target_vocab,
+                    model_name="bigram",
+                )
+
+    def test_checkpoint_loads_raw_model_state(self) -> None:
+        vocab = CharVocab.from_text("ab")
+        model = CharBigramModel(len(vocab), seed=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "char-model-raw.json"
+            model.save(path)
+            target = CharBigramModel(len(vocab), seed=1)
+            load_checkpoint(path, target, vocab, model_name="bigram")
+
+        self.assertEqual(target.state_dict(), model.state_dict())
 
     def test_run_trains_on_text_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
