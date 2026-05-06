@@ -153,6 +153,7 @@ python3 -m unittest discover
 python3 demo.py
 python3 tensor_demo.py
 python3 mnist_smoke_demo.py
+python3 char_demo.py --preset tiny-transformer
 ```
 
 Use the test suite as the main correctness check. The demos are small examples
