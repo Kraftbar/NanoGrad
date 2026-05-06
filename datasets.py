@@ -75,6 +75,67 @@ class TinyDataset:
             )
 
 
+class TinySequenceDataset:
+    """Small in-memory dataset with sequence-shaped targets."""
+
+    def __init__(self, xs: list, ys: list) -> None:
+        if not xs:
+            raise ValueError("dataset must not be empty")
+        if len(xs) != len(ys):
+            raise ValueError("features and targets must have the same length")
+
+        self.feature_shape = _feature_shape(xs[0])
+        self.target_shape = _feature_shape(ys[0])
+        if any(_feature_shape(sample) != self.feature_shape for sample in xs):
+            raise ValueError("feature samples must have the same shape")
+        if any(_feature_shape(target) != self.target_shape for target in ys):
+            raise ValueError("target samples must have the same shape")
+
+        self.xs = [
+            _copy_feature(sample)
+            for sample in xs
+        ]
+        self.ys = [
+            _copy_feature(target)
+            for target in ys
+        ]
+
+    def __len__(self) -> int:
+        return len(self.ys)
+
+    def __getitem__(self, index: int):
+        return _copy_feature(self.xs[index]), _copy_feature(self.ys[index])
+
+    def batches(
+        self,
+        batch_size: int,
+        *,
+        shuffle: bool = False,
+        seed: int | None = None,
+    ):
+        """Yield feature and sequence-target batches."""
+
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+
+        indices = list(range(len(self)))
+        if shuffle:
+            random.Random(seed).shuffle(indices)
+
+        for start in range(0, len(indices), batch_size):
+            batch_indices = indices[start : start + batch_size]
+            yield (
+                [
+                    _copy_feature(self.xs[index])
+                    for index in batch_indices
+                ],
+                [
+                    _copy_feature(self.ys[index])
+                    for index in batch_indices
+                ],
+            )
+
+
 def make_batches(
     xs: list,
     ys: list[float],

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from datasets import (
     TinyDataset,
+    TinySequenceDataset,
     channel_first_stats,
     load_cifar10_batches,
     load_mnist,
@@ -86,6 +87,31 @@ class DatasetTests(unittest.TestCase):
             [0.0, 1.0],
         )
 
+    def test_tiny_sequence_dataset_preserves_sequence_targets(self) -> None:
+        dataset = TinySequenceDataset(
+            xs=[
+                [0, 1],
+                [1, 2],
+            ],
+            ys=[
+                [1, 2],
+                [2, 0],
+            ],
+        )
+
+        x, y = dataset[0]
+        x[0] = 99
+        y[0] = 88
+        batch_xs, batch_ys = next(dataset.batches(batch_size=2))
+        batch_ys[0][0] = 77
+
+        self.assertEqual(len(dataset), 2)
+        self.assertEqual(dataset.feature_shape, (2,))
+        self.assertEqual(dataset.target_shape, (2,))
+        self.assertEqual(dataset[0], ([0.0, 1.0], [1.0, 2.0]))
+        self.assertEqual(batch_xs, [[0.0, 1.0], [1.0, 2.0]])
+        self.assertEqual(dataset[0], ([0.0, 1.0], [1.0, 2.0]))
+
     def test_batches_preserve_order_and_keep_remainder(self) -> None:
         xs, ys = tiny_2d_clusters()
         batches = list(make_batches(xs, ys, batch_size=4))
@@ -127,6 +153,21 @@ class DatasetTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             list(make_batches([[1]], [0], batch_size=0))
+
+        with self.assertRaises(ValueError):
+            TinySequenceDataset([], [])
+
+        with self.assertRaises(ValueError):
+            TinySequenceDataset([[1]], [[1], [2]])
+
+        with self.assertRaises(ValueError):
+            TinySequenceDataset([[1], [1, 2]], [[1], [2]])
+
+        with self.assertRaises(ValueError):
+            TinySequenceDataset([[1], [2]], [[1], [1, 2]])
+
+        with self.assertRaises(ValueError):
+            list(TinySequenceDataset([[1]], [[1]]).batches(batch_size=0))
 
     def test_channel_first_stats_and_normalization(self) -> None:
         dataset = TinyDataset(

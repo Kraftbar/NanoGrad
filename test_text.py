@@ -1,6 +1,11 @@
 import unittest
 
-from text import CharVocab, next_char_dataset, next_char_index_dataset
+from text import (
+    CharVocab,
+    next_char_dataset,
+    next_char_index_dataset,
+    next_char_sequence_dataset,
+)
 
 
 class TextHelperTests(unittest.TestCase):
@@ -52,6 +57,16 @@ class TextHelperTests(unittest.TestCase):
         self.assertEqual(dataset[0], ([0.0, 1.0], 2.0))
         self.assertEqual(dataset[1], ([1.0, 2.0], 0.0))
 
+    def test_next_char_sequence_dataset_uses_shifted_targets(self) -> None:
+        dataset, vocab = next_char_sequence_dataset("abcd", context_size=2)
+
+        self.assertEqual(vocab.itos, ["a", "b", "c", "d"])
+        self.assertEqual(len(dataset), 2)
+        self.assertEqual(dataset.feature_shape, (2,))
+        self.assertEqual(dataset.target_shape, (2,))
+        self.assertEqual(dataset[0], ([0.0, 1.0], [1.0, 2.0]))
+        self.assertEqual(dataset[1], ([1.0, 2.0], [2.0, 3.0]))
+
     def test_next_char_dataset_can_reuse_vocab(self) -> None:
         vocab = CharVocab.from_text("abcd")
         dataset, returned_vocab = next_char_dataset("cda", vocab=vocab)
@@ -89,6 +104,12 @@ class TextHelperTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             next_char_index_dataset("ab", context_size=2)
+
+        with self.assertRaises(ValueError):
+            next_char_sequence_dataset("ab", context_size=0)
+
+        with self.assertRaises(ValueError):
+            next_char_sequence_dataset("ab", context_size=2)
 
 
 if __name__ == "__main__":

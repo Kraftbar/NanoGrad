@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from datasets import TinyDataset
+from datasets import TinyDataset, TinySequenceDataset
 
 
 class CharVocab:
@@ -105,6 +105,36 @@ def next_char_index_dataset(
         ys.append(float(encoded[start + context_size]))
 
     return TinyDataset(xs, ys), vocab
+
+
+def next_char_sequence_dataset(
+    text: str,
+    *,
+    vocab: CharVocab | None = None,
+    context_size: int = 1,
+) -> tuple[TinySequenceDataset, CharVocab]:
+    """Build context -> shifted next-character id sequence samples."""
+
+    if context_size <= 0:
+        raise ValueError("context_size must be positive")
+    if len(text) <= context_size:
+        raise ValueError("text must be longer than context_size")
+
+    vocab = vocab or CharVocab.from_text(text)
+    encoded = vocab.encode(text)
+    xs = []
+    ys = []
+    for start in range(len(encoded) - context_size):
+        xs.append([
+            float(index)
+            for index in encoded[start : start + context_size]
+        ])
+        ys.append([
+            float(index)
+            for index in encoded[start + 1 : start + context_size + 1]
+        ])
+
+    return TinySequenceDataset(xs, ys), vocab
 
 
 def _flatten_one_hot_context(context: list[int], vocab: CharVocab) -> list[float]:

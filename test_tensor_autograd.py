@@ -1,6 +1,6 @@
 import unittest
 
-from datasets import TinyDataset, and_gate, or_gate, xor_gate
+from datasets import TinyDataset, TinySequenceDataset, and_gate, or_gate, xor_gate
 from tensor import (
     Tensor,
     avg_pool2d,
@@ -13,9 +13,11 @@ from tensor import (
 from tensor_nn import TensorLinear, TensorMLP
 from train import (
     evaluate_tensor_multiclass_dataset,
+    evaluate_tensor_sequence_multiclass_dataset,
     train_tensor_binary_classifier,
     train_tensor_multiclass_classifier,
     train_tensor_multiclass_dataset,
+    train_tensor_sequence_multiclass_dataset,
 )
 
 
@@ -1034,12 +1036,148 @@ class TensorAutogradTests(unittest.TestCase):
                 epochs=0,
             )
 
+    def test_tensor_sequence_multiclass_dataset_training_uses_batches(self) -> None:
+        dataset = TinySequenceDataset(
+            xs=[
+                [[1.0, 0.0], [0.0, 1.0]],
+                [[1.0, 0.0], [1.0, 0.0]],
+                [[0.0, 1.0], [0.0, 1.0]],
+                [[0.0, 1.0], [1.0, 0.0]],
+            ],
+            ys=[
+                [0, 1],
+                [0, 0],
+                [1, 1],
+                [1, 0],
+            ],
+        )
+        validation_dataset = TinySequenceDataset(
+            xs=[
+                [[1.0, 0.0], [0.0, 1.0]],
+                [[0.0, 1.0], [1.0, 0.0]],
+            ],
+            ys=[
+                [0, 1],
+                [1, 0],
+            ],
+        )
+        model = _PositionWiseLinear(
+            inputs=2,
+            outputs=2,
+            weight=Tensor.zeros((2, 2), requires_grad=True),
+            bias=Tensor.zeros((2,), requires_grad=True),
+        )
+
+        summary = train_tensor_sequence_multiclass_dataset(
+            model,
+            dataset,
+            validation_dataset=validation_dataset,
+            epochs=100,
+            batch_size=2,
+            lr=0.2,
+            shuffle=True,
+            seed=0,
+        )
+
+        self.assertLess(summary.final_loss, summary.initial_loss)
+        self.assertEqual(summary.accuracy, 1.0)
+        self.assertEqual(summary.validation_accuracy, 1.0)
+        self.assertIsNotNone(summary.evaluation_loss)
+        self.assertIsNotNone(summary.validation_loss)
+        self.assertEqual(summary.examples_seen, len(dataset) * 2 * 100)
+        self.assertEqual(
+            summary.confusion_matrix,
+            [
+                [4, 0],
+                [0, 4],
+            ],
+        )
+
+    def test_tensor_sequence_multiclass_dataset_evaluation_uses_batches(self) -> None:
+        dataset = TinySequenceDataset(
+            xs=[
+                [[1.0, 0.0], [0.0, 1.0]],
+                [[0.0, 1.0], [1.0, 0.0]],
+            ],
+            ys=[
+                [0, 1],
+                [1, 0],
+            ],
+        )
+        model = _PositionWiseLinear(
+            inputs=2,
+            outputs=2,
+            weight=Tensor.from_list(
+                [
+                    [2.0, 0.0],
+                    [0.0, 2.0],
+                ],
+            ),
+            bias=Tensor.zeros((2,)),
+        )
+
+        summary = evaluate_tensor_sequence_multiclass_dataset(
+            model,
+            dataset,
+            batch_size=1,
+        )
+
+        self.assertGreater(summary.loss, 0.0)
+        self.assertEqual(summary.accuracy, 1.0)
+        self.assertEqual(summary.examples_seen, 4)
+        self.assertEqual(
+            summary.confusion_matrix,
+            [
+                [2, 0],
+                [0, 2],
+            ],
+        )
+
+    def test_tensor_sequence_multiclass_dataset_errors(self) -> None:
+        dataset = TinySequenceDataset([[[1.0]]], [[0.0]])
+        model = _PositionWiseLinear(inputs=1, outputs=2)
+
+        with self.assertRaises(ValueError):
+            train_tensor_sequence_multiclass_dataset(model, dataset, epochs=0)
+
+        with self.assertRaises(ValueError):
+            evaluate_tensor_sequence_multiclass_dataset(
+                model,
+                dataset,
+                batch_size=0,
+            )
+
     def assert_grad_close(self, tensor: Tensor, loss_fn) -> None:
         self.assertIsNotNone(tensor.grad)
 
         for i, grad in enumerate(tensor.grad or []):
             numerical = finite_difference(tensor, i, loss_fn)
             self.assertAlmostEqual(grad, numerical, places=5)
+
+
+class _PositionWiseLinear:
+    def __init__(
+        self,
+        inputs: int,
+        outputs: int,
+        *,
+        weight: Tensor | None = None,
+        bias: Tensor | None = None,
+    ) -> None:
+        self.layer = TensorLinear(
+            inputs=inputs,
+            outputs=outputs,
+            weight=weight,
+            bias=bias,
+        )
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        batch_size, sequence_size, feature_size = inputs.shape
+        logits = self.layer(inputs.reshape((batch_size * sequence_size, feature_size)))
+        return logits.reshape((batch_size, sequence_size, self.layer.bias.shape[0]))
+
+    def parameters(self) -> list[Tensor]:
+        return self.layer.parameters()
 
 
 def finite_difference(tensor: Tensor, index: int, loss_fn, eps: float = 1e-6) -> float:

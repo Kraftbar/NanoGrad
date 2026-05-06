@@ -393,6 +393,125 @@ def train_tensor_multiclass_dataset(
     )
 
 
+def train_tensor_sequence_multiclass_dataset(
+    model,
+    dataset,
+    *,
+    validation_dataset=None,
+    epochs: int = 1,
+    batch_size: int = 32,
+    lr: float = 0.05,
+    shuffle: bool = True,
+    seed: int | None = None,
+) -> TrainingSummary:
+    """Train a sequence multiclass model on batched token targets."""
+
+    if epochs <= 0:
+        raise ValueError("epochs must be positive")
+
+    optimizer = TensorSGD(model.parameters(), lr=lr)
+    history = []
+    start = perf_counter()
+
+    for epoch in range(epochs):
+        batch_seed = None if seed is None else seed + epoch
+        for xs, ys in dataset.batches(batch_size, shuffle=shuffle, seed=batch_seed):
+            inputs = Tensor.from_list(xs)
+            targets = Tensor.from_list(ys)
+            logits = _sequence_logits(model, inputs)
+            flat_logits = _flatten_sequence_logits(logits)
+            flat_targets = _flatten_sequence_targets(targets)
+            loss = softmax_cross_entropy(flat_logits, flat_targets)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            history.append(loss[0])
+
+    elapsed_seconds = perf_counter() - start
+    train_eval = evaluate_tensor_sequence_multiclass_dataset(
+        model,
+        dataset,
+        batch_size=batch_size,
+    )
+    validation_eval = (
+        None
+        if validation_dataset is None
+        else evaluate_tensor_sequence_multiclass_dataset(
+            model,
+            validation_dataset,
+            batch_size=batch_size,
+        )
+    )
+
+    return TrainingSummary(
+        history=history,
+        elapsed_seconds=elapsed_seconds,
+        accuracy=train_eval.accuracy,
+        validation_accuracy=(
+            None
+            if validation_eval is None
+            else validation_eval.accuracy
+        ),
+        evaluation_loss=train_eval.loss,
+        validation_loss=(
+            None
+            if validation_eval is None
+            else validation_eval.loss
+        ),
+        examples_seen=train_eval.examples_seen * epochs,
+        confusion_matrix=train_eval.confusion_matrix,
+        validation_confusion_matrix=(
+            None
+            if validation_eval is None
+            else validation_eval.confusion_matrix
+        ),
+    )
+
+
+def evaluate_tensor_sequence_multiclass_dataset(
+    model,
+    dataset,
+    *,
+    batch_size: int = 128,
+) -> EvaluationSummary:
+    """Evaluate sequence multiclass loss and accuracy across a dataset."""
+
+    start = perf_counter()
+    total_loss = 0.0
+    total_correct = 0.0
+    total_count = 0
+    confusion_matrix: list[list[int]] | None = None
+
+    for xs, ys in dataset.batches(batch_size, shuffle=False):
+        inputs = Tensor.from_list(xs)
+        targets = Tensor.from_list(ys)
+        logits = _sequence_logits(model, inputs)
+        flat_logits = _flatten_sequence_logits(logits)
+        flat_targets = _flatten_sequence_targets(targets)
+        loss = softmax_cross_entropy(flat_logits, flat_targets)
+        batch_count = flat_targets.numel
+
+        total_loss += loss[0] * batch_count
+        total_correct += (
+            tensor_multiclass_accuracy(flat_logits, flat_targets) * batch_count
+        )
+        confusion_matrix = _add_confusion_matrices(
+            confusion_matrix,
+            tensor_multiclass_confusion_matrix(flat_logits, flat_targets),
+        )
+        total_count += batch_count
+
+    return EvaluationSummary(
+        loss=total_loss / total_count,
+        accuracy=total_correct / total_count,
+        elapsed_seconds=perf_counter() - start,
+        examples_seen=total_count,
+        confusion_matrix=confusion_matrix,
+    )
+
+
 def evaluate_tensor_multiclass_dataset(
     model,
     dataset: TinyDataset,
@@ -429,6 +548,27 @@ def evaluate_tensor_multiclass_dataset(
         examples_seen=total_count,
         confusion_matrix=confusion_matrix,
     )
+
+
+def _sequence_logits(model, inputs: Tensor) -> Tensor:
+    if hasattr(model, "sequence_logits"):
+        return model.sequence_logits(inputs)
+    return model(inputs)
+
+
+def _flatten_sequence_logits(logits: Tensor) -> Tensor:
+    if logits.ndim != 3:
+        raise ValueError("sequence logits must have shape (batch, sequence, classes)")
+
+    batch_size, sequence_size, classes = logits.shape
+    return logits.reshape((batch_size * sequence_size, classes))
+
+
+def _flatten_sequence_targets(targets: Tensor) -> Tensor:
+    if targets.ndim != 2:
+        raise ValueError("sequence targets must have shape (batch, sequence)")
+
+    return targets.reshape((targets.numel,))
 
 
 def binary_probabilities(model: Module, xs: list[list[float]]) -> list[float]:
