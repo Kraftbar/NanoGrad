@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 import json
 import math
+from collections.abc import Sequence
 from pathlib import Path
 
 from tensor import Tensor, conv2d_valid, matmul
@@ -126,6 +127,56 @@ class TensorConv2D(TensorModule):
     def load_state_dict(self, state: dict) -> None:
         self.kernel.data = _state_data(state, "kernel", self.kernel.shape)
         self.bias.data = _state_data(state, "bias", self.bias.shape)
+
+
+class TensorEmbedding(TensorModule):
+    """Trainable lookup table for integer token ids."""
+
+    def __init__(
+        self,
+        vocab_size: int,
+        embedding_dim: int,
+        *,
+        weight: Tensor | None = None,
+        seed: int | None = None,
+    ) -> None:
+        if vocab_size <= 0 or embedding_dim <= 0:
+            raise ValueError("TensorEmbedding dimensions must be positive")
+
+        self.vocab_size = vocab_size
+        self.embedding_dim = embedding_dim
+        self.weight = weight or embedding_uniform(
+            vocab_size,
+            embedding_dim,
+            seed=seed,
+        )
+
+        _require_matrix("weight", self.weight)
+        if self.weight.shape != (vocab_size, embedding_dim):
+            raise ValueError("weight shape must be (vocab_size, embedding_dim)")
+
+    def __call__(self, indices) -> Tensor:
+        index_shape, flat_indices = _index_shape_and_flat(indices)
+        one_hot = _one_hot_indices(flat_indices, self.vocab_size)
+        embedded = matmul(one_hot, self.weight)
+        return embedded.reshape((*index_shape, self.embedding_dim))
+
+    def parameters(self) -> list[Tensor]:
+        return [self.weight]
+
+    def state_dict(self) -> dict:
+        return {
+            "vocab_size": self.vocab_size,
+            "embedding_dim": self.embedding_dim,
+            "weight": _tensor_state(self.weight),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        if state.get("vocab_size") != self.vocab_size:
+            raise ValueError("state vocab_size does not match TensorEmbedding")
+        if state.get("embedding_dim") != self.embedding_dim:
+            raise ValueError("state embedding_dim does not match TensorEmbedding")
+        self.weight.data = _state_data(state, "weight", self.weight.shape)
 
 
 class TensorMLP(TensorModule):
@@ -261,6 +312,29 @@ def conv2d_kernel(kernel_shape: tuple[int, ...], *, seed: int | None = None) -> 
     )
 
 
+def embedding_uniform(
+    vocab_size: int,
+    embedding_dim: int,
+    *,
+    seed: int | None = None,
+) -> Tensor:
+    """Create a trainable embedding matrix."""
+
+    if vocab_size <= 0 or embedding_dim <= 0:
+        raise ValueError("embedding initializer dimensions must be positive")
+
+    limit = math.sqrt(6.0 / (vocab_size + embedding_dim))
+    rng = random.Random(seed)
+    return Tensor(
+        [
+            rng.uniform(-limit, limit)
+            for _ in range(vocab_size * embedding_dim)
+        ],
+        (vocab_size, embedding_dim),
+        requires_grad=True,
+    )
+
+
 def linear(inputs: Tensor, weight: Tensor, bias: Tensor) -> Tensor:
     """Apply a dense linear layer.
 
@@ -285,6 +359,68 @@ def linear(inputs: Tensor, weight: Tensor, bias: Tensor) -> Tensor:
         return outputs + bias
 
     raise ValueError("linear expects 1D or 2D inputs")
+
+
+def _index_shape_and_flat(indices) -> tuple[tuple[int, ...], list[int]]:
+    if isinstance(indices, Tensor):
+        return indices.shape, _integer_indices(indices.data)
+    if _is_sequence(indices):
+        shape = _index_shape(indices)
+        return shape, _flatten_indices(indices)
+    raise ValueError("embedding indices must be a tensor or sequence")
+
+
+def _index_shape(indices) -> tuple[int, ...]:
+    if not _is_sequence(indices):
+        return ()
+    if not indices:
+        raise ValueError("embedding indices must not be empty")
+
+    first = indices[0]
+    if _is_sequence(first):
+        child_shape = _index_shape(first)
+        for value in indices:
+            if not _is_sequence(value) or _index_shape(value) != child_shape:
+                raise ValueError("embedding indices must be rectangular")
+        return (len(indices), *child_shape)
+
+    if any(_is_sequence(value) for value in indices):
+        raise ValueError("embedding indices must be rectangular")
+    return (len(indices),)
+
+
+def _flatten_indices(indices) -> list[int]:
+    if _is_sequence(indices):
+        values = []
+        for value in indices:
+            values.extend(_flatten_indices(value))
+        return values
+    return _integer_indices([indices])
+
+
+def _integer_indices(values: Sequence[float]) -> list[int]:
+    indices = []
+    for value in values:
+        index = int(value)
+        if index != value:
+            raise ValueError("embedding indices must be integers")
+        indices.append(index)
+    return indices
+
+
+def _one_hot_indices(indices: list[int], vocab_size: int) -> Tensor:
+    if not indices:
+        raise ValueError("embedding indices must not be empty")
+    data = [0.0] * (len(indices) * vocab_size)
+    for row, index in enumerate(indices):
+        if index < 0 or index >= vocab_size:
+            raise ValueError("embedding index out of range")
+        data[row * vocab_size + index] = 1.0
+    return Tensor(data, (len(indices), vocab_size))
+
+
+def _is_sequence(value) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
 
 
 def _require_vector(name: str, tensor: Tensor) -> None:

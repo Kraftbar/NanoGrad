@@ -6,10 +6,12 @@ from pathlib import Path
 from tensor import Tensor, avg_pool2d
 from tensor_nn import (
     TensorConv2D,
+    TensorEmbedding,
     TensorLinear,
     TensorMLP,
     binary_mlp,
     conv2d_kernel,
+    embedding_uniform,
     linear,
     xavier_uniform,
 )
@@ -70,6 +72,21 @@ class TensorNNTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             conv2d_kernel((1,))
 
+    def test_embedding_uniform_initialization(self) -> None:
+        weight = embedding_uniform(3, 2, seed=7)
+        repeat = embedding_uniform(3, 2, seed=7)
+        different = embedding_uniform(3, 2, seed=8)
+        limit = math.sqrt(6.0 / (3 + 2))
+
+        self.assertEqual(weight.shape, (3, 2))
+        self.assertTrue(weight.requires_grad)
+        self.assertTrue(all(-limit <= value <= limit for value in weight.data))
+        self.assertEqual(weight.data, repeat.data)
+        self.assertNotEqual(weight.data, different.data)
+
+        with self.assertRaises(ValueError):
+            embedding_uniform(0, 2)
+
     def test_tensor_linear_module_uses_parameters(self) -> None:
         layer = TensorLinear(
             inputs=3,
@@ -126,6 +143,134 @@ class TensorNNTests(unittest.TestCase):
         self.assertEqual(target.bias.tolist(), [5.0, 6.0])
         self.assertTrue(target.weight.requires_grad)
         self.assertTrue(target.bias.requires_grad)
+
+    def test_tensor_embedding_uses_parameters(self) -> None:
+        layer = TensorEmbedding(
+            3,
+            2,
+            weight=Tensor.from_list([
+                [1, 2],
+                [3, 4],
+                [5, 6],
+            ], requires_grad=True),
+        )
+
+        outputs = layer([2, 0])
+
+        self.assertEqual(outputs.shape, (2, 2))
+        self.assertEqual(outputs.tolist(), [[5.0, 6.0], [1.0, 2.0]])
+        self.assertEqual(layer.parameters(), [layer.weight])
+
+    def test_tensor_embedding_accepts_nested_indices(self) -> None:
+        layer = TensorEmbedding(
+            3,
+            2,
+            weight=Tensor.from_list([
+                [1, 2],
+                [3, 4],
+                [5, 6],
+            ], requires_grad=True),
+        )
+
+        outputs = layer([
+            [0, 1],
+            [2, 0],
+        ])
+
+        self.assertEqual(outputs.shape, (2, 2, 2))
+        self.assertEqual(
+            outputs.tolist(),
+            [
+                [
+                    [1.0, 2.0],
+                    [3.0, 4.0],
+                ],
+                [
+                    [5.0, 6.0],
+                    [1.0, 2.0],
+                ],
+            ],
+        )
+
+    def test_tensor_embedding_accumulates_weight_gradients(self) -> None:
+        layer = TensorEmbedding(
+            3,
+            2,
+            weight=Tensor.from_list([
+                [1, 2],
+                [3, 4],
+                [5, 6],
+            ], requires_grad=True),
+        )
+
+        layer([2, 0, 2]).sum().backward()
+
+        self.assertEqual(
+            layer.weight.grad,
+            [
+                1.0,
+                1.0,
+                0.0,
+                0.0,
+                2.0,
+                2.0,
+            ],
+        )
+
+    def test_tensor_embedding_state_dict_round_trip(self) -> None:
+        source = TensorEmbedding(
+            3,
+            2,
+            weight=Tensor.from_list([
+                [1, 2],
+                [3, 4],
+                [5, 6],
+            ], requires_grad=True),
+        )
+        target = TensorEmbedding(3, 2)
+
+        target.load_state_dict(source.state_dict())
+
+        self.assertEqual(target.weight.tolist(), [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        self.assertTrue(target.weight.requires_grad)
+
+    def test_tensor_embedding_errors(self) -> None:
+        with self.assertRaises(ValueError):
+            TensorEmbedding(0, 2)
+
+        with self.assertRaises(ValueError):
+            TensorEmbedding(
+                3,
+                2,
+                weight=Tensor.zeros((2, 3), requires_grad=True),
+            )
+
+        layer = TensorEmbedding(3, 2)
+        with self.assertRaises(ValueError):
+            layer([])
+
+        with self.assertRaises(ValueError):
+            layer([3])
+
+        with self.assertRaises(ValueError):
+            layer([0.5])
+
+        with self.assertRaises(ValueError):
+            layer([[0], [1, 2]])
+
+        with self.assertRaises(ValueError):
+            layer.load_state_dict({
+                "vocab_size": 4,
+                "embedding_dim": 2,
+                "weight": layer.state_dict()["weight"],
+            })
+
+        with self.assertRaises(ValueError):
+            layer.load_state_dict({
+                "vocab_size": 3,
+                "embedding_dim": 4,
+                "weight": layer.state_dict()["weight"],
+            })
 
     def test_tensor_conv2d_module_uses_parameters(self) -> None:
         layer = TensorConv2D(
