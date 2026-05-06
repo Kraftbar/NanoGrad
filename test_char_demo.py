@@ -65,6 +65,8 @@ class CharDemoTests(unittest.TestCase):
             "3",
             "--max-grad-norm",
             "1.5",
+            "--metrics-file",
+            "metrics.csv",
             "--seed",
             "9",
             "--seed-text",
@@ -100,6 +102,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.report_every, 2)
         self.assertEqual(args.validation_chars, 3)
         self.assertEqual(args.max_grad_norm, 1.5)
+        self.assertEqual(args.metrics_file, Path("metrics.csv"))
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.seed_text, "a")
         self.assertEqual(args.generate, 5)
@@ -613,6 +616,42 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("val_loss=", text)
         self.assertIn("val loss:", text)
         self.assertIn("val accuracy:", text)
+
+    def test_run_writes_epoch_metrics_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            metrics_path = Path(tmpdir) / "char-metrics.csv"
+            args = parse_args([
+                "--text",
+                "ababababab",
+                "--epochs",
+                "2",
+                "--batch-size",
+                "2",
+                "--lr",
+                "0.3",
+                "--validation-chars",
+                "4",
+                "--seed-text",
+                "a",
+                "--generate",
+                "2",
+                "--metrics-file",
+                str(metrics_path),
+            ])
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                run(args)
+
+            metrics = metrics_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(
+                metrics[0],
+                "epoch,loss,accuracy,val_loss,val_accuracy,elapsed_seconds,examples_seen",
+            )
+            self.assertEqual(len(metrics), 3)
+            self.assertTrue(metrics[1].startswith("1,"))
+            self.assertTrue(metrics[2].startswith("2,"))
+            self.assertIn("metrics file:", output.getvalue())
 
     def test_run_saves_and_loads_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

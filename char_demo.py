@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import random
@@ -40,6 +41,7 @@ DEFAULT_OPTIONS = {
     "report_every": 0,
     "validation_chars": 0,
     "max_grad_norm": None,
+    "metrics_file": None,
     "seed_text": "h",
     "generate": 32,
 }
@@ -85,6 +87,7 @@ def run(args: argparse.Namespace) -> None:
         if args.model == "transformer"
         else train_tensor_multiclass_dataset
     )
+    epoch_records = []
     summary = train_fn(
         model,
         dataset,
@@ -95,15 +98,9 @@ def run(args: argparse.Namespace) -> None:
         seed=args.seed,
         max_grad_norm=args.max_grad_norm,
         validation_dataset=validation_dataset,
-        epoch_callback=(
-            None
-            if args.report_every <= 0
-            else lambda epoch, summary: print_epoch_report(
-                epoch,
-                args.epochs,
-                summary,
-                report_every=args.report_every,
-            )
+        epoch_callback=epoch_callback(
+            args,
+            epoch_records,
         ),
     )
     generated = generate_text(
@@ -171,6 +168,55 @@ def run(args: argparse.Namespace) -> None:
             model_name=args.model,
         )
         print(f"saved model:   {args.save_model}")
+    if args.metrics_file is not None:
+        write_epoch_metrics(args.metrics_file, epoch_records)
+        print(f"metrics file:  {args.metrics_file}")
+
+
+def epoch_callback(args: argparse.Namespace, records: list[dict]):
+    if args.report_every <= 0 and args.metrics_file is None:
+        return None
+
+    def callback(epoch: int, summary) -> None:
+        if args.metrics_file is not None:
+            records.append(epoch_record(epoch, summary))
+        if args.report_every > 0:
+            print_epoch_report(
+                epoch,
+                args.epochs,
+                summary,
+                report_every=args.report_every,
+            )
+
+    return callback
+
+
+def epoch_record(epoch: int, summary) -> dict:
+    return {
+        "epoch": epoch,
+        "loss": _report_loss(summary),
+        "accuracy": summary.accuracy,
+        "val_loss": summary.validation_loss,
+        "val_accuracy": summary.validation_accuracy,
+        "elapsed_seconds": summary.elapsed_seconds,
+        "examples_seen": summary.examples_seen,
+    }
+
+
+def write_epoch_metrics(path: str | Path, records: list[dict]) -> None:
+    fieldnames = [
+        "epoch",
+        "loss",
+        "accuracy",
+        "val_loss",
+        "val_accuracy",
+        "elapsed_seconds",
+        "examples_seen",
+    ]
+    with Path(path).open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(records)
 
 
 def print_epoch_report(
@@ -508,6 +554,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=DEFAULT_OPTIONS["max_grad_norm"],
     )
+    parser.add_argument("--metrics-file", type=Path)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seed-text", default=DEFAULT_OPTIONS["seed_text"])
     parser.add_argument("--generate", type=int, default=DEFAULT_OPTIONS["generate"])
