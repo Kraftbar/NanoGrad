@@ -277,7 +277,8 @@ class MNISTCNNDemoTests(unittest.TestCase):
         self.assertIn("val loss:", text)
         self.assertIn("val accuracy:", text)
         self.assertIn("epoch 1/2", text)
-        self.assertIn("confusion:", text)
+        self.assertIn("train confusion:", text)
+        self.assertIn("val confusion:", text)
 
     def test_run_check_data_on_tiny_idx_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

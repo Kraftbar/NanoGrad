@@ -788,6 +788,14 @@ class TensorAutogradTests(unittest.TestCase):
                 [0, 0, 2],
             ],
         )
+        self.assertEqual(
+            summary.validation_confusion_matrix,
+            [
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1],
+            ],
+        )
 
     def test_tensor_multiclass_dataset_evaluation_uses_batches(self) -> None:
         dataset = TinyDataset(
@@ -876,6 +884,7 @@ class TensorAutogradTests(unittest.TestCase):
                     summary.accuracy,
                     summary.examples_seen,
                     summary.confusion_matrix,
+                    summary.validation_confusion_matrix,
                 )
             ),
         )
@@ -885,6 +894,7 @@ class TensorAutogradTests(unittest.TestCase):
         self.assertTrue(all(report[2] is not None for report in reports))
         self.assertEqual([report[3] for report in reports], [2, 4, 6])
         self.assertTrue(all(report[4] is not None for report in reports))
+        self.assertTrue(all(report[5] is None for report in reports))
 
     def test_tensor_multiclass_dataset_training_epoch_error(self) -> None:
         with self.assertRaises(ValueError):

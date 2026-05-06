@@ -279,7 +279,12 @@ def run(args: argparse.Namespace) -> None:
     if summary.examples_per_second is not None:
         print(f"samples/s:    {summary.examples_per_second:.1f}")
     if args.show_confusion and summary.confusion_matrix is not None:
-        print_confusion_matrix(summary.confusion_matrix)
+        print_confusion_matrix(summary.confusion_matrix, label="train confusion")
+    if args.show_confusion and summary.validation_confusion_matrix is not None:
+        print_confusion_matrix(
+            summary.validation_confusion_matrix,
+            label="val confusion",
+        )
 
     if args.save_model is not None:
         model.save(args.save_model)

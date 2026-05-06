@@ -108,7 +108,12 @@ def run(args: argparse.Namespace) -> None:
     if summary.examples_per_second is not None:
         print(f"samples/s:    {summary.examples_per_second:.1f}")
     if args.show_confusion and summary.confusion_matrix is not None:
-        print_confusion_matrix(summary.confusion_matrix)
+        print_confusion_matrix(summary.confusion_matrix, label="train confusion")
+    if args.show_confusion and summary.validation_confusion_matrix is not None:
+        print_confusion_matrix(
+            summary.validation_confusion_matrix,
+            label="val confusion",
+        )
 
     if args.save_model is not None:
         model.save(args.save_model)
@@ -240,8 +245,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def print_confusion_matrix(matrix: list[list[int]]) -> None:
-    print("confusion:")
+def print_confusion_matrix(
+    matrix: list[list[int]],
+    *,
+    label: str = "confusion",
+) -> None:
+    print(f"{label}:")
     for row in matrix:
         print("  " + " ".join(str(value) for value in row))
 

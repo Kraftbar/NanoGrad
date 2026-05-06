@@ -151,7 +151,8 @@ class MNISTDemoTests(unittest.TestCase):
         self.assertIn("epoch 1/2", text)
         self.assertIn("val_loss=", text)
         self.assertIn("val_acc=", text)
-        self.assertIn("confusion:", text)
+        self.assertIn("train confusion:", text)
+        self.assertIn("val confusion:", text)
 
     def test_run_check_data_on_tiny_idx_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
