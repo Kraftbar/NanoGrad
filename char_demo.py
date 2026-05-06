@@ -38,6 +38,7 @@ DEFAULT_OPTIONS = {
     "batch_size": 8,
     "lr": 0.2,
     "report_every": 0,
+    "validation_chars": 0,
     "seed_text": "h",
     "generate": 32,
 }
@@ -61,7 +62,14 @@ PRESETS = {
 
 def run(args: argparse.Namespace) -> None:
     text = load_text(args)
-    dataset, vocab = build_dataset(text, args)
+    train_text, validation_text = split_train_validation_text(text, args)
+    base_vocab = CharVocab.from_text(text) if validation_text is not None else None
+    dataset, vocab = build_dataset(train_text, args, vocab=base_vocab)
+    validation_dataset = (
+        None
+        if validation_text is None
+        else build_dataset(validation_text, args, vocab=vocab)[0]
+    )
     model = build_model(args, vocab_size=len(vocab))
     if args.load_model is not None:
         load_checkpoint(
@@ -84,6 +92,7 @@ def run(args: argparse.Namespace) -> None:
         lr=args.lr,
         shuffle=True,
         seed=args.seed,
+        validation_dataset=validation_dataset,
         epoch_callback=(
             None
             if args.report_every <= 0
@@ -120,6 +129,8 @@ def run(args: argparse.Namespace) -> None:
     print(f"text length:   {len(text)}")
     print(f"vocab size:    {len(vocab)}")
     print(f"samples:       {len(dataset)}")
+    if validation_dataset is not None:
+        print(f"val samples:   {len(validation_dataset)}")
     print(f"context size:  {args.context_size}")
     if args.model in ("embedding", "transformer"):
         print(f"embedding dim: {args.embedding_dim}")
@@ -139,6 +150,10 @@ def run(args: argparse.Namespace) -> None:
     if summary.evaluation_loss is not None:
         print(f"train loss:    {summary.evaluation_loss:.6f}")
     print(f"accuracy:      {summary.accuracy:.3f}")
+    if summary.validation_loss is not None:
+        print(f"val loss:      {summary.validation_loss:.6f}")
+    if summary.validation_accuracy is not None:
+        print(f"val accuracy:  {summary.validation_accuracy:.3f}")
     print(f"runtime:       {summary.elapsed_seconds:.4f}s")
     if summary.examples_per_second is not None:
         rate_label = "tokens/s" if args.model == "transformer" else "samples/s"
@@ -164,11 +179,16 @@ def print_epoch_report(
     if epoch % report_every != 0 and epoch != epochs:
         return
 
-    print(
+    message = (
         f"epoch {epoch}/{epochs} "
         f"loss={_report_loss(summary):.6f} "
         f"accuracy={summary.accuracy:.3f}"
     )
+    if summary.validation_loss is not None:
+        message += f" val_loss={summary.validation_loss:.6f}"
+    if summary.validation_accuracy is not None:
+        message += f" val_accuracy={summary.validation_accuracy:.3f}"
+    print(message)
 
 
 def _report_loss(summary) -> float:
@@ -329,13 +349,23 @@ def _sample_from_logits(
 def build_dataset(
     text: str,
     args: argparse.Namespace,
+    *,
+    vocab: CharVocab | None = None,
 ):
     if args.model == "bigram":
-        return next_char_dataset(text, context_size=args.context_size)
+        return next_char_dataset(text, context_size=args.context_size, vocab=vocab)
     if args.model == "embedding":
-        return next_char_index_dataset(text, context_size=args.context_size)
+        return next_char_index_dataset(
+            text,
+            context_size=args.context_size,
+            vocab=vocab,
+        )
     if args.model == "transformer":
-        return next_char_sequence_dataset(text, context_size=args.context_size)
+        return next_char_sequence_dataset(
+            text,
+            context_size=args.context_size,
+            vocab=vocab,
+        )
     raise ValueError(f"unknown char model: {args.model}")
 
 
@@ -406,6 +436,26 @@ def load_text(args: argparse.Namespace) -> str:
     return text
 
 
+def split_train_validation_text(
+    text: str,
+    args: argparse.Namespace,
+) -> tuple[str, str | None]:
+    if args.validation_chars < 0:
+        raise ValueError("validation_chars must be non-negative")
+    if args.validation_chars == 0:
+        return text, None
+    if args.validation_chars >= len(text):
+        raise ValueError("validation_chars must be smaller than text length")
+
+    train_text = text[: -args.validation_chars]
+    validation_text = text[-args.validation_chars :]
+    if len(train_text) <= args.context_size:
+        raise ValueError("training text must be longer than context_size")
+    if len(validation_text) <= args.context_size:
+        raise ValueError("validation text must be longer than context_size")
+    return train_text, validation_text
+
+
 def text_source(args: argparse.Namespace) -> str:
     if args.text_file is not None:
         return str(args.text_file)
@@ -443,6 +493,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--report-every",
         type=int,
         default=DEFAULT_OPTIONS["report_every"],
+    )
+    parser.add_argument(
+        "--validation-chars",
+        type=int,
+        default=DEFAULT_OPTIONS["validation_chars"],
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seed-text", default=DEFAULT_OPTIONS["seed_text"])

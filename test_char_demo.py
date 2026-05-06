@@ -19,6 +19,7 @@ from char_demo import (
     parse_args,
     run,
     save_checkpoint,
+    split_train_validation_text,
     text_source,
 )
 from language import (
@@ -60,6 +61,8 @@ class CharDemoTests(unittest.TestCase):
             "0.1",
             "--report-every",
             "2",
+            "--validation-chars",
+            "3",
             "--seed",
             "9",
             "--seed-text",
@@ -93,6 +96,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
         self.assertEqual(args.report_every, 2)
+        self.assertEqual(args.validation_chars, 3)
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.seed_text, "a")
         self.assertEqual(args.generate, 5)
@@ -513,6 +517,34 @@ class CharDemoTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_text(args)
 
+    def test_split_train_validation_text(self) -> None:
+        args = parse_args([
+            "--text",
+            "abcdef",
+            "--validation-chars",
+            "2",
+        ])
+
+        self.assertEqual(
+            split_train_validation_text("abcdef", args),
+            ("abcd", "ef"),
+        )
+
+        args = parse_args(["--validation-chars", "0"])
+        self.assertEqual(split_train_validation_text("abcdef", args), ("abcdef", None))
+
+        args = parse_args(["--validation-chars", "-1"])
+        with self.assertRaises(ValueError):
+            split_train_validation_text("abcdef", args)
+
+        args = parse_args(["--validation-chars", "6"])
+        with self.assertRaises(ValueError):
+            split_train_validation_text("abcdef", args)
+
+        args = parse_args(["--context-size", "2", "--validation-chars", "1"])
+        with self.assertRaises(ValueError):
+            split_train_validation_text("abcd", args)
+
     def test_run_trains_on_tiny_text(self) -> None:
         args = parse_args([
             "--text",
@@ -545,6 +577,36 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("epoch 1/2", text)
         self.assertIn("epoch 2/2", text)
         self.assertIn("generated:", text)
+
+    def test_run_trains_with_validation_split(self) -> None:
+        args = parse_args([
+            "--text",
+            "ababababab",
+            "--epochs",
+            "2",
+            "--batch-size",
+            "2",
+            "--lr",
+            "0.3",
+            "--report-every",
+            "1",
+            "--validation-chars",
+            "4",
+            "--seed-text",
+            "a",
+            "--generate",
+            "2",
+        ])
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            run(args)
+
+        text = output.getvalue()
+        self.assertIn("val samples:", text)
+        self.assertIn("val_loss=", text)
+        self.assertIn("val loss:", text)
+        self.assertIn("val accuracy:", text)
 
     def test_run_saves_and_loads_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
