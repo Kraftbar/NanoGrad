@@ -67,7 +67,7 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Train a tiny character-level language model
 - [x] Add Tiny Shakespeare as the first language dataset
 - [x] Add transformer/GPT-style components later
-- [ ] Compare tiny language-model structure and behavior against nanoGPT
+- [x] [Compare tiny language-model structure and behavior against nanoGPT](./docs/language_nanogpt_comparison.md)
 - [ ] Explore camera geometry and pose estimation
 - [ ] Keep ORB-SLAM3 and DROID-SLAM as distant reference points
 
