@@ -64,7 +64,7 @@ modules should prove that the core works on increasingly realistic checks.
 ### Later Branches
 
 - [x] Explore a small AlexNet-inspired CIFAR model after convolution basics work
-- [ ] Train a tiny character-level language model
+- [x] Train a tiny character-level language model
 - [ ] Add Tiny Shakespeare as the first language dataset
 - [ ] Add transformer/GPT-style components later
 - [ ] Compare tiny language-model structure and behavior against nanoGPT
@@ -125,6 +125,8 @@ mnist_demo.py    # local-file MNIST MLP demo
 mnist_cnn_demo.py # local-file MNIST CNN demo
 mnist_smoke_demo.py # no-download MNIST-style CNN smoke demo
 cifar_cnn_demo.py # local-file CIFAR-10 CNN demo
+text.py          # character text encoding and dataset helpers
+char_demo.py     # tiny character-level bigram demo
 ```
 
 ## Reference Implementations
