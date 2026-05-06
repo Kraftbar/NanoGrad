@@ -36,6 +36,7 @@ This note compares NanoGrad's tiny character transformer path with the local
 - Sampled generation supports temperature and optional top-k filtering.
 - Character runs can report per-epoch train/validation metrics with
   `--report-every` and `--validation-chars`.
+- Epoch metrics can also be written as CSV with `--metrics-file`.
 - Tensor training can optionally clip global gradient norm with
   `--max-grad-norm`.
 - Character checkpoints include the vocabulary metadata needed for safe
