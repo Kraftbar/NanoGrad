@@ -16,7 +16,7 @@ from char_demo import (
     run,
     text_source,
 )
-from language import CharBigramModel, CharEmbeddingModel
+from language import CharBigramModel, CharEmbeddingModel, TokenPositionEmbedding
 from tensor import Tensor
 from text import CharVocab
 
@@ -97,7 +97,50 @@ class CharDemoTests(unittest.TestCase):
         ]))
 
         self.assertEqual(logits.shape, (2, 3))
-        self.assertEqual(model.num_parameters(), 39)
+        self.assertEqual(model.num_parameters(), 47)
+
+    def test_token_position_embedding_adds_positions(self) -> None:
+        layer = TokenPositionEmbedding(
+            vocab_size=3,
+            context_size=2,
+            embedding_dim=2,
+            seed=0,
+        )
+        layer.token_embedding.weight.data = [
+            1.0,
+            10.0,
+            2.0,
+            20.0,
+            3.0,
+            30.0,
+        ]
+        layer.position_embedding.weight.data = [
+            0.5,
+            1.0,
+            -0.5,
+            -1.0,
+        ]
+
+        outputs = layer(Tensor.from_list([
+            [0, 1],
+            [2, 0],
+        ]))
+
+        self.assertEqual(outputs.shape, (2, 2, 2))
+        self.assertEqual(
+            outputs.tolist(),
+            [
+                [
+                    [1.5, 11.0],
+                    [1.5, 19.0],
+                ],
+                [
+                    [3.5, 31.0],
+                    [0.5, 9.0],
+                ],
+            ],
+        )
+        self.assertEqual(layer.num_parameters(), 10)
 
     def test_build_dataset_and_model_use_requested_type(self) -> None:
         bigram_args = parse_args(["--model", "bigram", "--context-size", "2"])
@@ -137,12 +180,13 @@ class CharDemoTests(unittest.TestCase):
             embedding_dim=2,
             seed=0,
         )
-        model.embedding.weight.data = [
+        model.embedding.token_embedding.weight.data = [
             1.0,
             0.0,
             0.0,
             1.0,
         ]
+        model.embedding.position_embedding.weight.data = [0.0, 0.0]
         model.projection.weight.data = [
             0.0,
             1.0,
@@ -239,12 +283,36 @@ class CharDemoTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             CharEmbeddingModel(2, embedding_dim=0)
 
+        with self.assertRaises(ValueError):
+            TokenPositionEmbedding(0, context_size=1, embedding_dim=1)
+
+        with self.assertRaises(ValueError):
+            TokenPositionEmbedding(2, context_size=0, embedding_dim=1)
+
+        with self.assertRaises(ValueError):
+            TokenPositionEmbedding(2, context_size=1, embedding_dim=0)
+
+        with self.assertRaises(ValueError):
+            TokenPositionEmbedding(2, context_size=2, embedding_dim=1)(
+                Tensor.from_list([[0, 1, 0]]),
+            )
+
     def test_state_dict_round_trip(self) -> None:
         model = CharBigramModel(2, seed=0)
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "char-model.json"
             model.save(path)
             loaded = CharBigramModel(2, seed=1)
+            loaded.load(path)
+
+        self.assertEqual(loaded.state_dict(), model.state_dict())
+
+    def test_embedding_state_dict_round_trip(self) -> None:
+        model = CharEmbeddingModel(2, context_size=2, embedding_dim=3, seed=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "char-embedding-model.json"
+            model.save(path)
+            loaded = CharEmbeddingModel(2, context_size=2, embedding_dim=3, seed=1)
             loaded.load(path)
 
         self.assertEqual(loaded.state_dict(), model.state_dict())
