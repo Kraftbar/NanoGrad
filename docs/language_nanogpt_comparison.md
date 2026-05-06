@@ -35,7 +35,8 @@ This note compares NanoGrad's tiny character transformer path with the local
   `python3 char_demo.py --preset tiny-transformer`.
 - Sampled generation supports temperature and optional top-k filtering.
 - Character runs can report per-epoch train/validation metrics with
-  `--report-every` and `--validation-chars`.
+  `--report-every` and `--validation-chars`; `--no-shuffle` keeps batch order
+  fixed for curve comparisons.
 - Epoch metrics can also be written as CSV with `--metrics-file`.
 - Tensor training can use SGD or Adam with `--optimizer`, and optionally clip
   global gradient norm or apply weight decay with `--max-grad-norm` and
