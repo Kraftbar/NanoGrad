@@ -18,7 +18,7 @@ from metrics import (
     tensor_multiclass_confusion_matrix,
 )
 from nn import Module
-from optim import SGD, TensorSGD
+from optim import SGD, TensorAdam, TensorSGD
 from tensor import Tensor
 from datasets import TinyDataset
 
@@ -286,6 +286,7 @@ def train_tensor_multiclass_dataset(
     lr: float = 0.05,
     shuffle: bool = True,
     seed: int | None = None,
+    optimizer_name: str = "sgd",
     max_grad_norm: float | None = None,
     epoch_callback: Callable[[int, TrainingSummary], None] | None = None,
 ) -> TrainingSummary:
@@ -294,8 +295,9 @@ def train_tensor_multiclass_dataset(
     if epochs <= 0:
         raise ValueError("epochs must be positive")
 
-    optimizer = TensorSGD(
+    optimizer = _tensor_optimizer(
         model.parameters(),
+        name=optimizer_name,
         lr=lr,
         max_grad_norm=max_grad_norm,
     )
@@ -408,6 +410,7 @@ def train_tensor_sequence_multiclass_dataset(
     lr: float = 0.05,
     shuffle: bool = True,
     seed: int | None = None,
+    optimizer_name: str = "sgd",
     max_grad_norm: float | None = None,
     epoch_callback: Callable[[int, TrainingSummary], None] | None = None,
 ) -> TrainingSummary:
@@ -416,8 +419,9 @@ def train_tensor_sequence_multiclass_dataset(
     if epochs <= 0:
         raise ValueError("epochs must be positive")
 
-    optimizer = TensorSGD(
+    optimizer = _tensor_optimizer(
         model.parameters(),
+        name=optimizer_name,
         lr=lr,
         max_grad_norm=max_grad_norm,
     )
@@ -600,6 +604,20 @@ def evaluate_tensor_multiclass_dataset(
         examples_seen=total_count,
         confusion_matrix=confusion_matrix,
     )
+
+
+def _tensor_optimizer(
+    parameters: list[Tensor],
+    *,
+    name: str,
+    lr: float,
+    max_grad_norm: float | None,
+):
+    if name == "sgd":
+        return TensorSGD(parameters, lr=lr, max_grad_norm=max_grad_norm)
+    if name == "adam":
+        return TensorAdam(parameters, lr=lr, max_grad_norm=max_grad_norm)
+    raise ValueError(f"unknown tensor optimizer: {name}")
 
 
 def _sequence_logits(model, inputs: Tensor) -> Tensor:

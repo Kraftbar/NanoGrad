@@ -1028,12 +1028,50 @@ class TensorAutogradTests(unittest.TestCase):
         self.assertTrue(all(report[4] is not None for report in reports))
         self.assertTrue(all(report[5] is None for report in reports))
 
+    def test_tensor_multiclass_dataset_training_can_use_adam(self) -> None:
+        dataset = TinyDataset(
+            xs=[
+                [2.0, 0.0],
+                [0.0, 2.0],
+            ],
+            ys=[
+                0,
+                1,
+            ],
+        )
+        model = TensorLinear(
+            inputs=2,
+            outputs=2,
+            weight=Tensor.zeros((2, 2), requires_grad=True),
+            bias=Tensor.zeros((2,), requires_grad=True),
+        )
+
+        summary = train_tensor_multiclass_dataset(
+            model,
+            dataset,
+            epochs=3,
+            batch_size=1,
+            lr=0.05,
+            shuffle=False,
+            optimizer_name="adam",
+        )
+
+        self.assertEqual(len(summary.history), 6)
+        self.assertLess(summary.final_loss, summary.initial_loss)
+
     def test_tensor_multiclass_dataset_training_epoch_error(self) -> None:
         with self.assertRaises(ValueError):
             train_tensor_multiclass_dataset(
                 TensorLinear(inputs=1, outputs=2),
                 TinyDataset([[0.0]], [0.0]),
                 epochs=0,
+            )
+
+        with self.assertRaises(ValueError):
+            train_tensor_multiclass_dataset(
+                TensorLinear(inputs=1, outputs=2),
+                TinyDataset([[0.0]], [0.0]),
+                optimizer_name="unknown",
             )
 
     def test_tensor_sequence_multiclass_dataset_training_uses_batches(self) -> None:

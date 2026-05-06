@@ -59,6 +59,8 @@ class CharDemoTests(unittest.TestCase):
             "2",
             "--lr",
             "0.1",
+            "--optimizer",
+            "adam",
             "--report-every",
             "2",
             "--validation-chars",
@@ -99,6 +101,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
+        self.assertEqual(args.optimizer, "adam")
         self.assertEqual(args.report_every, 2)
         self.assertEqual(args.validation_chars, 3)
         self.assertEqual(args.max_grad_norm, 1.5)
@@ -561,6 +564,8 @@ class CharDemoTests(unittest.TestCase):
             "2",
             "--lr",
             "0.3",
+            "--optimizer",
+            "adam",
             "--report-every",
             "1",
             "--max-grad-norm",
@@ -583,6 +588,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("vocab size:    2", text)
         self.assertIn("samples:       7", text)
         self.assertIn("max grad norm: 1.0", text)
+        self.assertIn("optimizer:     adam", text)
         self.assertIn("epoch 1/2", text)
         self.assertIn("epoch 2/2", text)
         self.assertIn("generated:", text)

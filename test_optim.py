@@ -1,6 +1,6 @@
 import unittest
 
-from optim import TensorSGD
+from optim import TensorAdam, TensorSGD
 from tensor import Tensor
 
 
@@ -33,6 +33,43 @@ class OptimizerTests(unittest.TestCase):
     def test_tensor_sgd_rejects_nonpositive_max_grad_norm(self) -> None:
         with self.assertRaises(ValueError):
             TensorSGD([], max_grad_norm=0.0)
+
+    def test_tensor_adam_updates_parameters(self) -> None:
+        parameter = Tensor.from_list([1.0, -1.0], requires_grad=True)
+        optimizer = TensorAdam([parameter], lr=0.1)
+
+        parameter.grad = [1.0, -1.0]
+        optimizer.step()
+        parameter.grad = [1.0, -1.0]
+        optimizer.step()
+
+        self.assertEqual(optimizer.step_count, 2)
+        self.assertAlmostEqual(parameter.data[0], 0.8)
+        self.assertAlmostEqual(parameter.data[1], -0.8)
+
+    def test_tensor_adam_zero_grad(self) -> None:
+        parameter = Tensor.from_list([1.0], requires_grad=True)
+        parameter.grad = [2.0]
+
+        TensorAdam([parameter]).zero_grad()
+
+        self.assertEqual(parameter.grad, [0.0])
+
+    def test_tensor_adam_rejects_invalid_hyperparameters(self) -> None:
+        with self.assertRaises(ValueError):
+            TensorAdam([], lr=0.0)
+
+        with self.assertRaises(ValueError):
+            TensorAdam([], beta1=1.0)
+
+        with self.assertRaises(ValueError):
+            TensorAdam([], beta2=1.0)
+
+        with self.assertRaises(ValueError):
+            TensorAdam([], eps=0.0)
+
+        with self.assertRaises(ValueError):
+            TensorAdam([], max_grad_norm=0.0)
 
 
 if __name__ == "__main__":

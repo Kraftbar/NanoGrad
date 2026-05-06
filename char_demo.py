@@ -38,6 +38,7 @@ DEFAULT_OPTIONS = {
     "epochs": 200,
     "batch_size": 8,
     "lr": 0.2,
+    "optimizer": "sgd",
     "report_every": 0,
     "validation_chars": 0,
     "max_grad_norm": None,
@@ -96,6 +97,7 @@ def run(args: argparse.Namespace) -> None:
         lr=args.lr,
         shuffle=True,
         seed=args.seed,
+        optimizer_name=args.optimizer,
         max_grad_norm=args.max_grad_norm,
         validation_dataset=validation_dataset,
         epoch_callback=epoch_callback(
@@ -140,6 +142,7 @@ def run(args: argparse.Namespace) -> None:
         print("objective:     sequence")
     if args.max_grad_norm is not None:
         print(f"max grad norm: {args.max_grad_norm}")
+    print(f"optimizer:     {args.optimizer}")
     print(f"generation:    {args.sample_mode}")
     if args.sample_mode == "sample":
         print(f"temperature:   {args.temperature}")
@@ -539,6 +542,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=DEFAULT_OPTIONS["epochs"])
     parser.add_argument("--batch-size", type=int, default=DEFAULT_OPTIONS["batch_size"])
     parser.add_argument("--lr", type=float, default=DEFAULT_OPTIONS["lr"])
+    parser.add_argument(
+        "--optimizer",
+        choices=("sgd", "adam"),
+        default=DEFAULT_OPTIONS["optimizer"],
+    )
     parser.add_argument(
         "--report-every",
         type=int,
