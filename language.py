@@ -509,6 +509,7 @@ class CharTransformerModel(TensorModule):
         num_heads: int = 1,
         num_layers: int = 1,
         feed_forward_activation: str = "relu",
+        tie_embeddings: bool = False,
         seed: int = 0,
     ) -> None:
         if vocab_size <= 0:
@@ -533,6 +534,7 @@ class CharTransformerModel(TensorModule):
         self.num_heads = num_heads
         self.num_layers = num_layers
         self.feed_forward_activation = feed_forward_activation
+        self.tie_embeddings = tie_embeddings
         self.embedding = TokenPositionEmbedding(
             vocab_size,
             context_size,
@@ -554,6 +556,11 @@ class CharTransformerModel(TensorModule):
         self.projection = TensorLinear(
             embedding_dim,
             vocab_size,
+            weight=(
+                self.embedding.token_embedding.weight
+                if tie_embeddings
+                else None
+            ),
             seed=seed + 2 + num_layers * 8,
         )
 
@@ -577,11 +584,16 @@ class CharTransformerModel(TensorModule):
             for block in self.blocks
             for parameter in block.parameters()
         ]
+        projection_parameters = (
+            [self.projection.bias]
+            if self.tie_embeddings
+            else self.projection.parameters()
+        )
         return [
             *self.embedding.parameters(),
             *block_parameters,
             *self.norm.parameters(),
-            *self.projection.parameters(),
+            *projection_parameters,
         ]
 
     def state_dict(self) -> dict:
@@ -593,6 +605,7 @@ class CharTransformerModel(TensorModule):
             "num_heads": self.num_heads,
             "num_layers": self.num_layers,
             "feed_forward_activation": self.feed_forward_activation,
+            "tie_embeddings": self.tie_embeddings,
             "embedding": self.embedding.state_dict(),
             "blocks": [
                 block.state_dict()
@@ -619,6 +632,8 @@ class CharTransformerModel(TensorModule):
             raise ValueError(
                 "state feed_forward_activation does not match CharTransformerModel"
             )
+        if state.get("tie_embeddings", False) != self.tie_embeddings:
+            raise ValueError("state tie_embeddings does not match CharTransformerModel")
         blocks = state.get("blocks")
         if not isinstance(blocks, list) or len(blocks) != len(self.blocks):
             raise ValueError("state blocks do not match CharTransformerModel")

@@ -437,6 +437,33 @@ class LanguageModuleTests(unittest.TestCase):
         self.assertEqual(logits.shape, (1, 2, 3))
         self.assertEqual(model.state_dict()["feed_forward_activation"], "gelu")
 
+    def test_char_transformer_model_can_tie_embeddings(self) -> None:
+        tied = CharTransformerModel(
+            vocab_size=3,
+            context_size=2,
+            embedding_dim=2,
+            hidden_dim=4,
+            tie_embeddings=True,
+            seed=0,
+        )
+        untied = CharTransformerModel(
+            vocab_size=3,
+            context_size=2,
+            embedding_dim=2,
+            hidden_dim=4,
+            seed=0,
+        )
+
+        logits = tied.sequence_logits(Tensor.from_list([[0, 1]]))
+
+        self.assertIs(
+            tied.projection.weight,
+            tied.embedding.token_embedding.weight,
+        )
+        self.assertEqual(logits.shape, (1, 2, 3))
+        self.assertEqual(tied.num_parameters(), untied.num_parameters() - 6)
+        self.assertTrue(tied.state_dict()["tie_embeddings"])
+
     def test_char_transformer_model_state_dict_round_trip(self) -> None:
         model = CharTransformerModel(
             vocab_size=3,
@@ -557,6 +584,17 @@ class LanguageModuleTests(unittest.TestCase):
                 "num_heads": 1,
                 "num_layers": 1,
                 "feed_forward_activation": "gelu",
+            })
+
+        with self.assertRaises(ValueError):
+            model.load_state_dict({
+                "vocab_size": 3,
+                "context_size": 2,
+                "embedding_dim": 2,
+                "hidden_dim": 4,
+                "num_heads": 1,
+                "num_layers": 1,
+                "tie_embeddings": True,
             })
 
 

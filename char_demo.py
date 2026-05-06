@@ -36,6 +36,7 @@ DEFAULT_OPTIONS = {
     "heads": 1,
     "layers": 1,
     "activation": "relu",
+    "tie_embeddings": False,
     "epochs": 200,
     "batch_size": 8,
     "lr": 0.2,
@@ -59,6 +60,7 @@ PRESETS = {
         "heads": 1,
         "layers": 1,
         "activation": "relu",
+        "tie_embeddings": False,
         "epochs": 1,
         "batch_size": 4,
         "lr": 0.05,
@@ -145,6 +147,7 @@ def run(args: argparse.Namespace) -> None:
         print(f"heads:         {args.heads}")
         print(f"layers:        {args.layers}")
         print(f"activation:    {args.activation}")
+        print(f"tie embeddings: {args.tie_embeddings}")
         print("objective:     sequence")
     if args.max_grad_norm is not None:
         print(f"max grad norm: {args.max_grad_norm}")
@@ -454,6 +457,7 @@ def build_model(args: argparse.Namespace, *, vocab_size: int) -> TensorModule:
             num_heads=args.heads,
             num_layers=args.layers,
             feed_forward_activation=args.activation,
+            tie_embeddings=args.tie_embeddings,
             seed=args.seed,
         )
     raise ValueError(f"unknown char model: {args.model}")
@@ -554,6 +558,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("relu", "gelu"),
         default=DEFAULT_OPTIONS["activation"],
     )
+    parser.add_argument("--tie-embeddings", action="store_true")
     parser.add_argument("--epochs", type=int, default=DEFAULT_OPTIONS["epochs"])
     parser.add_argument("--batch-size", type=int, default=DEFAULT_OPTIONS["batch_size"])
     parser.add_argument("--lr", type=float, default=DEFAULT_OPTIONS["lr"])
