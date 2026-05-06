@@ -69,6 +69,10 @@ class CharDemoTests(unittest.TestCase):
             "3",
             "--sample-seed",
             "4",
+            "--save-model",
+            "char-model.json",
+            "--load-model",
+            "char-model-in.json",
         ])
 
         self.assertEqual(args.model, "embedding")
@@ -90,6 +94,8 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.temperature, 0.8)
         self.assertEqual(args.top_k, 3)
         self.assertEqual(args.sample_seed, 4)
+        self.assertEqual(args.save_model, Path("char-model.json"))
+        self.assertEqual(args.load_model, Path("char-model-in.json"))
 
     def test_tiny_transformer_preset_sets_smoke_defaults(self) -> None:
         args = parse_args(["--preset", "tiny-transformer"])
@@ -529,6 +535,55 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("vocab size:    2", text)
         self.assertIn("samples:       7", text)
         self.assertIn("generated:", text)
+
+    def test_run_saves_and_loads_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = Path(tmpdir) / "char-model.json"
+            reload_path = Path(tmpdir) / "char-model-reloaded.json"
+            args = parse_args([
+                "--text",
+                "abababab",
+                "--epochs",
+                "2",
+                "--batch-size",
+                "2",
+                "--lr",
+                "0.3",
+                "--seed-text",
+                "a",
+                "--generate",
+                "2",
+                "--save-model",
+                str(save_path),
+            ])
+            with redirect_stdout(io.StringIO()):
+                run(args)
+
+            reload_args = parse_args([
+                "--text",
+                "abababab",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "2",
+                "--lr",
+                "0.3",
+                "--seed-text",
+                "a",
+                "--generate",
+                "2",
+                "--load-model",
+                str(save_path),
+                "--save-model",
+                str(reload_path),
+            ])
+            output = io.StringIO()
+            with redirect_stdout(output):
+                run(reload_args)
+
+            self.assertTrue(save_path.exists())
+            self.assertTrue(reload_path.exists())
+            self.assertIn("saved model:", output.getvalue())
 
     def test_run_trains_on_text_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

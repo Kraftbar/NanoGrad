@@ -60,6 +60,9 @@ def run(args: argparse.Namespace) -> None:
     text = load_text(args)
     dataset, vocab = build_dataset(text, args)
     model = build_model(args, vocab_size=len(vocab))
+    if args.load_model is not None:
+        model.load(args.load_model)
+
     train_fn = (
         train_tensor_sequence_multiclass_dataset
         if args.model == "transformer"
@@ -123,6 +126,9 @@ def run(args: argparse.Namespace) -> None:
         rate_label = "tokens/s" if args.model == "transformer" else "samples/s"
         print(f"{rate_label}:     {summary.examples_per_second:.1f}")
     print(f"generated:     {generated!r}")
+    if args.save_model is not None:
+        model.save(args.save_model)
+        print(f"saved model:   {args.save_model}")
 
 
 def generate_text(
@@ -354,6 +360,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int)
     parser.add_argument("--sample-seed", type=int)
+    parser.add_argument("--save-model", type=Path)
+    parser.add_argument("--load-model", type=Path)
     explicit_options = _explicit_option_names(
         sys.argv[1:]
         if argv is None
