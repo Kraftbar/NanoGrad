@@ -57,6 +57,7 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Compare capped Tiny Shakespeare train/validation curves across the bigram,
   embedding, and tiny GPT presets
 - [x] Add a slightly larger `small-gpt` character-transformer preset
+- [x] Export top-k/temperature character sampling grids for saved checkpoints
 - [ ] Compare top-k sampled output against nanoGPT on the same capped text slice
 - [ ] Keep implementations readable rather than over-compressed
 
@@ -136,6 +137,7 @@ text.py          # character text encoding and dataset helpers
 language.py      # reusable small language model implementations
 char_demo.py     # tiny character-level language model demo
 char_compare.py  # compare tiny character language-model configs
+char_sample_grid.py # sweep checkpoint sampling settings into CSVs
 language_benchmark.py # tiny transformer timing check
 ```
 
