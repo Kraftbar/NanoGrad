@@ -63,6 +63,8 @@ This note compares NanoGrad's tiny character transformer path with the local
   settings are restored from the checkpoint.
 - Saved checkpoints can also be sampled without supplying the training text:
   `python3 char_demo.py --load-model char.json --generate-only --seed-text Firs`.
+- `char_demo.py --samples-file` writes generated checkpoint samples with seed
+  prefix, sampling settings, text, and `distinct_2`.
 - `char_compare.py` runs the bigram, embedding, and lite GPT configs on the
   same text slice and reports loss, perplexity, validation metrics, speed, and
   one or more generated samples per model. It also reports `dist-2`, a simple

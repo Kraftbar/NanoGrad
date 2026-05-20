@@ -16,6 +16,7 @@ from tensor import Tensor
 from tensor_nn import TensorModule
 from text import (
     CharVocab,
+    distinct_ngram_ratio,
     mean_distinct_ngram_ratio,
     next_char_dataset,
     next_char_index_dataset,
@@ -58,6 +59,7 @@ DEFAULT_OPTIONS = {
     "seed_file": None,
     "generate": 32,
     "num_samples": 1,
+    "samples_file": None,
     "generate_only": False,
 }
 PRESETS = {
@@ -267,6 +269,9 @@ def run(args: argparse.Namespace) -> None:
         rate_label = "tokens/s" if args.model == "transformer" else "samples/s"
         print(f"{rate_label}:     {summary.examples_per_second:.1f}")
     print_generated_samples(generated_samples)
+    if args.samples_file is not None:
+        write_generated_samples(args.samples_file, generated_samples, args)
+        print(f"samples file:  {args.samples_file}")
     if args.save_model is not None:
         save_checkpoint(
             args.save_model,
@@ -325,6 +330,9 @@ def run_generate_only(args: argparse.Namespace) -> None:
             print(f"top k:         {args.top_k}")
     print(f"parameters:    {model.num_parameters()}")
     print_generated_samples(generated_samples)
+    if args.samples_file is not None:
+        write_generated_samples(args.samples_file, generated_samples, args)
+        print(f"samples file:  {args.samples_file}")
     if args.save_model is not None:
         save_checkpoint(
             args.save_model,
@@ -387,6 +395,42 @@ def write_epoch_metrics(path: str | Path, records: list[dict]) -> None:
         writer = csv.DictWriter(file, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         writer.writerows(records)
+
+
+def generated_sample_records(samples: list[str], args: argparse.Namespace) -> list[dict]:
+    seed_text = generation_seed_text(args)
+    return [
+        {
+            "sample_index": index,
+            "seed_text": seed_text,
+            "sample_mode": args.sample_mode,
+            "temperature": args.temperature,
+            "top_k": args.top_k,
+            "distinct_2": distinct_ngram_ratio(sample, n=2),
+            "sample": sample,
+        }
+        for index, sample in enumerate(samples, start=1)
+    ]
+
+
+def write_generated_samples(
+    path: str | Path,
+    samples: list[str],
+    args: argparse.Namespace,
+) -> None:
+    fieldnames = [
+        "sample_index",
+        "seed_text",
+        "sample_mode",
+        "temperature",
+        "top_k",
+        "distinct_2",
+        "sample",
+    ]
+    with Path(path).open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(generated_sample_records(samples, args))
 
 
 def print_epoch_report(
@@ -942,6 +986,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_OPTIONS["num_samples"],
     )
+    parser.add_argument("--samples-file", type=Path)
     parser.add_argument(
         "--generate-only",
         action="store_true",

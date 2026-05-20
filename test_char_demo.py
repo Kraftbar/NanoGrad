@@ -91,6 +91,8 @@ class CharDemoTests(unittest.TestCase):
             "5",
             "--num-samples",
             "2",
+            "--samples-file",
+            "samples.csv",
             "--generate-only",
             "--sample-mode",
             "sample",
@@ -134,6 +136,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.seed_file, Path("prompt.txt"))
         self.assertEqual(args.generate, 5)
         self.assertEqual(args.num_samples, 2)
+        self.assertEqual(args.samples_file, Path("samples.csv"))
         self.assertTrue(args.generate_only)
         self.assertEqual(args.sample_mode, "sample")
         self.assertEqual(args.temperature, 0.8)
@@ -993,6 +996,7 @@ class CharDemoTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "char-transformer.json"
+            samples_path = Path(tmpdir) / "samples.csv"
             save_checkpoint(path, model, vocab, model_name="transformer")
             args = parse_args([
                 "--load-model",
@@ -1004,11 +1008,15 @@ class CharDemoTests(unittest.TestCase):
                 "1",
                 "--num-samples",
                 "2",
+                "--samples-file",
+                str(samples_path),
             ])
             output = io.StringIO()
 
             with redirect_stdout(output):
                 run(args)
+
+            samples = samples_path.read_text(encoding="utf-8").splitlines()
 
         text = output.getvalue()
         self.assertIn("model:         transformer", text)
@@ -1021,8 +1029,15 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("generated 1:", text)
         self.assertIn("generated 2:", text)
         self.assertIn("sample dist-2:", text)
+        self.assertIn("samples file:", text)
         self.assertNotIn("text length:", text)
         self.assertNotIn("initial loss:", text)
+        self.assertEqual(
+            samples[0],
+            "sample_index,seed_text,sample_mode,temperature,top_k,distinct_2,sample",
+        )
+        self.assertEqual(len(samples), 3)
+        self.assertTrue(samples[1].startswith("1,ab,greedy,1.0,"))
 
     def test_generate_only_requires_checkpoint_and_rejects_metrics(self) -> None:
         args = parse_args(["--generate-only"])

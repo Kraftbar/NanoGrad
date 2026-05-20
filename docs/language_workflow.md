@@ -67,7 +67,7 @@ python3 char_demo.py --load-model /tmp/nanollm-char.json --text-file data/tinysh
 Sample directly from a checkpoint without supplying the training text:
 
 ```bash
-python3 char_demo.py --load-model /tmp/nanollm-char.json --generate-only --seed-text Firs --sample-mode sample --temperature 0.8 --top-k 8 --num-samples 3
+python3 char_demo.py --load-model /tmp/nanollm-char.json --generate-only --seed-text Firs --sample-mode sample --temperature 0.8 --top-k 8 --num-samples 3 --samples-file /tmp/nanollm-char-samples.csv
 ```
 
 Prompts can also come from a local file:
