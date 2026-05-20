@@ -1,7 +1,7 @@
 import io
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from char_demo import save_checkpoint
@@ -15,6 +15,8 @@ class CharSampleGridTests(unittest.TestCase):
         args = parse_args([
             "--load-model",
             "char.json",
+            "--output-dir",
+            "grid",
             "--samples-file",
             "samples.csv",
             "--summary-file",
@@ -40,6 +42,7 @@ class CharSampleGridTests(unittest.TestCase):
         ])
 
         self.assertEqual(args.load_model, Path("char.json"))
+        self.assertEqual(args.output_dir, Path("grid"))
         self.assertEqual(args.samples_file, Path("samples.csv"))
         self.assertEqual(args.summary_file, Path("summary.csv"))
         self.assertEqual(args.seed, 3)
@@ -50,6 +53,22 @@ class CharSampleGridTests(unittest.TestCase):
         self.assertEqual(args.sample_seed, 7)
         self.assertEqual(args.temperatures, [0.7, 1.0])
         self.assertEqual(args.top_k, [None, 2])
+
+    def test_parse_args_output_dir_sets_standard_files(self) -> None:
+        args = parse_args([
+            "--load-model",
+            "char.json",
+            "--output-dir",
+            "grid",
+        ])
+
+        self.assertEqual(args.samples_file, Path("grid") / "samples.csv")
+        self.assertEqual(args.summary_file, Path("grid") / "summary.csv")
+
+    def test_parse_args_requires_samples_destination(self) -> None:
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                parse_args(["--load-model", "char.json"])
 
     def test_parse_grid_values_reject_invalid_values(self) -> None:
         self.assertIsNone(parse_top_k("none"))
@@ -114,6 +133,39 @@ class CharSampleGridTests(unittest.TestCase):
             "checkpoint,model_type,context_size,parameters,temperature,top_k,sample_mode,sample_seed,sample_count,mean_distinct_2",
         )
         self.assertEqual(len(summary), 5)
+
+    def test_run_output_dir_writes_standard_files(self) -> None:
+        vocab = CharVocab.from_text("ab")
+        model = CharBigramModel(len(vocab), context_size=1, seed=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "char.json"
+            output_dir = Path(tmpdir) / "grid"
+            save_checkpoint(checkpoint_path, model, vocab, model_name="bigram")
+            args = parse_args([
+                "--load-model",
+                str(checkpoint_path),
+                "--output-dir",
+                str(output_dir),
+                "--seed-text",
+                "a",
+                "--generate",
+                "1",
+            ])
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                run(args)
+
+            samples = (output_dir / "samples.csv").read_text(encoding="utf-8")
+            summary = (output_dir / "summary.csv").read_text(encoding="utf-8")
+
+        text = output.getvalue()
+        self.assertIn("output dir:", text)
+        self.assertIn("samples file:", text)
+        self.assertIn("summary file:", text)
+        self.assertIn("sample_index", samples)
+        self.assertIn("mean_distinct_2", summary)
 
 
 if __name__ == "__main__":

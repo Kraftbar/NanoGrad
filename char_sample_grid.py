@@ -26,6 +26,8 @@ def run(args: argparse.Namespace) -> None:
 
     print("Character sample grid")
     print(f"checkpoint:    {args.load_model}")
+    if args.output_dir is not None:
+        print(f"output dir:    {args.output_dir}")
     print(f"samples file:  {args.samples_file}")
     if args.summary_file is not None:
         print(f"summary file:  {args.summary_file}")
@@ -174,6 +176,15 @@ def write_grid_summary(path: str | Path, records: list[dict]) -> None:
         writer.writerows(records)
 
 
+def apply_output_dir(args: argparse.Namespace) -> None:
+    if args.output_dir is None:
+        return
+    if args.samples_file is None:
+        args.samples_file = args.output_dir / "samples.csv"
+    if args.summary_file is None:
+        args.summary_file = args.output_dir / "summary.csv"
+
+
 def parse_top_k(value: str) -> int | None:
     if value.lower() in ("none", "null", "-"):
         return None
@@ -203,7 +214,8 @@ def top_k_label(value: int | None) -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--load-model", type=Path, required=True)
-    parser.add_argument("--samples-file", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--samples-file", type=Path)
     parser.add_argument("--summary-file", type=Path)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seed-text", default=DEFAULT_OPTIONS["seed_text"])
@@ -224,7 +236,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=parse_top_k,
         default=[None, 4, 8],
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    apply_output_dir(args)
+    if args.samples_file is None:
+        parser.error("--samples-file is required unless --output-dir is provided")
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
