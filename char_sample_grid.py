@@ -21,10 +21,14 @@ from text import distinct_ngram_ratio
 def run(args: argparse.Namespace) -> None:
     records = sample_grid_records(args)
     write_sample_grid(args.samples_file, records)
+    if args.summary_file is not None:
+        write_grid_summary(args.summary_file, grid_summary_records(records))
 
     print("Character sample grid")
     print(f"checkpoint:    {args.load_model}")
     print(f"samples file:  {args.samples_file}")
+    if args.summary_file is not None:
+        print(f"summary file:  {args.summary_file}")
     print(f"temperatures:  {', '.join(str(value) for value in args.temperatures)}")
     print(f"top k:         {', '.join(top_k_label(value) for value in args.top_k)}")
     print(f"rows:          {len(records)}")
@@ -105,6 +109,71 @@ def write_sample_grid(path: str | Path, records: list[dict]) -> None:
         writer.writerows(records)
 
 
+def grid_summary_records(records: list[dict]) -> list[dict]:
+    groups = {}
+    for record in records:
+        key = (
+            record["checkpoint"],
+            record["model_type"],
+            record["context_size"],
+            record["parameters"],
+            record["temperature"],
+            record["top_k"],
+            record["sample_mode"],
+            record["sample_seed"],
+        )
+        groups.setdefault(key, []).append(record)
+
+    summaries = []
+    for (
+        checkpoint,
+        model_type,
+        context_size,
+        parameters,
+        temperature,
+        top_k,
+        sample_mode,
+        sample_seed,
+    ), group in groups.items():
+        summaries.append({
+            "checkpoint": checkpoint,
+            "model_type": model_type,
+            "context_size": context_size,
+            "parameters": parameters,
+            "temperature": temperature,
+            "top_k": top_k,
+            "sample_mode": sample_mode,
+            "sample_seed": sample_seed,
+            "sample_count": len(group),
+            "mean_distinct_2": sum(
+                record["distinct_2"]
+                for record in group
+            ) / len(group),
+        })
+    return summaries
+
+
+def write_grid_summary(path: str | Path, records: list[dict]) -> None:
+    fieldnames = [
+        "checkpoint",
+        "model_type",
+        "context_size",
+        "parameters",
+        "temperature",
+        "top_k",
+        "sample_mode",
+        "sample_seed",
+        "sample_count",
+        "mean_distinct_2",
+    ]
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(records)
+
+
 def parse_top_k(value: str) -> int | None:
     if value.lower() in ("none", "null", "-"):
         return None
@@ -135,6 +204,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--load-model", type=Path, required=True)
     parser.add_argument("--samples-file", type=Path, required=True)
+    parser.add_argument("--summary-file", type=Path)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seed-text", default=DEFAULT_OPTIONS["seed_text"])
     parser.add_argument("--seed-file", type=Path)

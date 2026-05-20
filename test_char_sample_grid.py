@@ -17,6 +17,8 @@ class CharSampleGridTests(unittest.TestCase):
             "char.json",
             "--samples-file",
             "samples.csv",
+            "--summary-file",
+            "summary.csv",
             "--seed",
             "3",
             "--seed-text",
@@ -39,6 +41,7 @@ class CharSampleGridTests(unittest.TestCase):
 
         self.assertEqual(args.load_model, Path("char.json"))
         self.assertEqual(args.samples_file, Path("samples.csv"))
+        self.assertEqual(args.summary_file, Path("summary.csv"))
         self.assertEqual(args.seed, 3)
         self.assertEqual(args.seed_text, "ab")
         self.assertEqual(args.generate, 4)
@@ -63,12 +66,15 @@ class CharSampleGridTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_path = Path(tmpdir) / "char.json"
             samples_path = Path(tmpdir) / "grid" / "samples.csv"
+            summary_path = Path(tmpdir) / "grid" / "summary.csv"
             save_checkpoint(checkpoint_path, model, vocab, model_name="bigram")
             args = parse_args([
                 "--load-model",
                 str(checkpoint_path),
                 "--samples-file",
                 str(samples_path),
+                "--summary-file",
+                str(summary_path),
                 "--seed-text",
                 "a",
                 "--generate",
@@ -90,9 +96,11 @@ class CharSampleGridTests(unittest.TestCase):
                 run(args)
 
             rows = samples_path.read_text(encoding="utf-8").splitlines()
+            summary = summary_path.read_text(encoding="utf-8").splitlines()
 
         text = output.getvalue()
         self.assertIn("Character sample grid", text)
+        self.assertIn("summary file:", text)
         self.assertIn("rows:          8", text)
         self.assertEqual(
             rows[0],
@@ -101,6 +109,11 @@ class CharSampleGridTests(unittest.TestCase):
         self.assertEqual(len(rows), 9)
         self.assertIn(",bigram,1,", rows[1])
         self.assertIn(",a,sample,5,", rows[1])
+        self.assertEqual(
+            summary[0],
+            "checkpoint,model_type,context_size,parameters,temperature,top_k,sample_mode,sample_seed,sample_count,mean_distinct_2",
+        )
+        self.assertEqual(len(summary), 5)
 
 
 if __name__ == "__main__":

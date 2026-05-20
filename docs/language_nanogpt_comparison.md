@@ -66,7 +66,8 @@ This note compares NanoGrad's tiny character transformer path with the local
 - `char_demo.py --samples-file` writes generated checkpoint samples with seed
   prefix, sampling settings, text, and `distinct_2`.
 - `char_sample_grid.py` loads a saved checkpoint and writes a CSV grid across
-  multiple temperature/top-k settings for qualitative sampling sweeps.
+  multiple temperature/top-k settings for qualitative sampling sweeps, with an
+  optional summary CSV for sorting settings by mean `distinct_2`.
 - `char_compare.py` runs the bigram, embedding, and lite GPT configs on the
   same text slice and reports loss, perplexity, validation metrics, speed, and
   one or more generated samples per model. It also reports `dist-2`, a simple

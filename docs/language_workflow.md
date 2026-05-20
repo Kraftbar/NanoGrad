@@ -79,7 +79,7 @@ python3 char_demo.py --load-model /tmp/nanollm-char.json --generate-only --seed-
 Sweep checkpoint sampling settings into one CSV:
 
 ```bash
-python3 char_sample_grid.py --load-model /tmp/nanollm-char.json --seed-text Firs --temperatures 0.7 0.8 1.0 --top-k none 4 8 --samples-file /tmp/nanollm-char-grid.csv
+python3 char_sample_grid.py --load-model /tmp/nanollm-char.json --seed-text Firs --temperatures 0.7 0.8 1.0 --top-k none 4 8 --samples-file /tmp/nanollm-char-grid.csv --summary-file /tmp/nanollm-char-grid-summary.csv
 ```
 
 ## Benchmark
