@@ -178,6 +178,8 @@ class CharSampleGridTests(unittest.TestCase):
         self.assertIn("sample_index", samples)
         self.assertIn("mean_distinct_2", summary)
         self.assertEqual(manifest["checkpoint"], str(checkpoint_path))
+        self.assertEqual(manifest["model_config"]["model"], "bigram")
+        self.assertEqual(manifest["model_config"]["context_size"], 1)
         self.assertEqual(manifest["outputs"]["samples_file"], str(output_dir / "samples.csv"))
         self.assertEqual(manifest["rows"], 9)
         self.assertEqual(manifest["summary_rows"], 9)

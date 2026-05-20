@@ -187,8 +187,19 @@ def sample_grid_manifest(
     records: list[dict],
     summaries: list[dict],
 ) -> dict:
+    model_args = checkpoint_model_args(args)
     return {
         "checkpoint": args.load_model,
+        "model_config": {
+            "model": model_args.model,
+            "context_size": model_args.context_size,
+            "embedding_dim": model_args.embedding_dim,
+            "hidden_dim": model_args.hidden_dim,
+            "heads": model_args.heads,
+            "layers": model_args.layers,
+            "activation": model_args.activation,
+            "tie_embeddings": model_args.tie_embeddings,
+        },
         "outputs": {
             "samples_file": args.samples_file,
             "summary_file": args.summary_file,
