@@ -137,6 +137,29 @@ def next_char_sequence_dataset(
     return TinySequenceDataset(xs, ys), vocab
 
 
+def distinct_ngram_ratio(text: str, *, n: int = 2) -> float:
+    """Return unique n-grams divided by total n-grams in text."""
+
+    if n <= 0:
+        raise ValueError("n must be positive")
+    if len(text) < n:
+        return 0.0
+
+    ngrams = [
+        text[start : start + n]
+        for start in range(len(text) - n + 1)
+    ]
+    return len(set(ngrams)) / len(ngrams)
+
+
+def mean_distinct_ngram_ratio(samples: list[str], *, n: int = 2) -> float:
+    """Return the average distinct n-gram ratio across generated samples."""
+
+    if not samples:
+        raise ValueError("samples must not be empty")
+    return sum(distinct_ngram_ratio(sample, n=n) for sample in samples) / len(samples)
+
+
 def _flatten_one_hot_context(context: list[int], vocab: CharVocab) -> list[float]:
     values = []
     for index in context:

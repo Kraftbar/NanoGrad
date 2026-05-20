@@ -38,12 +38,31 @@ class OptimizerTests(unittest.TestCase):
 
         self.assertAlmostEqual(parameter.data[0], 0.95)
 
+    def test_tensor_sgd_can_decay_only_higher_rank_parameters(self) -> None:
+        vector = Tensor.from_list([1.0], requires_grad=True)
+        matrix = Tensor.from_list([[1.0]], requires_grad=True)
+        vector.grad = [0.0]
+        matrix.grad = [0.0]
+
+        TensorSGD(
+            [vector, matrix],
+            lr=0.1,
+            weight_decay=0.5,
+            weight_decay_min_ndim=2,
+        ).step()
+
+        self.assertAlmostEqual(vector.data[0], 1.0)
+        self.assertAlmostEqual(matrix.data[0], 0.95)
+
     def test_tensor_sgd_rejects_invalid_options(self) -> None:
         with self.assertRaises(ValueError):
             TensorSGD([], max_grad_norm=0.0)
 
         with self.assertRaises(ValueError):
             TensorSGD([], weight_decay=-0.1)
+
+        with self.assertRaises(ValueError):
+            TensorSGD([], weight_decay_min_ndim=0)
 
     def test_tensor_adam_updates_parameters(self) -> None:
         parameter = Tensor.from_list([1.0, -1.0], requires_grad=True)
@@ -74,6 +93,22 @@ class OptimizerTests(unittest.TestCase):
 
         self.assertAlmostEqual(parameter.data[0], 0.95)
 
+    def test_tensor_adam_can_decay_only_higher_rank_parameters(self) -> None:
+        vector = Tensor.from_list([1.0], requires_grad=True)
+        matrix = Tensor.from_list([[1.0]], requires_grad=True)
+        vector.grad = [0.0]
+        matrix.grad = [0.0]
+
+        TensorAdam(
+            [vector, matrix],
+            lr=0.1,
+            weight_decay=0.5,
+            weight_decay_min_ndim=2,
+        ).step()
+
+        self.assertAlmostEqual(vector.data[0], 1.0)
+        self.assertAlmostEqual(matrix.data[0], 0.95)
+
     def test_tensor_adam_rejects_invalid_hyperparameters(self) -> None:
         with self.assertRaises(ValueError):
             TensorAdam([], lr=0.0)
@@ -89,6 +124,9 @@ class OptimizerTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             TensorAdam([], weight_decay=-0.1)
+
+        with self.assertRaises(ValueError):
+            TensorAdam([], weight_decay_min_ndim=0)
 
         with self.assertRaises(ValueError):
             TensorAdam([], max_grad_norm=0.0)

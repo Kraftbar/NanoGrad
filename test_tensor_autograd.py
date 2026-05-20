@@ -1076,6 +1076,25 @@ class TensorAutogradTests(unittest.TestCase):
         self.assertEqual(len(summary.history), 6)
         self.assertLess(summary.final_loss, summary.initial_loss)
 
+    def test_tensor_multiclass_dataset_can_decay_only_matrix_parameters(self) -> None:
+        dataset = TinyDataset([[0.0]], [0.0])
+        model = _ConstantLogitModel()
+
+        train_tensor_multiclass_dataset(
+            model,
+            dataset,
+            epochs=1,
+            batch_size=1,
+            lr=0.1,
+            shuffle=False,
+            optimizer_name="adam",
+            weight_decay=0.5,
+            weight_decay_min_ndim=2,
+        )
+
+        self.assertAlmostEqual(model.matrix.data[0], 0.95)
+        self.assertAlmostEqual(model.vector.data[0], 1.0)
+
     def test_tensor_multiclass_dataset_training_epoch_error(self) -> None:
         with self.assertRaises(ValueError):
             train_tensor_multiclass_dataset(
@@ -1279,6 +1298,18 @@ class _PositionWiseLinear:
 
     def parameters(self) -> list[Tensor]:
         return self.layer.parameters()
+
+
+class _ConstantLogitModel:
+    def __init__(self) -> None:
+        self.matrix = Tensor.from_list([[1.0]], requires_grad=True)
+        self.vector = Tensor.from_list([1.0], requires_grad=True)
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        return Tensor.zeros((len(inputs), 2), requires_grad=True)
+
+    def parameters(self) -> list[Tensor]:
+        return [self.matrix, self.vector]
 
 
 def finite_difference(tensor: Tensor, index: int, loss_fn, eps: float = 1e-6) -> float:

@@ -43,6 +43,16 @@ class LanguageModuleTests(unittest.TestCase):
         self.assertEqual(outputs.shape, inputs.shape)
         self.assertEqual(attention.num_parameters(), 24)
 
+    def test_causal_self_attention_reuses_attention_mask(self) -> None:
+        attention = CausalSelfAttention(embedding_dim=2, context_size=3, seed=0)
+        inputs = Tensor.zeros((2, 3, 2))
+
+        attention(inputs)
+        first_mask = attention._mask_cache[(2, 3)]
+        attention(inputs)
+
+        self.assertIs(attention._mask_cache[(2, 3)], first_mask)
+
     def test_causal_self_attention_supports_multiple_heads(self) -> None:
         attention = CausalSelfAttention(
             embedding_dim=4,

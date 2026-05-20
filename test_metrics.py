@@ -1,6 +1,7 @@
 import unittest
 
 from metrics import (
+    perplexity,
     tensor_binary_accuracy,
     tensor_multiclass_accuracy,
     tensor_multiclass_confusion_matrix,
@@ -104,6 +105,11 @@ class TensorMetricTests(unittest.TestCase):
         )
 
         self.assertEqual(matrix, [[1, 0], [0, 1]])
+
+    def test_perplexity_from_cross_entropy_loss(self) -> None:
+        self.assertAlmostEqual(perplexity(0.0), 1.0)
+        self.assertAlmostEqual(perplexity(1.0), 2.718281828459045)
+        self.assertEqual(perplexity(1000.0), float("inf"))
 
     def test_tensor_multiclass_accuracy_errors(self) -> None:
         with self.assertRaises(ValueError):

@@ -11,15 +11,20 @@ import sys
 from pathlib import Path
 
 from language import CharBigramModel, CharEmbeddingModel, CharTransformerModel
+from metrics import perplexity
 from tensor import Tensor
 from tensor_nn import TensorModule
 from text import (
     CharVocab,
+    mean_distinct_ngram_ratio,
     next_char_dataset,
     next_char_index_dataset,
     next_char_sequence_dataset,
 )
 from train import (
+    TrainingSummary,
+    evaluate_tensor_multiclass_dataset,
+    evaluate_tensor_sequence_multiclass_dataset,
     train_tensor_multiclass_dataset,
     train_tensor_sequence_multiclass_dataset,
 )
@@ -37,18 +42,23 @@ DEFAULT_OPTIONS = {
     "layers": 1,
     "activation": "relu",
     "tie_embeddings": False,
+    "eval_only": False,
     "epochs": 200,
     "batch_size": 8,
     "lr": 0.2,
     "no_shuffle": False,
     "optimizer": "sgd",
     "weight_decay": 0.0,
+    "weight_decay_min_ndim": None,
     "report_every": 0,
     "validation_chars": 0,
     "max_grad_norm": None,
     "metrics_file": None,
     "seed_text": "h",
+    "seed_file": None,
     "generate": 32,
+    "num_samples": 1,
+    "generate_only": False,
 }
 PRESETS = {
     "tiny-transformer": {
@@ -82,14 +92,41 @@ PRESETS = {
         "lr": 0.01,
         "optimizer": "adam",
         "weight_decay": 0.01,
+        "weight_decay_min_ndim": 2,
         "max_grad_norm": 1.0,
         "seed_text": "hell",
         "generate": 24,
+    },
+    "small-gpt": {
+        "model": "transformer",
+        "max_chars": 512,
+        "context_size": 8,
+        "embedding_dim": 16,
+        "hidden_dim": 64,
+        "heads": 2,
+        "layers": 2,
+        "activation": "gelu",
+        "tie_embeddings": True,
+        "epochs": 1,
+        "batch_size": 8,
+        "lr": 0.005,
+        "optimizer": "adam",
+        "weight_decay": 0.01,
+        "weight_decay_min_ndim": 2,
+        "max_grad_norm": 1.0,
+        "seed_text": "hello na",
+        "generate": 80,
     },
 }
 
 
 def run(args: argparse.Namespace) -> None:
+    if args.load_model is not None:
+        apply_checkpoint_config(args, args.load_model)
+    if args.generate_only:
+        run_generate_only(args)
+        return
+
     text = load_text(args)
     train_text, validation_text = split_train_validation_text(text, args)
     base_vocab = CharVocab.from_text(text) if validation_text is not None else None
@@ -113,45 +150,53 @@ def run(args: argparse.Namespace) -> None:
         if args.model == "transformer"
         else train_tensor_multiclass_dataset
     )
-    epoch_records = []
-    summary = train_fn(
-        model,
-        dataset,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        lr=args.lr,
-        shuffle=not args.no_shuffle,
-        seed=args.seed,
-        optimizer_name=args.optimizer,
-        weight_decay=args.weight_decay,
-        max_grad_norm=args.max_grad_norm,
-        validation_dataset=validation_dataset,
-        epoch_callback=epoch_callback(
-            args,
-            epoch_records,
-        ),
+    evaluate_fn = (
+        evaluate_tensor_sequence_multiclass_dataset
+        if args.model == "transformer"
+        else evaluate_tensor_multiclass_dataset
     )
-    generated = generate_text(
+    epoch_records = []
+    if args.eval_only:
+        summary = evaluate_only_summary(
+            model,
+            dataset,
+            validation_dataset=validation_dataset,
+            evaluate_fn=evaluate_fn,
+            batch_size=args.batch_size,
+        )
+        if args.metrics_file is not None:
+            epoch_records.append(epoch_record(0, summary))
+    else:
+        summary = train_fn(
+            model,
+            dataset,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            shuffle=not args.no_shuffle,
+            seed=args.seed,
+            optimizer_name=args.optimizer,
+            weight_decay=args.weight_decay,
+            weight_decay_min_ndim=args.weight_decay_min_ndim,
+            max_grad_norm=args.max_grad_norm,
+            validation_dataset=validation_dataset,
+            epoch_callback=epoch_callback(
+                args,
+                epoch_records,
+            ),
+        )
+    generated_samples = generate_samples(
         model,
         vocab,
-        seed_text=args.seed_text,
-        length=args.generate,
-        context_size=args.context_size,
-        input_mode=generation_input_mode(args.model),
-        sample_mode=args.sample_mode,
-        temperature=args.temperature,
-        top_k=args.top_k,
-        rng=random.Random(
-            args.sample_seed
-            if args.sample_seed is not None
-            else args.seed
-        ),
+        args,
     )
 
     print("Character language demo")
     if args.preset is not None:
         print(f"preset:        {args.preset}")
     print(f"model:         {args.model}")
+    if args.eval_only:
+        print("eval only:     True")
     print(f"text source:   {text_source(args)}")
     print(f"text length:   {len(text)}")
     print(f"vocab size:    {len(vocab)}")
@@ -168,32 +213,40 @@ def run(args: argparse.Namespace) -> None:
         print(f"activation:    {args.activation}")
         print(f"tie embeddings: {args.tie_embeddings}")
         print("objective:     sequence")
-    if args.max_grad_norm is not None:
+    if not args.eval_only and args.max_grad_norm is not None:
         print(f"max grad norm: {args.max_grad_norm}")
-    print(f"optimizer:     {args.optimizer}")
-    print(f"shuffle:       {not args.no_shuffle}")
-    if args.weight_decay:
-        print(f"weight decay:  {args.weight_decay}")
+    if not args.eval_only:
+        print(f"optimizer:     {args.optimizer}")
+        print(f"shuffle:       {not args.no_shuffle}")
+        if args.weight_decay:
+            print(f"weight decay:  {args.weight_decay}")
+            if args.weight_decay_min_ndim is not None:
+                print(f"decay ndim >=: {args.weight_decay_min_ndim}")
     print(f"generation:    {args.sample_mode}")
+    if args.num_samples != 1:
+        print(f"num samples:   {args.num_samples}")
     if args.sample_mode == "sample":
         print(f"temperature:   {args.temperature}")
         if args.top_k is not None:
             print(f"top k:         {args.top_k}")
     print(f"parameters:    {model.num_parameters()}")
     print(f"initial loss:  {summary.initial_loss:.6f}")
-    print(f"final batch:   {summary.final_loss:.6f}")
+    if not args.eval_only:
+        print(f"final batch:   {summary.final_loss:.6f}")
     if summary.evaluation_loss is not None:
         print(f"train loss:    {summary.evaluation_loss:.6f}")
+        print(f"train ppl:     {perplexity(summary.evaluation_loss):.3f}")
     print(f"accuracy:      {summary.accuracy:.3f}")
     if summary.validation_loss is not None:
         print(f"val loss:      {summary.validation_loss:.6f}")
+        print(f"val ppl:       {perplexity(summary.validation_loss):.3f}")
     if summary.validation_accuracy is not None:
         print(f"val accuracy:  {summary.validation_accuracy:.3f}")
     print(f"runtime:       {summary.elapsed_seconds:.4f}s")
     if summary.examples_per_second is not None:
         rate_label = "tokens/s" if args.model == "transformer" else "samples/s"
         print(f"{rate_label}:     {summary.examples_per_second:.1f}")
-    print(f"generated:     {generated!r}")
+    print_generated_samples(generated_samples)
     if args.save_model is not None:
         save_checkpoint(
             args.save_model,
@@ -205,6 +258,61 @@ def run(args: argparse.Namespace) -> None:
     if args.metrics_file is not None:
         write_epoch_metrics(args.metrics_file, epoch_records)
         print(f"metrics file:  {args.metrics_file}")
+
+
+def run_generate_only(args: argparse.Namespace) -> None:
+    if args.load_model is None:
+        raise ValueError("generate-only requires --load-model")
+    if args.metrics_file is not None:
+        raise ValueError("generate-only does not produce epoch metrics")
+
+    vocab = checkpoint_vocab(args.load_model)
+    model = build_model(args, vocab_size=len(vocab))
+    load_checkpoint(
+        args.load_model,
+        model,
+        vocab,
+        model_name=args.model,
+    )
+    generated_samples = generate_samples(
+        model,
+        vocab,
+        args,
+    )
+
+    print("Character language demo")
+    if args.preset is not None:
+        print(f"preset:        {args.preset}")
+    print(f"model:         {args.model}")
+    print("generate only: True")
+    print(f"checkpoint:    {args.load_model}")
+    print(f"vocab size:    {len(vocab)}")
+    print(f"context size:  {args.context_size}")
+    if args.model in ("embedding", "transformer"):
+        print(f"embedding dim: {args.embedding_dim}")
+    if args.model == "transformer":
+        print(f"hidden dim:    {args.hidden_dim or args.embedding_dim * 4}")
+        print(f"heads:         {args.heads}")
+        print(f"layers:        {args.layers}")
+        print(f"activation:    {args.activation}")
+        print(f"tie embeddings: {args.tie_embeddings}")
+    print(f"generation:    {args.sample_mode}")
+    if args.num_samples != 1:
+        print(f"num samples:   {args.num_samples}")
+    if args.sample_mode == "sample":
+        print(f"temperature:   {args.temperature}")
+        if args.top_k is not None:
+            print(f"top k:         {args.top_k}")
+    print(f"parameters:    {model.num_parameters()}")
+    print_generated_samples(generated_samples)
+    if args.save_model is not None:
+        save_checkpoint(
+            args.save_model,
+            model,
+            vocab,
+            model_name=args.model,
+        )
+        print(f"saved model:   {args.save_model}")
 
 
 def epoch_callback(args: argparse.Namespace, records: list[dict]):
@@ -229,8 +337,14 @@ def epoch_record(epoch: int, summary) -> dict:
     return {
         "epoch": epoch,
         "loss": _report_loss(summary),
+        "perplexity": perplexity(_report_loss(summary)),
         "accuracy": summary.accuracy,
         "val_loss": summary.validation_loss,
+        "val_perplexity": (
+            None
+            if summary.validation_loss is None
+            else perplexity(summary.validation_loss)
+        ),
         "val_accuracy": summary.validation_accuracy,
         "elapsed_seconds": summary.elapsed_seconds,
         "examples_seen": summary.examples_seen,
@@ -241,8 +355,10 @@ def write_epoch_metrics(path: str | Path, records: list[dict]) -> None:
     fieldnames = [
         "epoch",
         "loss",
+        "perplexity",
         "accuracy",
         "val_loss",
+        "val_perplexity",
         "val_accuracy",
         "elapsed_seconds",
         "examples_seen",
@@ -266,10 +382,12 @@ def print_epoch_report(
     message = (
         f"epoch {epoch}/{epochs} "
         f"loss={_report_loss(summary):.6f} "
+        f"ppl={perplexity(_report_loss(summary)):.3f} "
         f"accuracy={summary.accuracy:.3f}"
     )
     if summary.validation_loss is not None:
         message += f" val_loss={summary.validation_loss:.6f}"
+        message += f" val_ppl={perplexity(summary.validation_loss):.3f}"
     if summary.validation_accuracy is not None:
         message += f" val_accuracy={summary.validation_accuracy:.3f}"
     print(message)
@@ -279,6 +397,57 @@ def _report_loss(summary) -> float:
     if summary.evaluation_loss is None:
         return summary.final_loss
     return summary.evaluation_loss
+
+
+def evaluate_only_summary(
+    model: TensorModule,
+    dataset,
+    *,
+    validation_dataset=None,
+    evaluate_fn,
+    batch_size: int,
+) -> TrainingSummary:
+    train_eval = evaluate_fn(
+        model,
+        dataset,
+        batch_size=batch_size,
+    )
+    validation_eval = (
+        None
+        if validation_dataset is None
+        else evaluate_fn(
+            model,
+            validation_dataset,
+            batch_size=batch_size,
+        )
+    )
+    elapsed_seconds = train_eval.elapsed_seconds
+    if validation_eval is not None:
+        elapsed_seconds += validation_eval.elapsed_seconds
+
+    return TrainingSummary(
+        history=[train_eval.loss],
+        elapsed_seconds=elapsed_seconds,
+        accuracy=train_eval.accuracy,
+        validation_accuracy=(
+            None
+            if validation_eval is None
+            else validation_eval.accuracy
+        ),
+        evaluation_loss=train_eval.loss,
+        validation_loss=(
+            None
+            if validation_eval is None
+            else validation_eval.loss
+        ),
+        examples_seen=train_eval.examples_seen,
+        confusion_matrix=train_eval.confusion_matrix,
+        validation_confusion_matrix=(
+            None
+            if validation_eval is None
+            else validation_eval.confusion_matrix
+        ),
+    )
 
 
 def save_checkpoint(
@@ -321,6 +490,78 @@ def load_checkpoint(
     model.load_state_dict(payload["state"])
 
 
+def apply_checkpoint_config(args: argparse.Namespace, path: str | Path) -> None:
+    """Fill unspecified CLI model settings from a v1 checkpoint."""
+
+    payload = _checkpoint_payload(path)
+    if "format" not in payload:
+        return
+    if payload.get("format") != CHECKPOINT_FORMAT:
+        raise ValueError("unsupported char checkpoint format")
+
+    state = payload.get("state")
+    if not isinstance(state, dict):
+        raise ValueError("checkpoint state must be a dictionary")
+
+    updates = _checkpoint_config_updates(payload.get("model"), state)
+    missing = [
+        name
+        for name, value in updates.items()
+        if value is None
+    ]
+    if missing:
+        raise ValueError(
+            "checkpoint is missing model config: " + ", ".join(missing)
+        )
+
+    explicit_options = getattr(args, "_explicit_options", set())
+    for name, value in updates.items():
+        if name not in explicit_options:
+            setattr(args, name, value)
+
+
+def checkpoint_vocab(path: str | Path) -> CharVocab:
+    """Load the saved character vocabulary from a v1 checkpoint."""
+
+    payload = _checkpoint_payload(path)
+    if payload.get("format") != CHECKPOINT_FORMAT:
+        raise ValueError("generate-only requires a v1 char checkpoint")
+    vocab = payload.get("vocab")
+    if not isinstance(vocab, list):
+        raise ValueError("checkpoint vocabulary must be a list")
+    return CharVocab(vocab)
+
+
+def _checkpoint_payload(path: str | Path) -> dict:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _checkpoint_config_updates(model_name, state: dict) -> dict:
+    if model_name == "bigram":
+        return {
+            "model": "bigram",
+            "context_size": state.get("context_size"),
+        }
+    if model_name == "embedding":
+        return {
+            "model": "embedding",
+            "context_size": state.get("context_size"),
+            "embedding_dim": state.get("embedding_dim"),
+        }
+    if model_name == "transformer":
+        return {
+            "model": "transformer",
+            "context_size": state.get("context_size"),
+            "embedding_dim": state.get("embedding_dim"),
+            "hidden_dim": state.get("hidden_dim"),
+            "heads": state.get("num_heads", 1),
+            "layers": state.get("num_layers"),
+            "activation": state.get("feed_forward_activation", "relu"),
+            "tie_embeddings": state.get("tie_embeddings", False),
+        }
+    raise ValueError("checkpoint model is unknown")
+
+
 def generate_text(
     model: TensorModule,
     vocab: CharVocab,
@@ -358,6 +599,56 @@ def generate_text(
         )
         text += vocab.decode([next_index])
     return text
+
+
+def generate_samples(
+    model: TensorModule,
+    vocab: CharVocab,
+    args: argparse.Namespace,
+) -> list[str]:
+    if args.num_samples <= 0:
+        raise ValueError("num_samples must be positive")
+
+    seed_text = generation_seed_text(args)
+    rng = random.Random(
+        args.sample_seed
+        if args.sample_seed is not None
+        else args.seed
+    )
+    return [
+        generate_text(
+            model,
+            vocab,
+            seed_text=seed_text,
+            length=args.generate,
+            context_size=args.context_size,
+            input_mode=generation_input_mode(args.model),
+            sample_mode=args.sample_mode,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            rng=rng,
+        )
+        for _ in range(args.num_samples)
+    ]
+
+
+def generation_seed_text(args: argparse.Namespace) -> str:
+    if args.seed_file is None:
+        return args.seed_text
+
+    text = args.seed_file.read_text(encoding="utf-8")
+    if not text:
+        raise ValueError("seed_file must not be empty")
+    return text
+
+
+def print_generated_samples(samples: list[str]) -> None:
+    print(f"sample dist-2: {mean_distinct_ngram_ratio(samples, n=2):.3f}")
+    if len(samples) == 1:
+        print(f"generated:     {samples[0]!r}")
+        return
+    for index, sample in enumerate(samples, start=1):
+        print(f"generated {index}:   {sample!r}")
 
 
 def _select_next_index(
@@ -582,6 +873,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=DEFAULT_OPTIONS["tie_embeddings"],
     )
+    parser.add_argument(
+        "--eval-only",
+        action="store_true",
+        default=DEFAULT_OPTIONS["eval_only"],
+    )
     parser.add_argument("--epochs", type=int, default=DEFAULT_OPTIONS["epochs"])
     parser.add_argument("--batch-size", type=int, default=DEFAULT_OPTIONS["batch_size"])
     parser.add_argument("--lr", type=float, default=DEFAULT_OPTIONS["lr"])
@@ -595,6 +891,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--weight-decay",
         type=float,
         default=DEFAULT_OPTIONS["weight_decay"],
+    )
+    parser.add_argument(
+        "--weight-decay-min-ndim",
+        type=int,
+        default=DEFAULT_OPTIONS["weight_decay_min_ndim"],
     )
     parser.add_argument(
         "--report-every",
@@ -614,7 +915,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--metrics-file", type=Path)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seed-text", default=DEFAULT_OPTIONS["seed_text"])
+    parser.add_argument("--seed-file", type=Path, default=DEFAULT_OPTIONS["seed_file"])
     parser.add_argument("--generate", type=int, default=DEFAULT_OPTIONS["generate"])
+    parser.add_argument(
+        "--num-samples",
+        type=int,
+        default=DEFAULT_OPTIONS["num_samples"],
+    )
+    parser.add_argument(
+        "--generate-only",
+        action="store_true",
+        default=DEFAULT_OPTIONS["generate_only"],
+    )
     parser.add_argument("--sample-mode", choices=("greedy", "sample"), default="greedy")
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int)
@@ -626,7 +938,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         if argv is None
         else argv,
     )
-    return apply_preset(parser.parse_args(argv), explicit_options=explicit_options)
+    args = apply_preset(parser.parse_args(argv), explicit_options=explicit_options)
+    setattr(args, "_explicit_options", explicit_options)
+    return args
 
 
 def apply_preset(

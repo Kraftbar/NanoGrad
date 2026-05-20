@@ -53,6 +53,11 @@ modules should prove that the core works on increasingly realistic checks.
 
 ### Next Small Checks
 
+- [x] Report language-model perplexity and support checkpoint eval/generate-only loops
+- [x] Compare capped Tiny Shakespeare train/validation curves across the bigram,
+  embedding, and tiny GPT presets
+- [x] Add a slightly larger `small-gpt` character-transformer preset
+- [ ] Compare top-k sampled output against nanoGPT on the same capped text slice
 - [ ] Keep implementations readable rather than over-compressed
 
 ### First Real Datasets
@@ -68,6 +73,8 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Add Tiny Shakespeare as the first language dataset
 - [x] Add transformer/GPT-style components later
 - [x] [Compare tiny language-model structure and behavior against nanoGPT](./docs/language_nanogpt_comparison.md)
+- [x] [Document the character language-model experiment workflow](./docs/language_workflow.md)
+- [x] Add safe character-model checkpoint evaluation and generation workflows
 - [ ] Explore camera geometry and pose estimation
 - [ ] Keep ORB-SLAM3 and DROID-SLAM as distant reference points
 
@@ -128,6 +135,8 @@ cifar_cnn_demo.py # local-file CIFAR-10 CNN demo
 text.py          # character text encoding and dataset helpers
 language.py      # reusable small language model implementations
 char_demo.py     # tiny character-level language model demo
+char_compare.py  # compare tiny character language-model configs
+language_benchmark.py # tiny transformer timing check
 ```
 
 ## Reference Implementations
@@ -154,6 +163,8 @@ python3 demo.py
 python3 tensor_demo.py
 python3 mnist_smoke_demo.py
 python3 char_demo.py --preset tiny-transformer
+python3 char_compare.py
+python3 language_benchmark.py --repeat 1
 ```
 
 Use the test suite as the main correctness check. The demos are small examples

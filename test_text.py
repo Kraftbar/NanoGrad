@@ -2,6 +2,8 @@ import unittest
 
 from text import (
     CharVocab,
+    distinct_ngram_ratio,
+    mean_distinct_ngram_ratio,
     next_char_dataset,
     next_char_index_dataset,
     next_char_sequence_dataset,
@@ -66,6 +68,23 @@ class TextHelperTests(unittest.TestCase):
         self.assertEqual(dataset.target_shape, (2,))
         self.assertEqual(dataset[0], ([0.0, 1.0], [1.0, 2.0]))
         self.assertEqual(dataset[1], ([1.0, 2.0], [2.0, 3.0]))
+
+    def test_distinct_ngram_ratio(self) -> None:
+        self.assertEqual(distinct_ngram_ratio("aaaa", n=1), 0.25)
+        self.assertEqual(distinct_ngram_ratio("abab", n=2), 2 / 3)
+        self.assertEqual(distinct_ngram_ratio("a", n=2), 0.0)
+
+        with self.assertRaises(ValueError):
+            distinct_ngram_ratio("abc", n=0)
+
+    def test_mean_distinct_ngram_ratio(self) -> None:
+        self.assertEqual(
+            mean_distinct_ngram_ratio(["abab", "aaaa"], n=2),
+            ((2 / 3) + (1 / 3)) / 2,
+        )
+
+        with self.assertRaises(ValueError):
+            mean_distinct_ngram_ratio([], n=2)
 
     def test_next_char_dataset_can_reuse_vocab(self) -> None:
         vocab = CharVocab.from_text("abcd")

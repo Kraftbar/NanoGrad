@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from tensor import Tensor
 
 
@@ -86,6 +88,15 @@ def tensor_multiclass_confusion_matrix(
         matrix[target][prediction] += 1
 
     return matrix
+
+
+def perplexity(loss: float) -> float:
+    """Convert average cross-entropy loss to perplexity."""
+
+    try:
+        return math.exp(loss)
+    except OverflowError:
+        return float("inf")
 
 
 def _class_indices(targets: Tensor | list[int], rows: int, cols: int) -> list[int]:

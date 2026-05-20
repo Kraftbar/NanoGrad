@@ -9,10 +9,13 @@ from pathlib import Path
 from char_demo import (
     _argmax,
     _sample_from_logits,
+    apply_checkpoint_config,
     apply_preset,
     build_dataset,
     build_model,
+    generate_samples,
     generate_text,
+    generation_seed_text,
     generation_input_mode,
     load_checkpoint,
     load_text,
@@ -56,6 +59,7 @@ class CharDemoTests(unittest.TestCase):
             "--activation",
             "gelu",
             "--tie-embeddings",
+            "--eval-only",
             "--epochs",
             "3",
             "--batch-size",
@@ -67,6 +71,8 @@ class CharDemoTests(unittest.TestCase):
             "adam",
             "--weight-decay",
             "0.01",
+            "--weight-decay-min-ndim",
+            "2",
             "--report-every",
             "2",
             "--validation-chars",
@@ -79,8 +85,13 @@ class CharDemoTests(unittest.TestCase):
             "9",
             "--seed-text",
             "a",
+            "--seed-file",
+            "prompt.txt",
             "--generate",
             "5",
+            "--num-samples",
+            "2",
+            "--generate-only",
             "--sample-mode",
             "sample",
             "--temperature",
@@ -106,19 +117,24 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.layers, 2)
         self.assertEqual(args.activation, "gelu")
         self.assertTrue(args.tie_embeddings)
+        self.assertTrue(args.eval_only)
         self.assertEqual(args.epochs, 3)
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.lr, 0.1)
         self.assertTrue(args.no_shuffle)
         self.assertEqual(args.optimizer, "adam")
         self.assertEqual(args.weight_decay, 0.01)
+        self.assertEqual(args.weight_decay_min_ndim, 2)
         self.assertEqual(args.report_every, 2)
         self.assertEqual(args.validation_chars, 3)
         self.assertEqual(args.max_grad_norm, 1.5)
         self.assertEqual(args.metrics_file, Path("metrics.csv"))
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.seed_text, "a")
+        self.assertEqual(args.seed_file, Path("prompt.txt"))
         self.assertEqual(args.generate, 5)
+        self.assertEqual(args.num_samples, 2)
+        self.assertTrue(args.generate_only)
         self.assertEqual(args.sample_mode, "sample")
         self.assertEqual(args.temperature, 0.8)
         self.assertEqual(args.top_k, 3)
@@ -163,6 +179,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.lr, 0.01)
         self.assertEqual(args.optimizer, "adam")
         self.assertEqual(args.weight_decay, 0.01)
+        self.assertEqual(args.weight_decay_min_ndim, 2)
         self.assertEqual(args.max_grad_norm, 1.0)
         self.assertEqual(args.seed_text, "hell")
         self.assertEqual(args.generate, 24)
@@ -179,6 +196,29 @@ class CharDemoTests(unittest.TestCase):
         self.assertFalse(args.tie_embeddings)
         self.assertEqual(args.optimizer, "sgd")
         self.assertEqual(args.activation, "gelu")
+
+    def test_small_gpt_preset_sets_larger_experiment_defaults(self) -> None:
+        args = parse_args(["--preset", "small-gpt"])
+
+        self.assertEqual(args.preset, "small-gpt")
+        self.assertEqual(args.model, "transformer")
+        self.assertEqual(args.max_chars, 512)
+        self.assertEqual(args.context_size, 8)
+        self.assertEqual(args.embedding_dim, 16)
+        self.assertEqual(args.hidden_dim, 64)
+        self.assertEqual(args.heads, 2)
+        self.assertEqual(args.layers, 2)
+        self.assertEqual(args.activation, "gelu")
+        self.assertTrue(args.tie_embeddings)
+        self.assertEqual(args.epochs, 1)
+        self.assertEqual(args.batch_size, 8)
+        self.assertEqual(args.lr, 0.005)
+        self.assertEqual(args.optimizer, "adam")
+        self.assertEqual(args.weight_decay, 0.01)
+        self.assertEqual(args.weight_decay_min_ndim, 2)
+        self.assertEqual(args.max_grad_norm, 1.0)
+        self.assertEqual(args.seed_text, "hello na")
+        self.assertEqual(args.generate, 80)
 
     def test_tiny_transformer_preset_keeps_explicit_values(self) -> None:
         args = parse_args([
@@ -411,6 +451,50 @@ class CharDemoTests(unittest.TestCase):
             "abba",
         )
 
+    def test_generate_samples_reuses_rng_across_multiple_samples(self) -> None:
+        vocab = CharVocab.from_text("ab")
+        model = CharBigramModel(len(vocab), seed=0)
+        model.projection.weight.data = [0.0, 0.0, 0.0, 0.0]
+        model.projection.bias.data = [0.0, 0.0]
+        args = parse_args([
+            "--sample-mode",
+            "sample",
+            "--sample-seed",
+            "0",
+            "--num-samples",
+            "2",
+            "--seed-text",
+            "a",
+            "--generate",
+            "3",
+        ])
+
+        self.assertEqual(
+            generate_samples(model, vocab, args),
+            ["abba", "aaba"],
+        )
+
+        args.num_samples = 0
+        with self.assertRaises(ValueError):
+            generate_samples(model, vocab, args)
+
+    def test_generation_seed_text_can_read_seed_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "prompt.txt"
+            path.write_text("from file", encoding="utf-8")
+            args = parse_args([
+                "--seed-text",
+                "from arg",
+                "--seed-file",
+                str(path),
+            ])
+
+            self.assertEqual(generation_seed_text(args), "from file")
+
+            path.write_text("", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                generation_seed_text(args)
+
     def test_generate_text_errors(self) -> None:
         vocab = CharVocab.from_text("ab")
         model = CharBigramModel(len(vocab), seed=0)
@@ -641,6 +725,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("Character language demo", text)
         self.assertIn("model:         bigram", text)
         self.assertIn("generation:    greedy", text)
+        self.assertIn("sample dist-2:", text)
         self.assertIn("text source:   built-in", text)
         self.assertIn("vocab size:    2", text)
         self.assertIn("samples:       7", text)
@@ -679,7 +764,9 @@ class CharDemoTests(unittest.TestCase):
         text = output.getvalue()
         self.assertIn("val samples:", text)
         self.assertIn("val_loss=", text)
+        self.assertIn("val_ppl=", text)
         self.assertIn("val loss:", text)
+        self.assertIn("val ppl:", text)
         self.assertIn("val accuracy:", text)
 
     def test_run_writes_epoch_metrics_file(self) -> None:
@@ -711,7 +798,7 @@ class CharDemoTests(unittest.TestCase):
             metrics = metrics_path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(
                 metrics[0],
-                "epoch,loss,accuracy,val_loss,val_accuracy,elapsed_seconds,examples_seen",
+                "epoch,loss,perplexity,accuracy,val_loss,val_perplexity,val_accuracy,elapsed_seconds,examples_seen",
             )
             self.assertEqual(len(metrics), 3)
             self.assertTrue(metrics[1].startswith("1,"))
@@ -798,6 +885,189 @@ class CharDemoTests(unittest.TestCase):
             load_checkpoint(path, target, vocab, model_name="bigram")
 
         self.assertEqual(target.state_dict(), model.state_dict())
+
+    def test_run_eval_only_reports_loaded_model_without_training(self) -> None:
+        vocab = CharVocab.from_text("ab")
+        model = CharBigramModel(len(vocab), seed=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "char-model.json"
+            save_checkpoint(path, model, vocab, model_name="bigram")
+            args = parse_args([
+                "--text",
+                "abababab",
+                "--load-model",
+                str(path),
+                "--eval-only",
+                "--epochs",
+                "20",
+                "--seed-text",
+                "a",
+                "--generate",
+                "2",
+            ])
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                run(args)
+
+        text = output.getvalue()
+        self.assertIn("eval only:     True", text)
+        self.assertIn("train loss:", text)
+        self.assertIn("train ppl:", text)
+        self.assertNotIn("final batch:", text)
+
+    def test_load_model_applies_checkpoint_architecture_defaults(self) -> None:
+        vocab = CharVocab.from_text("ab")
+        model = CharTransformerModel(
+            len(vocab),
+            context_size=2,
+            embedding_dim=4,
+            hidden_dim=8,
+            num_heads=2,
+            feed_forward_activation="gelu",
+            tie_embeddings=True,
+            seed=0,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "char-transformer.json"
+            save_checkpoint(path, model, vocab, model_name="transformer")
+            args = parse_args([
+                "--text",
+                "abababab",
+                "--load-model",
+                str(path),
+                "--eval-only",
+                "--seed-text",
+                "ab",
+                "--generate",
+                "1",
+            ])
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                run(args)
+
+        text = output.getvalue()
+        self.assertIn("model:         transformer", text)
+        self.assertIn("context size:  2", text)
+        self.assertIn("embedding dim: 4", text)
+        self.assertIn("hidden dim:    8", text)
+        self.assertIn("heads:         2", text)
+        self.assertIn("activation:    gelu", text)
+        self.assertIn("tie embeddings: True", text)
+
+    def test_run_generate_only_uses_checkpoint_vocab_and_architecture(self) -> None:
+        vocab = CharVocab.from_text("ab")
+        model = CharTransformerModel(
+            len(vocab),
+            context_size=2,
+            embedding_dim=4,
+            hidden_dim=8,
+            num_heads=2,
+            feed_forward_activation="gelu",
+            tie_embeddings=True,
+            seed=0,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "char-transformer.json"
+            save_checkpoint(path, model, vocab, model_name="transformer")
+            args = parse_args([
+                "--load-model",
+                str(path),
+                "--generate-only",
+                "--seed-text",
+                "ab",
+                "--generate",
+                "1",
+                "--num-samples",
+                "2",
+            ])
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                run(args)
+
+        text = output.getvalue()
+        self.assertIn("model:         transformer", text)
+        self.assertIn("generate only: True", text)
+        self.assertIn("num samples:   2", text)
+        self.assertIn("checkpoint:", text)
+        self.assertIn("vocab size:    2", text)
+        self.assertIn("context size:  2", text)
+        self.assertIn("hidden dim:    8", text)
+        self.assertIn("generated 1:", text)
+        self.assertIn("generated 2:", text)
+        self.assertIn("sample dist-2:", text)
+        self.assertNotIn("text length:", text)
+        self.assertNotIn("initial loss:", text)
+
+    def test_generate_only_requires_checkpoint_and_rejects_metrics(self) -> None:
+        args = parse_args(["--generate-only"])
+        with self.assertRaises(ValueError):
+            run(args)
+
+        vocab = CharVocab.from_text("ab")
+        model = CharBigramModel(len(vocab), seed=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "char-model.json"
+            metrics_path = Path(tmpdir) / "metrics.csv"
+            save_checkpoint(path, model, vocab, model_name="bigram")
+            args = parse_args([
+                "--load-model",
+                str(path),
+                "--generate-only",
+                "--metrics-file",
+                str(metrics_path),
+            ])
+            with self.assertRaises(ValueError):
+                run(args)
+
+    def test_checkpoint_config_keeps_explicit_architecture_overrides(self) -> None:
+        vocab = CharVocab.from_text("ab")
+        model = CharBigramModel(len(vocab), context_size=2, seed=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "char-model.json"
+            save_checkpoint(path, model, vocab, model_name="bigram")
+            args = parse_args([
+                "--load-model",
+                str(path),
+                "--context-size",
+                "1",
+            ])
+
+            apply_checkpoint_config(args, path)
+
+        self.assertEqual(args.model, "bigram")
+        self.assertEqual(args.context_size, 1)
+
+    def test_checkpoint_config_defaults_older_transformer_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "legacy-transformer.json"
+            path.write_text(
+                json.dumps({
+                    "format": "nanollm.char_demo.v1",
+                    "model": "transformer",
+                    "vocab": ["a", "b"],
+                    "state": {
+                        "context_size": 2,
+                        "embedding_dim": 4,
+                        "hidden_dim": 8,
+                        "num_layers": 1,
+                    },
+                }),
+                encoding="utf-8",
+            )
+            args = parse_args(["--load-model", str(path)])
+
+            apply_checkpoint_config(args, path)
+
+        self.assertEqual(args.model, "transformer")
+        self.assertEqual(args.context_size, 2)
+        self.assertEqual(args.embedding_dim, 4)
+        self.assertEqual(args.hidden_dim, 8)
+        self.assertEqual(args.heads, 1)
+        self.assertEqual(args.activation, "relu")
+        self.assertFalse(args.tie_embeddings)
 
     def test_run_trains_on_text_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -202,6 +202,7 @@ class CausalSelfAttention(TensorModule):
         self.context_size = context_size
         self.num_heads = num_heads
         self.head_dim = embedding_dim // num_heads
+        self._mask_cache: dict[tuple[int, int], Tensor] = {}
         self.queries = [
             TensorLinear(embedding_dim, self.head_dim, seed=seed + head * 3)
             for head in range(num_heads)
@@ -231,7 +232,7 @@ class CausalSelfAttention(TensorModule):
             raise ValueError("input embedding dimension must match embedding_dim")
 
         flat_inputs = inputs.reshape((batch_size * context_size, embedding_dim))
-        mask = _causal_attention_mask(batch_size, context_size)
+        mask = self._causal_mask(batch_size, context_size)
         head_outputs = []
         for query_layer, key_layer, value_layer in zip(
             self.queries,
@@ -249,6 +250,12 @@ class CausalSelfAttention(TensorModule):
         attended = _concat_feature_tensors(head_outputs)
         output = self.projection(attended)
         return output.reshape((batch_size, context_size, embedding_dim))
+
+    def _causal_mask(self, batch_size: int, context_size: int) -> Tensor:
+        key = (batch_size, context_size)
+        if key not in self._mask_cache:
+            self._mask_cache[key] = _causal_attention_mask(batch_size, context_size)
+        return self._mask_cache[key]
 
     def parameters(self) -> list[Tensor]:
         return [
