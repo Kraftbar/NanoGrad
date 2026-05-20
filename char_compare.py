@@ -244,11 +244,7 @@ def comparison_args(args: argparse.Namespace, name: str) -> argparse.Namespace:
     options["top_k"] = args.top_k
     options["sample_seed"] = args.sample_seed
     options["num_samples"] = args.num_samples
-    options["seed_text"] = (
-        args.seed_text
-        if args.seed_text is not None
-        else options["seed_text"]
-    )
+    options["seed_text"] = args.seed_text
     options["seed_file"] = args.seed_file
     return argparse.Namespace(**options)
 

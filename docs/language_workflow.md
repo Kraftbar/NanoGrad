@@ -23,6 +23,8 @@ python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 1
 
 The comparison reports train/validation loss, perplexity, accuracy, generated
 sample `dist-2` diversity, rough throughput, and generated samples per model.
+Generated samples start from the training-text prefix unless `--seed-text` or
+`--seed-file` is provided.
 Add `--num-samples 3` for a broader qualitative check. The default comparison skips the slower
 `small-gpt` preset and uses `lite-gpt` as the default transformer rung; include
 `small-gpt` explicitly with `--models small-gpt` or in a longer model list. CSV metrics include model type, context size, and parameter

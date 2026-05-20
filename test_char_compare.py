@@ -259,6 +259,28 @@ class CharCompareTests(unittest.TestCase):
         self.assertIn("bigram,bigram,4,", metrics)
         self.assertIn("bigram,bigram,4,", samples)
 
+    def test_run_default_seed_uses_training_prefix(self) -> None:
+        args = parse_args([
+            "--models",
+            "lite-gpt",
+            "--text",
+            "abcdefghijkabcdefghijk",
+            "--validation-chars",
+            "9",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "2",
+            "--generate",
+            "2",
+        ])
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            run(args)
+
+        self.assertIn("lite-gpt generated: 'abcdefgh", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
