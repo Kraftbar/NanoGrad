@@ -47,9 +47,10 @@ COMPARISON_CONFIGS = {
         "optimizer": "adam",
     },
     "tiny-gpt": PRESETS["tiny-gpt"],
+    "lite-gpt": PRESETS["lite-gpt"],
     "small-gpt": PRESETS["small-gpt"],
 }
-DEFAULT_MODELS = ["bigram", "embedding", "tiny-gpt"]
+DEFAULT_MODELS = ["bigram", "embedding", "lite-gpt"]
 
 
 @dataclass(frozen=True)

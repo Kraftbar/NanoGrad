@@ -21,8 +21,8 @@ python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 1
 The comparison reports train/validation loss, perplexity, accuracy, generated
 sample `dist-2` diversity, rough throughput, and generated samples per model.
 Add `--num-samples 3` for a broader qualitative check. The default comparison skips the slower
-`small-gpt` preset; include it explicitly with `--models small-gpt` or in a
-longer model list. CSV metrics include model type, context size, and parameter
+`small-gpt` preset and uses `lite-gpt` as the default transformer rung; include
+`small-gpt` explicitly with `--models small-gpt` or in a longer model list. CSV metrics include model type, context size, and parameter
 count alongside the epoch metrics. `--samples-file` writes each generated
 sample with its model metadata and per-sample `distinct_2` score for later
 qualitative comparison. `--summary-file` writes the final table metrics as one
@@ -37,10 +37,9 @@ Train the GPT-like preset and save a checkpoint:
 python3 char_demo.py --preset tiny-gpt --text-file data/tinyshakespeare/input.txt --max-chars 128 --validation-chars 32 --seed-text Firs --save-model /tmp/nanollm-char.json
 ```
 
-For a slightly larger Tiny Shakespeare run, use `--preset small-gpt` and pass an
-8-character seed such as `--seed-text "First Ci"`. It keeps the same
-character-level code path but increases context length, embedding width, heads,
-and layers.
+For a slightly larger Tiny Shakespeare run, use `--preset lite-gpt` first, then
+`--preset small-gpt` when slower iteration is acceptable. Both keep the same
+character-level code path while increasing context length and model width.
 
 The checkpoint stores the vocabulary and model architecture, so later commands
 do not need to repeat flags like `--model`, `--context-size`, or
@@ -80,5 +79,6 @@ python3 language_benchmark.py --repeat 3
 Time the larger shape with a smaller batch:
 
 ```bash
+python3 language_benchmark.py --preset lite-gpt --repeat 3
 python3 language_benchmark.py --preset small-gpt --batch-size 1 --repeat 3
 ```

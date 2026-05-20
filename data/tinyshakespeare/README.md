@@ -11,10 +11,10 @@ Compare the tiny language-model configs on a capped slice:
 python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 128 --validation-chars 32 --output-dir /tmp/nanollm-language-run
 ```
 
-Train the GPT-like character model:
+Train the lightweight GPT-like character model:
 
 ```bash
-python3 char_demo.py --preset tiny-gpt --text-file data/tinyshakespeare/input.txt --max-chars 128 --validation-chars 32 --seed-text Firs
+python3 char_demo.py --preset lite-gpt --text-file data/tinyshakespeare/input.txt --max-chars 256 --validation-chars 64 --seed-text "First Ci"
 ```
 
 See [../../docs/language_workflow.md](../../docs/language_workflow.md) for the

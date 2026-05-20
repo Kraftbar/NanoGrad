@@ -102,7 +102,7 @@ class CharCompareTests(unittest.TestCase):
     def test_default_models_skip_slower_small_gpt(self) -> None:
         args = parse_args([])
 
-        self.assertEqual(args.models, ["bigram", "embedding", "tiny-gpt"])
+        self.assertEqual(args.models, ["bigram", "embedding", "lite-gpt"])
         self.assertEqual(args.validation_chars, 9)
 
     def test_small_gpt_can_be_selected_explicitly(self) -> None:

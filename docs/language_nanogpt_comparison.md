@@ -36,8 +36,10 @@ This note compares NanoGrad's tiny character transformer path with the local
   `python3 char_demo.py --preset tiny-transformer`.
 - A more GPT-like smoke preset enables GELU, Adam, weight decay, grad clipping,
   and tied embeddings: `python3 char_demo.py --preset tiny-gpt`.
+- `--preset lite-gpt` is the default comparison transformer rung: longer
+  context than `tiny-gpt` while staying cheap enough for quick iteration.
 - `--preset small-gpt` is the next larger character-level transformer rung:
-  longer context, wider embeddings, two heads, and two blocks.
+  wider embeddings, two heads, and two blocks.
 - Sampled generation supports temperature, optional top-k filtering, and
   multiple samples per prompt with `--num-samples`, matching the shape of the
   local nanoGPT sampling path.
@@ -61,7 +63,7 @@ This note compares NanoGrad's tiny character transformer path with the local
   settings are restored from the checkpoint.
 - Saved checkpoints can also be sampled without supplying the training text:
   `python3 char_demo.py --load-model char.json --generate-only --seed-text Firs`.
-- `char_compare.py` runs the bigram, embedding, and tiny GPT configs on the
+- `char_compare.py` runs the bigram, embedding, and lite GPT configs on the
   same text slice and reports loss, perplexity, validation metrics, speed, and
   one or more generated samples per model. It also reports `dist-2`, a simple
   generated-text distinct-bigram ratio for spotting repetitive samples:

@@ -197,6 +197,29 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.optimizer, "sgd")
         self.assertEqual(args.activation, "gelu")
 
+    def test_lite_gpt_preset_sets_middle_experiment_defaults(self) -> None:
+        args = parse_args(["--preset", "lite-gpt"])
+
+        self.assertEqual(args.preset, "lite-gpt")
+        self.assertEqual(args.model, "transformer")
+        self.assertEqual(args.max_chars, 256)
+        self.assertEqual(args.context_size, 8)
+        self.assertEqual(args.embedding_dim, 12)
+        self.assertEqual(args.hidden_dim, 32)
+        self.assertEqual(args.heads, 1)
+        self.assertEqual(args.layers, 1)
+        self.assertEqual(args.activation, "gelu")
+        self.assertTrue(args.tie_embeddings)
+        self.assertEqual(args.epochs, 1)
+        self.assertEqual(args.batch_size, 8)
+        self.assertEqual(args.lr, 0.0075)
+        self.assertEqual(args.optimizer, "adam")
+        self.assertEqual(args.weight_decay, 0.01)
+        self.assertEqual(args.weight_decay_min_ndim, 2)
+        self.assertEqual(args.max_grad_norm, 1.0)
+        self.assertEqual(args.seed_text, "hello na")
+        self.assertEqual(args.generate, 64)
+
     def test_small_gpt_preset_sets_larger_experiment_defaults(self) -> None:
         args = parse_args(["--preset", "small-gpt"])
 

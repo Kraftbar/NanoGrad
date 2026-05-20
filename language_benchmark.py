@@ -12,7 +12,7 @@ from losses import softmax_cross_entropy
 from tensor import Tensor
 
 
-BENCHMARK_PRESETS = ("tiny-gpt", "small-gpt")
+BENCHMARK_PRESETS = ("tiny-gpt", "lite-gpt", "small-gpt")
 
 
 def benchmark_transformer(config: dict, *, batch_size: int = 4) -> None:

@@ -9,14 +9,14 @@ class LanguageBenchmarkTests(unittest.TestCase):
     def test_parse_args(self) -> None:
         args = parse_args([
             "--preset",
-            "small-gpt",
+            "lite-gpt",
             "--batch-size",
             "2",
             "--repeat",
             "2",
         ])
 
-        self.assertEqual(args.preset, "small-gpt")
+        self.assertEqual(args.preset, "lite-gpt")
         self.assertEqual(args.batch_size, 2)
         self.assertEqual(args.repeat, 2)
 
