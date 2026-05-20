@@ -4,6 +4,9 @@ This repo keeps the language-model path small enough to inspect by hand while
 still supporting the core experiment loop: compare baselines, save a checkpoint,
 evaluate it, and sample from it.
 
+See [language_experiment_log.md](./language_experiment_log.md) for the small
+local runs that motivate default preset choices.
+
 ## Compare Baselines
 
 Run the built-in text smoke comparison:
