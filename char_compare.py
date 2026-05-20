@@ -73,6 +73,7 @@ class ComparisonResult:
 
 
 def run(args: argparse.Namespace) -> None:
+    apply_output_dir(args)
     text = load_text(args)
     config_args = [
         comparison_args(args, name)
@@ -113,6 +114,8 @@ def run(args: argparse.Namespace) -> None:
         print(f"temperature:   {args.temperature}")
         if args.top_k is not None:
             print(f"top k:         {args.top_k}")
+    if args.output_dir is not None:
+        print(f"output dir:    {args.output_dir}")
     print(format_results_table(results))
     for result in results:
         print_result_samples(result)
@@ -247,6 +250,20 @@ def comparison_args(args: argparse.Namespace, name: str) -> argparse.Namespace:
     )
     options["seed_file"] = args.seed_file
     return argparse.Namespace(**options)
+
+
+def apply_output_dir(args: argparse.Namespace) -> None:
+    if args.output_dir is None:
+        return
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    defaults = {
+        "summary_file": "summary.csv",
+        "metrics_file": "metrics.csv",
+        "samples_file": "samples.csv",
+    }
+    for option_name, filename in defaults.items():
+        if getattr(args, option_name) is None:
+            setattr(args, option_name, args.output_dir / filename)
 
 
 def usable_seed_text(
@@ -483,6 +500,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int)
     parser.add_argument("--sample-seed", type=int)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--summary-file", type=Path)
     parser.add_argument("--metrics-file", type=Path)
     parser.add_argument("--samples-file", type=Path)

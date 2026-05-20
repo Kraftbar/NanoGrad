@@ -15,7 +15,7 @@ python3 char_compare.py
 Run the same comparison on a capped Tiny Shakespeare slice:
 
 ```bash
-python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 128 --validation-chars 32 --summary-file /tmp/nanollm-language-summary.csv --metrics-file /tmp/nanollm-language-metrics.csv --samples-file /tmp/nanollm-language-samples.csv
+python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 128 --validation-chars 32 --output-dir /tmp/nanollm-language-run
 ```
 
 The comparison reports train/validation loss, perplexity, accuracy, generated
@@ -26,7 +26,8 @@ longer model list. CSV metrics include model type, context size, and parameter
 count alongside the epoch metrics. `--samples-file` writes each generated
 sample with its model metadata and per-sample `distinct_2` score for later
 qualitative comparison. `--summary-file` writes the final table metrics as one
-row per model for sorting or plotting.
+row per model for sorting or plotting. `--output-dir` writes all three CSVs as
+`summary.csv`, `metrics.csv`, and `samples.csv`.
 
 ## Train And Save
 

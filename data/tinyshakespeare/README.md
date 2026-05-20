@@ -8,7 +8,7 @@ Dataset text files are ignored by git.
 Compare the tiny language-model configs on a capped slice:
 
 ```bash
-python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 128 --validation-chars 32
+python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 128 --validation-chars 32 --output-dir /tmp/nanollm-language-run
 ```
 
 Train the GPT-like character model:

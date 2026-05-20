@@ -66,11 +66,11 @@ This note compares NanoGrad's tiny character transformer path with the local
   one or more generated samples per model. It also reports `dist-2`, a simple
   generated-text distinct-bigram ratio for spotting repetitive samples:
   ```bash
-  python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 128 --validation-chars 32 --summary-file /tmp/nanollm-language-summary.csv --samples-file /tmp/nanollm-language-samples.csv
+  python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 128 --validation-chars 32 --output-dir /tmp/nanollm-language-run
   ```
   The samples CSV preserves model metadata, sample index, text, and per-sample
   `distinct_2` so top-k/temperature output can be compared outside the console.
-  The summary CSV writes the final table metrics as one row per model.
+  The output directory writes summary, epoch metrics, and samples as CSVs.
 - The same preset can run against local Tiny Shakespeare with an explicit seed:
   ```bash
   python3 char_demo.py --preset tiny-transformer --text-file data/tinyshakespeare/input.txt --seed-text Firs
