@@ -142,6 +142,7 @@ class CharCompareTests(unittest.TestCase):
                 validation_accuracy=0.25,
                 elapsed_seconds=0.1,
                 examples_per_second=20.0,
+                throughput_unit="samples/s",
                 seed_text="abcd",
                 sample_distinct_2=0.75,
                 generated_samples=["abcd"],
@@ -152,6 +153,7 @@ class CharCompareTests(unittest.TestCase):
         self.assertIn("ctx", table)
         self.assertIn("train ppl", table)
         self.assertIn("dist-2", table)
+        self.assertIn("unit", table)
         self.assertIn("bigram", table)
 
     def test_run_compares_models_and_writes_metrics(self) -> None:
@@ -201,6 +203,7 @@ class CharCompareTests(unittest.TestCase):
         self.assertIn("tiny-gpt", text)
         self.assertIn("train ppl", text)
         self.assertIn("dist-2", text)
+        self.assertIn("tokens/s", text)
         self.assertIn("bigram generated 1:", text)
         self.assertIn("tiny-gpt generated 2:", text)
         self.assertIn("summary file:", text)
@@ -208,7 +211,7 @@ class CharCompareTests(unittest.TestCase):
         self.assertIn("samples file:", text)
         self.assertEqual(
             summary[0],
-            "model,model_type,context_size,parameters,train_loss,train_perplexity,accuracy,val_loss,val_perplexity,val_accuracy,sample_distinct_2,seed_text,elapsed_seconds,examples_per_second,sample_count",
+            "model,model_type,context_size,parameters,train_loss,train_perplexity,accuracy,val_loss,val_perplexity,val_accuracy,sample_distinct_2,seed_text,elapsed_seconds,examples_per_second,throughput_unit,sample_count",
         )
         self.assertEqual(len(summary), 4)
         self.assertTrue(summary[1].startswith("bigram,bigram,4,"))

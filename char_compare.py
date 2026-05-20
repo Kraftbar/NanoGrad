@@ -70,6 +70,7 @@ class ComparisonResult:
     validation_accuracy: float | None
     elapsed_seconds: float
     examples_per_second: float | None
+    throughput_unit: str
     seed_text: str
     sample_distinct_2: float
     generated_samples: list[str]
@@ -227,6 +228,7 @@ def run_one_comparison(
             validation_accuracy=summary.validation_accuracy,
             elapsed_seconds=summary.elapsed_seconds,
             examples_per_second=summary.examples_per_second,
+            throughput_unit=throughput_unit(args),
             seed_text=seed_text,
             sample_distinct_2=mean_distinct_ngram_ratio(generated_samples, n=2),
             generated_samples=generated_samples,
@@ -367,6 +369,7 @@ def summary_records(results: list[ComparisonResult]) -> list[dict]:
             "seed_text": result.seed_text,
             "elapsed_seconds": result.elapsed_seconds,
             "examples_per_second": result.examples_per_second,
+            "throughput_unit": result.throughput_unit,
             "sample_count": len(result.generated_samples),
         }
         for result in results
@@ -389,6 +392,7 @@ def write_summary_records(path: str | Path, records: list[dict]) -> None:
         "seed_text",
         "elapsed_seconds",
         "examples_per_second",
+        "throughput_unit",
         "sample_count",
     ]
     with Path(path).open("w", newline="", encoding="utf-8") as file:
@@ -491,6 +495,10 @@ def print_result_samples(result: ComparisonResult) -> None:
         print(f"{result.name} generated {index}: {sample!r}")
 
 
+def throughput_unit(args: argparse.Namespace) -> str:
+    return "tokens/s" if args.model == "transformer" else "samples/s"
+
+
 def format_results_table(results: list[ComparisonResult]) -> str:
     headers = [
         "name",
@@ -503,7 +511,8 @@ def format_results_table(results: list[ComparisonResult]) -> str:
         "acc",
         "val acc",
         "dist-2",
-        "items/s",
+        "rate",
+        "unit",
     ]
     rows = [
         [
@@ -518,6 +527,7 @@ def format_results_table(results: list[ComparisonResult]) -> str:
             _optional_float(result.validation_accuracy, digits=3),
             f"{result.sample_distinct_2:.3f}",
             _optional_float(result.examples_per_second, digits=1),
+            result.throughput_unit,
         ]
         for result in results
     ]

@@ -13,13 +13,13 @@ python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 5
 
 Summary:
 
-| model | ctx | params | train loss | val loss | val ppl | val acc | dist-2 | items/s |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| bigram | 4 | 8145 | 3.0596 | 3.2130 | 24.85 | 0.202 | 0.522 | 107.5 |
-| embedding | 4 | 1877 | 1.4380 | 3.1071 | 22.36 | 0.355 | 0.695 | 303.4 |
-| tiny-gpt | 4 | 1053 | 2.9240 | 3.1009 | 22.22 | 0.200 | 0.602 | 209.9 |
-| lite-gpt | 8 | 2189 | 2.4495 | 2.8948 | 18.08 | 0.214 | 0.705 | 134.8 |
-| small-gpt | 8 | 7485 | 2.4825 | 2.9624 | 19.34 | 0.217 | 0.663 | 54.9 |
+| model | ctx | params | train loss | val loss | val ppl | val acc | dist-2 | rate | unit |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| bigram | 4 | 8145 | 3.0596 | 3.2130 | 24.85 | 0.202 | 0.522 | 107.5 | samples/s |
+| embedding | 4 | 1877 | 1.4380 | 3.1071 | 22.36 | 0.355 | 0.695 | 303.4 | samples/s |
+| tiny-gpt | 4 | 1053 | 2.9240 | 3.1009 | 22.22 | 0.200 | 0.602 | 209.9 | tokens/s |
+| lite-gpt | 8 | 2189 | 2.4495 | 2.8948 | 18.08 | 0.214 | 0.705 | 134.8 | tokens/s |
+| small-gpt | 8 | 7485 | 2.4825 | 2.9624 | 19.34 | 0.217 | 0.663 | 54.9 | tokens/s |
 
 Notes:
 
