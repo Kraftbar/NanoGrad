@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -130,6 +131,20 @@ def run(args: argparse.Namespace) -> None:
     if args.samples_file is not None:
         write_sample_records(args.samples_file, sample_records(results))
         print(f"samples file:  {args.samples_file}")
+    if args.manifest_file is not None:
+        write_manifest(
+            args.manifest_file,
+            comparison_manifest(
+                args,
+                config_args,
+                text=text,
+                train_text=train_text,
+                validation_text=validation_text,
+                vocab=vocab,
+                results=results,
+            ),
+        )
+        print(f"manifest file: {args.manifest_file}")
 
 
 def run_one_comparison(
@@ -257,6 +272,7 @@ def apply_output_dir(args: argparse.Namespace) -> None:
         "summary_file": "summary.csv",
         "metrics_file": "metrics.csv",
         "samples_file": "samples.csv",
+        "manifest_file": "manifest.json",
     }
     for option_name, filename in defaults.items():
         if getattr(args, option_name) is None:
@@ -409,6 +425,58 @@ def write_sample_records(path: str | Path, records: list[dict]) -> None:
         writer.writerows(records)
 
 
+def comparison_manifest(
+    args: argparse.Namespace,
+    config_args: list[argparse.Namespace],
+    *,
+    text: str,
+    train_text: str,
+    validation_text: str | None,
+    vocab: CharVocab,
+    results: list[ComparisonResult],
+) -> dict:
+    return {
+        "text_source": text_source(args),
+        "text_length": len(text),
+        "train_length": len(train_text),
+        "validation_length": (
+            None
+            if validation_text is None
+            else len(validation_text)
+        ),
+        "vocab_size": len(vocab),
+        "models": args.models,
+        "generation": {
+            "generate": args.generate,
+            "num_samples": args.num_samples,
+            "sample_mode": args.sample_mode,
+            "temperature": args.temperature,
+            "top_k": args.top_k,
+            "seed": args.seed,
+            "sample_seed": args.sample_seed,
+            "seed_text": args.seed_text,
+            "seed_file": args.seed_file,
+        },
+        "outputs": {
+            "summary_file": args.summary_file,
+            "metrics_file": args.metrics_file,
+            "samples_file": args.samples_file,
+            "manifest_file": args.manifest_file,
+        },
+        "model_configs": {
+            name: _jsonable(vars(model_args))
+            for name, model_args in zip(args.models, config_args)
+        },
+        "summary": summary_records(results),
+    }
+
+
+def write_manifest(path: str | Path, manifest: dict) -> None:
+    with Path(path).open("w", encoding="utf-8") as file:
+        json.dump(_jsonable(manifest), file, indent=2, sort_keys=True)
+        file.write("\n")
+
+
 def print_result_samples(result: ComparisonResult) -> None:
     if len(result.generated_samples) == 1:
         print(f"{result.name} generated: {result.generated_samples[0]!r}")
@@ -501,6 +569,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--summary-file", type=Path)
     parser.add_argument("--metrics-file", type=Path)
     parser.add_argument("--samples-file", type=Path)
+    parser.add_argument("--manifest-file", type=Path)
     return parser.parse_args(argv)
 
 
@@ -508,6 +577,22 @@ def _optional_float(value: float | None, *, digits: int = 4) -> str:
     if value is None:
         return "-"
     return f"{value:.{digits}f}"
+
+
+def _jsonable(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            str(key): _jsonable(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _jsonable(item)
+            for item in value
+        ]
+    return value
 
 
 def main(argv: list[str] | None = None) -> None:

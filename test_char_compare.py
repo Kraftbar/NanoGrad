@@ -1,4 +1,5 @@
 import io
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -70,6 +71,8 @@ class CharCompareTests(unittest.TestCase):
             "metrics.csv",
             "--samples-file",
             "samples.csv",
+            "--manifest-file",
+            "manifest.json",
         ])
 
         self.assertEqual(args.models, ["bigram", "tiny-gpt"])
@@ -98,6 +101,7 @@ class CharCompareTests(unittest.TestCase):
         self.assertEqual(args.summary_file, Path("summary.csv"))
         self.assertEqual(args.metrics_file, Path("metrics.csv"))
         self.assertEqual(args.samples_file, Path("samples.csv"))
+        self.assertEqual(args.manifest_file, Path("manifest.json"))
 
     def test_default_models_skip_slower_small_gpt(self) -> None:
         args = parse_args([])
@@ -249,15 +253,23 @@ class CharCompareTests(unittest.TestCase):
             summary = (output_dir / "summary.csv").read_text(encoding="utf-8")
             metrics = (output_dir / "metrics.csv").read_text(encoding="utf-8")
             samples = (output_dir / "samples.csv").read_text(encoding="utf-8")
+            manifest = json.loads(
+                (output_dir / "manifest.json").read_text(encoding="utf-8")
+            )
 
         text = output.getvalue()
         self.assertIn("output dir:", text)
         self.assertIn("summary file:", text)
         self.assertIn("metrics file:", text)
         self.assertIn("samples file:", text)
+        self.assertIn("manifest file:", text)
         self.assertIn("bigram,bigram,4,", summary)
         self.assertIn("bigram,bigram,4,", metrics)
         self.assertIn("bigram,bigram,4,", samples)
+        self.assertEqual(manifest["text_source"], "built-in")
+        self.assertEqual(manifest["models"], ["bigram"])
+        self.assertEqual(manifest["outputs"]["summary_file"], str(output_dir / "summary.csv"))
+        self.assertEqual(manifest["summary"][0]["model"], "bigram")
 
     def test_run_default_seed_uses_training_prefix(self) -> None:
         args = parse_args([

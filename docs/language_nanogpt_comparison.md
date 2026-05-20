@@ -72,7 +72,8 @@ This note compares NanoGrad's tiny character transformer path with the local
   ```
   The samples CSV preserves model metadata, sample index, text, and per-sample
   `distinct_2` so top-k/temperature output can be compared outside the console.
-  The output directory writes summary, epoch metrics, and samples as CSVs.
+  The output directory writes summary, epoch metrics, samples, and a JSON
+  manifest for reproducing the run.
 - The same preset can run against local Tiny Shakespeare with an explicit seed:
   ```bash
   python3 char_demo.py --preset tiny-transformer --text-file data/tinyshakespeare/input.txt --seed-text Firs

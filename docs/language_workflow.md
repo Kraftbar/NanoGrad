@@ -32,7 +32,9 @@ count alongside the epoch metrics. `--samples-file` writes each generated
 sample with its model metadata and per-sample `distinct_2` score for later
 qualitative comparison. `--summary-file` writes the final table metrics as one
 row per model for sorting or plotting. `--output-dir` writes all three CSVs as
-`summary.csv`, `metrics.csv`, and `samples.csv`.
+`summary.csv`, `metrics.csv`, and `samples.csv`, plus a `manifest.json` with
+the text source, generation settings, model configs, output paths, and final
+summary rows.
 
 ## Train And Save
 
