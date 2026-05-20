@@ -76,6 +76,12 @@ Prompts can also come from a local file:
 python3 char_demo.py --load-model /tmp/nanollm-char.json --generate-only --seed-file /tmp/prompt.txt --generate 80
 ```
 
+Sweep checkpoint sampling settings into one CSV:
+
+```bash
+python3 char_sample_grid.py --load-model /tmp/nanollm-char.json --seed-text Firs --temperatures 0.7 0.8 1.0 --top-k none 4 8 --samples-file /tmp/nanollm-char-grid.csv
+```
+
 ## Benchmark
 
 Time a tiny transformer sequence forward/backward pass:
