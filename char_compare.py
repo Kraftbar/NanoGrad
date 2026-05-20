@@ -20,7 +20,7 @@ from char_demo import (
     text_source,
 )
 from metrics import perplexity
-from text import CharVocab, mean_distinct_ngram_ratio
+from text import CharVocab, distinct_ngram_ratio, mean_distinct_ngram_ratio
 from train import (
     TrainingSummary,
     train_tensor_multiclass_dataset,
@@ -120,6 +120,9 @@ def run(args: argparse.Namespace) -> None:
     if args.metrics_file is not None:
         write_epoch_metrics(args.metrics_file, all_records)
         print(f"metrics file:  {args.metrics_file}")
+    if args.samples_file is not None:
+        write_sample_records(args.samples_file, sample_records(results))
+        print(f"samples file:  {args.samples_file}")
 
 
 def run_one_comparison(
@@ -312,6 +315,38 @@ def write_epoch_metrics(path: str | Path, records: list[dict]) -> None:
         writer.writerows(records)
 
 
+def sample_records(results: list[ComparisonResult]) -> list[dict]:
+    records = []
+    for result in results:
+        for sample_index, sample in enumerate(result.generated_samples, start=1):
+            records.append({
+                "model": result.name,
+                "model_type": result.model,
+                "context_size": result.context_size,
+                "parameters": result.parameters,
+                "sample_index": sample_index,
+                "distinct_2": distinct_ngram_ratio(sample, n=2),
+                "sample": sample,
+            })
+    return records
+
+
+def write_sample_records(path: str | Path, records: list[dict]) -> None:
+    fieldnames = [
+        "model",
+        "model_type",
+        "context_size",
+        "parameters",
+        "sample_index",
+        "distinct_2",
+        "sample",
+    ]
+    with Path(path).open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(records)
+
+
 def print_result_samples(result: ComparisonResult) -> None:
     if len(result.generated_samples) == 1:
         print(f"{result.name} generated: {result.generated_samples[0]!r}")
@@ -401,6 +436,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--top-k", type=int)
     parser.add_argument("--sample-seed", type=int)
     parser.add_argument("--metrics-file", type=Path)
+    parser.add_argument("--samples-file", type=Path)
     return parser.parse_args(argv)
 
 

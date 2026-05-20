@@ -64,6 +64,8 @@ class CharCompareTests(unittest.TestCase):
             "11",
             "--metrics-file",
             "metrics.csv",
+            "--samples-file",
+            "samples.csv",
         ])
 
         self.assertEqual(args.models, ["bigram", "tiny-gpt"])
@@ -89,6 +91,7 @@ class CharCompareTests(unittest.TestCase):
         self.assertEqual(args.top_k, 2)
         self.assertEqual(args.sample_seed, 11)
         self.assertEqual(args.metrics_file, Path("metrics.csv"))
+        self.assertEqual(args.samples_file, Path("samples.csv"))
 
     def test_default_models_skip_slower_small_gpt(self) -> None:
         args = parse_args([])
@@ -143,6 +146,7 @@ class CharCompareTests(unittest.TestCase):
     def test_run_compares_models_and_writes_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             metrics_path = Path(tmpdir) / "metrics.csv"
+            samples_path = Path(tmpdir) / "samples.csv"
             args = parse_args([
                 "--models",
                 "bigram",
@@ -164,6 +168,8 @@ class CharCompareTests(unittest.TestCase):
                 "2",
                 "--metrics-file",
                 str(metrics_path),
+                "--samples-file",
+                str(samples_path),
             ])
             output = io.StringIO()
 
@@ -171,6 +177,7 @@ class CharCompareTests(unittest.TestCase):
                 run(args)
 
             metrics = metrics_path.read_text(encoding="utf-8").splitlines()
+            samples = samples_path.read_text(encoding="utf-8").splitlines()
 
         text = output.getvalue()
         self.assertIn("Character language-model comparison", text)
@@ -182,12 +189,19 @@ class CharCompareTests(unittest.TestCase):
         self.assertIn("bigram generated 1:", text)
         self.assertIn("tiny-gpt generated 2:", text)
         self.assertIn("metrics file:", text)
+        self.assertIn("samples file:", text)
         self.assertEqual(
             metrics[0],
             "model,model_type,context_size,parameters,epoch,loss,perplexity,accuracy,val_loss,val_perplexity,val_accuracy,elapsed_seconds,examples_seen",
         )
         self.assertEqual(len(metrics), 4)
         self.assertTrue(metrics[1].startswith("bigram,bigram,4,"))
+        self.assertEqual(
+            samples[0],
+            "model,model_type,context_size,parameters,sample_index,distinct_2,sample",
+        )
+        self.assertEqual(len(samples), 7)
+        self.assertTrue(samples[1].startswith("bigram,bigram,4,"))
 
 
 if __name__ == "__main__":

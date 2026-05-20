@@ -66,8 +66,10 @@ This note compares NanoGrad's tiny character transformer path with the local
   one or more generated samples per model. It also reports `dist-2`, a simple
   generated-text distinct-bigram ratio for spotting repetitive samples:
   ```bash
-  python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 128 --validation-chars 32
+  python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 128 --validation-chars 32 --samples-file /tmp/nanollm-language-samples.csv
   ```
+  The samples CSV preserves model metadata, sample index, text, and per-sample
+  `distinct_2` so top-k/temperature output can be compared outside the console.
 - The same preset can run against local Tiny Shakespeare with an explicit seed:
   ```bash
   python3 char_demo.py --preset tiny-transformer --text-file data/tinyshakespeare/input.txt --seed-text Firs
@@ -75,7 +77,7 @@ This note compares NanoGrad's tiny character transformer path with the local
 
 ## Next Gaps
 
-- Compare qualitative top-k sampled output against nanoGPT after training on
-  the same capped text slice.
+- Compare qualitative top-k sampled output CSVs against nanoGPT after training
+  on the same capped text slice.
 - Keep tracking train/validation curves on larger capped Tiny Shakespeare slices
   as tensor ops become faster.
