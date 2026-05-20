@@ -62,6 +62,8 @@ class CharCompareTests(unittest.TestCase):
             "2",
             "--sample-seed",
             "11",
+            "--summary-file",
+            "summary.csv",
             "--metrics-file",
             "metrics.csv",
             "--samples-file",
@@ -90,6 +92,7 @@ class CharCompareTests(unittest.TestCase):
         self.assertEqual(args.temperature, 0.8)
         self.assertEqual(args.top_k, 2)
         self.assertEqual(args.sample_seed, 11)
+        self.assertEqual(args.summary_file, Path("summary.csv"))
         self.assertEqual(args.metrics_file, Path("metrics.csv"))
         self.assertEqual(args.samples_file, Path("samples.csv"))
 
@@ -145,6 +148,7 @@ class CharCompareTests(unittest.TestCase):
 
     def test_run_compares_models_and_writes_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
+            summary_path = Path(tmpdir) / "summary.csv"
             metrics_path = Path(tmpdir) / "metrics.csv"
             samples_path = Path(tmpdir) / "samples.csv"
             args = parse_args([
@@ -166,6 +170,8 @@ class CharCompareTests(unittest.TestCase):
                 "2",
                 "--num-samples",
                 "2",
+                "--summary-file",
+                str(summary_path),
                 "--metrics-file",
                 str(metrics_path),
                 "--samples-file",
@@ -176,6 +182,7 @@ class CharCompareTests(unittest.TestCase):
             with redirect_stdout(output):
                 run(args)
 
+            summary = summary_path.read_text(encoding="utf-8").splitlines()
             metrics = metrics_path.read_text(encoding="utf-8").splitlines()
             samples = samples_path.read_text(encoding="utf-8").splitlines()
 
@@ -188,8 +195,15 @@ class CharCompareTests(unittest.TestCase):
         self.assertIn("dist-2", text)
         self.assertIn("bigram generated 1:", text)
         self.assertIn("tiny-gpt generated 2:", text)
+        self.assertIn("summary file:", text)
         self.assertIn("metrics file:", text)
         self.assertIn("samples file:", text)
+        self.assertEqual(
+            summary[0],
+            "model,model_type,context_size,parameters,train_loss,train_perplexity,accuracy,val_loss,val_perplexity,val_accuracy,sample_distinct_2,elapsed_seconds,examples_per_second,sample_count",
+        )
+        self.assertEqual(len(summary), 4)
+        self.assertTrue(summary[1].startswith("bigram,bigram,4,"))
         self.assertEqual(
             metrics[0],
             "model,model_type,context_size,parameters,epoch,loss,perplexity,accuracy,val_loss,val_perplexity,val_accuracy,elapsed_seconds,examples_seen",

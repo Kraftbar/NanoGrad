@@ -117,6 +117,9 @@ def run(args: argparse.Namespace) -> None:
     for result in results:
         print_result_samples(result)
 
+    if args.summary_file is not None:
+        write_summary_records(args.summary_file, summary_records(results))
+        print(f"summary file:  {args.summary_file}")
     if args.metrics_file is not None:
         write_epoch_metrics(args.metrics_file, all_records)
         print(f"metrics file:  {args.metrics_file}")
@@ -315,6 +318,51 @@ def write_epoch_metrics(path: str | Path, records: list[dict]) -> None:
         writer.writerows(records)
 
 
+def summary_records(results: list[ComparisonResult]) -> list[dict]:
+    return [
+        {
+            "model": result.name,
+            "model_type": result.model,
+            "context_size": result.context_size,
+            "parameters": result.parameters,
+            "train_loss": result.train_loss,
+            "train_perplexity": result.train_perplexity,
+            "accuracy": result.accuracy,
+            "val_loss": result.validation_loss,
+            "val_perplexity": result.validation_perplexity,
+            "val_accuracy": result.validation_accuracy,
+            "sample_distinct_2": result.sample_distinct_2,
+            "elapsed_seconds": result.elapsed_seconds,
+            "examples_per_second": result.examples_per_second,
+            "sample_count": len(result.generated_samples),
+        }
+        for result in results
+    ]
+
+
+def write_summary_records(path: str | Path, records: list[dict]) -> None:
+    fieldnames = [
+        "model",
+        "model_type",
+        "context_size",
+        "parameters",
+        "train_loss",
+        "train_perplexity",
+        "accuracy",
+        "val_loss",
+        "val_perplexity",
+        "val_accuracy",
+        "sample_distinct_2",
+        "elapsed_seconds",
+        "examples_per_second",
+        "sample_count",
+    ]
+    with Path(path).open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(records)
+
+
 def sample_records(results: list[ComparisonResult]) -> list[dict]:
     records = []
     for result in results:
@@ -435,6 +483,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int)
     parser.add_argument("--sample-seed", type=int)
+    parser.add_argument("--summary-file", type=Path)
     parser.add_argument("--metrics-file", type=Path)
     parser.add_argument("--samples-file", type=Path)
     return parser.parse_args(argv)
