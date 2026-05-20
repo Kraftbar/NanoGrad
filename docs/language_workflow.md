@@ -82,6 +82,9 @@ Sweep checkpoint sampling settings into one CSV:
 python3 char_sample_grid.py --load-model /tmp/nanollm-char.json --seed-text Firs --temperatures 0.7 0.8 1.0 --top-k none 4 8 --output-dir /tmp/nanollm-char-grid
 ```
 
+The grid output directory contains `samples.csv`, `summary.csv`, and
+`manifest.json`.
+
 ## Benchmark
 
 Time a tiny transformer sequence forward/backward pass:

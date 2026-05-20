@@ -1,4 +1,5 @@
 import io
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -21,6 +22,8 @@ class CharSampleGridTests(unittest.TestCase):
             "samples.csv",
             "--summary-file",
             "summary.csv",
+            "--manifest-file",
+            "manifest.json",
             "--seed",
             "3",
             "--seed-text",
@@ -45,6 +48,7 @@ class CharSampleGridTests(unittest.TestCase):
         self.assertEqual(args.output_dir, Path("grid"))
         self.assertEqual(args.samples_file, Path("samples.csv"))
         self.assertEqual(args.summary_file, Path("summary.csv"))
+        self.assertEqual(args.manifest_file, Path("manifest.json"))
         self.assertEqual(args.seed, 3)
         self.assertEqual(args.seed_text, "ab")
         self.assertEqual(args.generate, 4)
@@ -64,6 +68,7 @@ class CharSampleGridTests(unittest.TestCase):
 
         self.assertEqual(args.samples_file, Path("grid") / "samples.csv")
         self.assertEqual(args.summary_file, Path("grid") / "summary.csv")
+        self.assertEqual(args.manifest_file, Path("grid") / "manifest.json")
 
     def test_parse_args_requires_samples_destination(self) -> None:
         with redirect_stderr(io.StringIO()):
@@ -151,6 +156,8 @@ class CharSampleGridTests(unittest.TestCase):
                 "a",
                 "--generate",
                 "1",
+                "--num-samples",
+                "1",
             ])
             output = io.StringIO()
 
@@ -159,13 +166,21 @@ class CharSampleGridTests(unittest.TestCase):
 
             samples = (output_dir / "samples.csv").read_text(encoding="utf-8")
             summary = (output_dir / "summary.csv").read_text(encoding="utf-8")
+            manifest = json.loads(
+                (output_dir / "manifest.json").read_text(encoding="utf-8")
+            )
 
         text = output.getvalue()
         self.assertIn("output dir:", text)
         self.assertIn("samples file:", text)
         self.assertIn("summary file:", text)
+        self.assertIn("manifest file:", text)
         self.assertIn("sample_index", samples)
         self.assertIn("mean_distinct_2", summary)
+        self.assertEqual(manifest["checkpoint"], str(checkpoint_path))
+        self.assertEqual(manifest["outputs"]["samples_file"], str(output_dir / "samples.csv"))
+        self.assertEqual(manifest["rows"], 9)
+        self.assertEqual(manifest["summary_rows"], 9)
 
 
 if __name__ == "__main__":

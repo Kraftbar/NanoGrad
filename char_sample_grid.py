@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from pathlib import Path
 
 from char_demo import (
@@ -20,9 +21,12 @@ from text import distinct_ngram_ratio
 
 def run(args: argparse.Namespace) -> None:
     records = sample_grid_records(args)
+    summaries = grid_summary_records(records)
     write_sample_grid(args.samples_file, records)
     if args.summary_file is not None:
-        write_grid_summary(args.summary_file, grid_summary_records(records))
+        write_grid_summary(args.summary_file, summaries)
+    if args.manifest_file is not None:
+        write_manifest(args.manifest_file, sample_grid_manifest(args, records, summaries))
 
     print("Character sample grid")
     print(f"checkpoint:    {args.load_model}")
@@ -31,6 +35,8 @@ def run(args: argparse.Namespace) -> None:
     print(f"samples file:  {args.samples_file}")
     if args.summary_file is not None:
         print(f"summary file:  {args.summary_file}")
+    if args.manifest_file is not None:
+        print(f"manifest file: {args.manifest_file}")
     print(f"temperatures:  {', '.join(str(value) for value in args.temperatures)}")
     print(f"top k:         {', '.join(top_k_label(value) for value in args.top_k)}")
     print(f"rows:          {len(records)}")
@@ -176,6 +182,43 @@ def write_grid_summary(path: str | Path, records: list[dict]) -> None:
         writer.writerows(records)
 
 
+def sample_grid_manifest(
+    args: argparse.Namespace,
+    records: list[dict],
+    summaries: list[dict],
+) -> dict:
+    return {
+        "checkpoint": args.load_model,
+        "outputs": {
+            "samples_file": args.samples_file,
+            "summary_file": args.summary_file,
+            "manifest_file": args.manifest_file,
+        },
+        "generation": {
+            "generate": args.generate,
+            "num_samples": args.num_samples,
+            "sample_mode": args.sample_mode,
+            "seed": args.seed,
+            "seed_text": args.seed_text,
+            "seed_file": args.seed_file,
+            "sample_seed": args.sample_seed,
+            "temperatures": args.temperatures,
+            "top_k": args.top_k,
+        },
+        "rows": len(records),
+        "summary_rows": len(summaries),
+        "summary": summaries,
+    }
+
+
+def write_manifest(path: str | Path, manifest: dict) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(_jsonable(manifest), file, indent=2, sort_keys=True)
+        file.write("\n")
+
+
 def apply_output_dir(args: argparse.Namespace) -> None:
     if args.output_dir is None:
         return
@@ -183,6 +226,8 @@ def apply_output_dir(args: argparse.Namespace) -> None:
         args.samples_file = args.output_dir / "samples.csv"
     if args.summary_file is None:
         args.summary_file = args.output_dir / "summary.csv"
+    if args.manifest_file is None:
+        args.manifest_file = args.output_dir / "manifest.json"
 
 
 def parse_top_k(value: str) -> int | None:
@@ -217,6 +262,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--samples-file", type=Path)
     parser.add_argument("--summary-file", type=Path)
+    parser.add_argument("--manifest-file", type=Path)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seed-text", default=DEFAULT_OPTIONS["seed_text"])
     parser.add_argument("--seed-file", type=Path)
@@ -241,6 +287,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.samples_file is None:
         parser.error("--samples-file is required unless --output-dir is provided")
     return args
+
+
+def _jsonable(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            str(key): _jsonable(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _jsonable(item)
+            for item in value
+        ]
+    return value
 
 
 def main(argv: list[str] | None = None) -> None:
