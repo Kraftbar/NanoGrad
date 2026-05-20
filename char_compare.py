@@ -70,6 +70,7 @@ class ComparisonResult:
     validation_accuracy: float | None
     elapsed_seconds: float
     examples_per_second: float | None
+    seed_text: str
     sample_distinct_2: float
     generated_samples: list[str]
 
@@ -226,6 +227,7 @@ def run_one_comparison(
             validation_accuracy=summary.validation_accuracy,
             elapsed_seconds=summary.elapsed_seconds,
             examples_per_second=summary.examples_per_second,
+            seed_text=seed_text,
             sample_distinct_2=mean_distinct_ngram_ratio(generated_samples, n=2),
             generated_samples=generated_samples,
         ),
@@ -362,6 +364,7 @@ def summary_records(results: list[ComparisonResult]) -> list[dict]:
             "val_perplexity": result.validation_perplexity,
             "val_accuracy": result.validation_accuracy,
             "sample_distinct_2": result.sample_distinct_2,
+            "seed_text": result.seed_text,
             "elapsed_seconds": result.elapsed_seconds,
             "examples_per_second": result.examples_per_second,
             "sample_count": len(result.generated_samples),
@@ -383,6 +386,7 @@ def write_summary_records(path: str | Path, records: list[dict]) -> None:
         "val_perplexity",
         "val_accuracy",
         "sample_distinct_2",
+        "seed_text",
         "elapsed_seconds",
         "examples_per_second",
         "sample_count",
@@ -403,6 +407,7 @@ def sample_records(results: list[ComparisonResult]) -> list[dict]:
                 "context_size": result.context_size,
                 "parameters": result.parameters,
                 "sample_index": sample_index,
+                "seed_text": result.seed_text,
                 "distinct_2": distinct_ngram_ratio(sample, n=2),
                 "sample": sample,
             })
@@ -416,6 +421,7 @@ def write_sample_records(path: str | Path, records: list[dict]) -> None:
         "context_size",
         "parameters",
         "sample_index",
+        "seed_text",
         "distinct_2",
         "sample",
     ]

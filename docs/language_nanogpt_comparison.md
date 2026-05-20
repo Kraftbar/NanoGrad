@@ -70,8 +70,9 @@ This note compares NanoGrad's tiny character transformer path with the local
   ```bash
   python3 char_compare.py --text-file data/tinyshakespeare/input.txt --max-chars 128 --validation-chars 32 --output-dir /tmp/nanollm-language-run
   ```
-  The samples CSV preserves model metadata, sample index, text, and per-sample
-  `distinct_2` so top-k/temperature output can be compared outside the console.
+  The samples CSV preserves model metadata, sample index, seed prefix, text,
+  and per-sample `distinct_2` so top-k/temperature output can be compared
+  outside the console.
   The output directory writes summary, epoch metrics, samples, and a JSON
   manifest for reproducing the run.
 - The same preset can run against local Tiny Shakespeare with an explicit seed:

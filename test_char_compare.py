@@ -142,6 +142,7 @@ class CharCompareTests(unittest.TestCase):
                 validation_accuracy=0.25,
                 elapsed_seconds=0.1,
                 examples_per_second=20.0,
+                seed_text="abcd",
                 sample_distinct_2=0.75,
                 generated_samples=["abcd"],
             ),
@@ -207,7 +208,7 @@ class CharCompareTests(unittest.TestCase):
         self.assertIn("samples file:", text)
         self.assertEqual(
             summary[0],
-            "model,model_type,context_size,parameters,train_loss,train_perplexity,accuracy,val_loss,val_perplexity,val_accuracy,sample_distinct_2,elapsed_seconds,examples_per_second,sample_count",
+            "model,model_type,context_size,parameters,train_loss,train_perplexity,accuracy,val_loss,val_perplexity,val_accuracy,sample_distinct_2,seed_text,elapsed_seconds,examples_per_second,sample_count",
         )
         self.assertEqual(len(summary), 4)
         self.assertTrue(summary[1].startswith("bigram,bigram,4,"))
@@ -219,7 +220,7 @@ class CharCompareTests(unittest.TestCase):
         self.assertTrue(metrics[1].startswith("bigram,bigram,4,"))
         self.assertEqual(
             samples[0],
-            "model,model_type,context_size,parameters,sample_index,distinct_2,sample",
+            "model,model_type,context_size,parameters,sample_index,seed_text,distinct_2,sample",
         )
         self.assertEqual(len(samples), 7)
         self.assertTrue(samples[1].startswith("bigram,bigram,4,"))
