@@ -81,6 +81,8 @@ class CharDemoTests(unittest.TestCase):
             "1.5",
             "--metrics-file",
             "metrics.csv",
+            "--output-dir",
+            "run",
             "--seed",
             "9",
             "--seed-text",
@@ -131,6 +133,7 @@ class CharDemoTests(unittest.TestCase):
         self.assertEqual(args.validation_chars, 3)
         self.assertEqual(args.max_grad_norm, 1.5)
         self.assertEqual(args.metrics_file, Path("metrics.csv"))
+        self.assertEqual(args.output_dir, Path("run"))
         self.assertEqual(args.seed, 9)
         self.assertEqual(args.seed_text, "a")
         self.assertEqual(args.seed_file, Path("prompt.txt"))
@@ -830,6 +833,45 @@ class CharDemoTests(unittest.TestCase):
             self.assertTrue(metrics[1].startswith("1,"))
             self.assertTrue(metrics[2].startswith("2,"))
             self.assertIn("metrics file:", output.getvalue())
+
+    def test_run_output_dir_writes_standard_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "run"
+            args = parse_args([
+                "--text",
+                "ababababab",
+                "--epochs",
+                "1",
+                "--batch-size",
+                "2",
+                "--lr",
+                "0.3",
+                "--validation-chars",
+                "4",
+                "--seed-text",
+                "a",
+                "--generate",
+                "2",
+                "--output-dir",
+                str(output_dir),
+            ])
+            output = io.StringIO()
+
+            with redirect_stdout(output):
+                run(args)
+
+            model = json.loads((output_dir / "model.json").read_text(encoding="utf-8"))
+            metrics = (output_dir / "metrics.csv").read_text(encoding="utf-8")
+            samples = (output_dir / "samples.csv").read_text(encoding="utf-8")
+
+        text = output.getvalue()
+        self.assertIn("output dir:", text)
+        self.assertIn("saved model:", text)
+        self.assertIn("metrics file:", text)
+        self.assertIn("samples file:", text)
+        self.assertEqual(model["format"], "nanollm.char_demo.v1")
+        self.assertIn("epoch,loss,perplexity", metrics)
+        self.assertIn("sample_index,seed_text", samples)
 
     def test_run_saves_and_loads_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -55,6 +55,7 @@ DEFAULT_OPTIONS = {
     "validation_chars": 0,
     "max_grad_norm": None,
     "metrics_file": None,
+    "output_dir": None,
     "seed_text": "h",
     "seed_file": None,
     "generate": 32,
@@ -145,6 +146,7 @@ PRESETS = {
 def run(args: argparse.Namespace) -> None:
     if args.load_model is not None:
         apply_checkpoint_config(args, args.load_model)
+    apply_output_dir(args)
     if args.generate_only:
         run_generate_only(args)
         return
@@ -219,6 +221,8 @@ def run(args: argparse.Namespace) -> None:
     print(f"model:         {args.model}")
     if args.eval_only:
         print("eval only:     True")
+    if args.output_dir is not None:
+        print(f"output dir:    {args.output_dir}")
     print(f"text source:   {text_source(args)}")
     print(f"text length:   {len(text)}")
     print(f"vocab size:    {len(vocab)}")
@@ -310,6 +314,8 @@ def run_generate_only(args: argparse.Namespace) -> None:
         print(f"preset:        {args.preset}")
     print(f"model:         {args.model}")
     print("generate only: True")
+    if args.output_dir is not None:
+        print(f"output dir:    {args.output_dir}")
     print(f"checkpoint:    {args.load_model}")
     print(f"vocab size:    {len(vocab)}")
     print(f"context size:  {args.context_size}")
@@ -359,6 +365,22 @@ def epoch_callback(args: argparse.Namespace, records: list[dict]):
             )
 
     return callback
+
+
+def apply_output_dir(args: argparse.Namespace) -> None:
+    if args.output_dir is None:
+        return
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    if args.samples_file is None:
+        args.samples_file = args.output_dir / "samples.csv"
+    if not args.generate_only and args.metrics_file is None:
+        args.metrics_file = args.output_dir / "metrics.csv"
+    if (
+        not args.generate_only
+        and not args.eval_only
+        and args.save_model is None
+    ):
+        args.save_model = args.output_dir / "model.json"
 
 
 def epoch_record(epoch: int, summary) -> dict:
@@ -977,6 +999,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_OPTIONS["max_grad_norm"],
     )
     parser.add_argument("--metrics-file", type=Path)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seed-text", default=DEFAULT_OPTIONS["seed_text"])
     parser.add_argument("--seed-file", type=Path, default=DEFAULT_OPTIONS["seed_file"])
