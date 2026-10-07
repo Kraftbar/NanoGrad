@@ -56,13 +56,18 @@ class TinyBERT(TensorModule):
         self.norm = TensorLayerNorm(embedding_dim)
         self.head = TensorLinear(embedding_dim, vocab_size, seed=seed + 99)
 
-    def __call__(self, indices: Sequence[Sequence[int]]) -> Tensor:
-        """Character scores for every position: (batch, context, vocab)."""
+    def encode(self, indices: Sequence[Sequence[int]]) -> Tensor:
+        """The final token representations: (batch, context, embedding)."""
 
         hidden = self.embedding(indices)
         for block in self.blocks:
             hidden = block(hidden)
-        return self.head(self.norm(hidden))
+        return self.norm(hidden)
+
+    def __call__(self, indices: Sequence[Sequence[int]]) -> Tensor:
+        """Character scores for every position: (batch, context, vocab)."""
+
+        return self.head(self.encode(indices))
 
     def parameters(self) -> list[Tensor]:
         return [
@@ -86,6 +91,30 @@ class TinyBERT(TensorModule):
             block.load_state_dict(block_state)
         self.norm.load_state_dict(state["norm"])
         self.head.load_state_dict(state["head"])
+
+
+class BERTClassifier(TensorModule):
+    """A sequence classifier on top of a (pretrained) TinyBERT encoder.
+
+    The encoder's token representations are averaged into one vector per
+    sequence, and a linear layer maps it to class scores. Fine-tuning trains
+    all of it; only the classifier layer starts from scratch.
+    """
+
+    def __init__(self, encoder: TinyBERT, classes: int, *, seed: int = 0) -> None:
+        self.encoder = encoder
+        self.classifier = TensorLinear(encoder.head.weight.shape[1], classes, seed=seed)
+
+    def __call__(self, indices: Sequence[Sequence[int]]) -> Tensor:
+        return self.classifier(self.encoder.encode(indices).mean(axis=1))
+
+    def parameters(self) -> list[Tensor]:
+        # The masked-character head is not used for classification.
+        encoder_parameters = [
+            parameter for parameter in self.encoder.parameters()
+            if all(parameter is not head for head in self.encoder.head.parameters())
+        ]
+        return [*encoder_parameters, *self.classifier.parameters()]
 
 
 def mask_tokens(
