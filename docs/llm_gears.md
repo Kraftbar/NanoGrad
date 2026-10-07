@@ -11,6 +11,7 @@ checked against PyTorch where PyTorch has an equivalent.
 | RMSNorm | `tensor_nn.rms_norm` | LLaMA's simpler LayerNorm: no mean, no bias |
 | rotary position embeddings | `tensor.rotary_embedding` | positions as rotations of queries and keys |
 | SwiGLU | `language.py` (feed-forward) | gated feed-forward: `silu(x W_in) * (x W_up)` |
+| grouped-query attention | `num_kv_heads` / `--kv-heads` | query heads share key/value heads: a smaller KV cache (LLaMA 3, Mistral) |
 | bidirectional attention | `causal=False` | for encoders: ViT (`vit.py`) and BERT (`bert.py`) |
 | masked language modeling | `bert.py` | BERT's training task |
 
@@ -126,3 +127,25 @@ sees the whole sequence:
   trains it in NanoGrad and PyTorch from the same weights: after 500 steps
   both reach the same loss and 22.25% masked-character accuracy on held-out
   text.
+
+## Grouped-Query Attention
+
+During generation the KV cache, not the weights, is what fills memory: one
+key row and one value row per token, per head, per layer. Grouped-query
+attention (Ainslie et al., 2023) lets a group of query heads share one
+key/value head. With `--heads 4 --kv-heads 2` the cache is half the size;
+`--kv-heads 1` is multi-query attention.
+
+The batched forward pass needs no copies of the shared keys. The G query
+heads of a group are stacked along the time axis, so one group's queries
+are a (G * T, D) matrix that multiplies its one (T, D) key matrix, and the
+causal mask is the (T, T) mask stacked G times:
+
+```text
+query (B, H, T, D)  ->  (B * KV, G * T, D)      H = KV * G
+scores = query @ key^T                          (B * KV, G * T, T)
+out    = softmax(scores + mask) @ value         (B * KV, G * T, D)  ->  (B, H, T, D)
+```
+
+A test checks that this equals ordinary attention whose heads hold copies
+of the shared weights, and the PyTorch twin computes each head separately.

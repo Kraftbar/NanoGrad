@@ -125,6 +125,7 @@ def build_model(vocab_size: int, config: argparse.Namespace):
         embedding_dim=config.embedding_dim,
         hidden_dim=hidden_dim,
         num_heads=config.heads,
+        num_kv_heads=config.kv_heads,
         num_layers=config.layers,
         feed_forward_activation=config.activation,
         norm=config.norm,
@@ -368,6 +369,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.add_argument("--" + name.replace("_", "-"), type=float)
     parser.add_argument("--architecture", choices=("transformer", "lstm", "gru"))
     parser.add_argument("--lstm-hidden", type=int)
+    parser.add_argument("--kv-heads", type=int, help="key/value heads (grouped-query attention); default: --heads")
     parser.add_argument("--norm", choices=("layer", "rms"))
     parser.add_argument("--positions", choices=("learned", "rope"))
     parser.add_argument("--activation", choices=("gelu", "relu", "swiglu"))
@@ -388,7 +390,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--top-p", type=float, help="nucleus sampling (BPE / LSTM samples)")
     args = parser.parse_args(argv)
-    defaults = {"architecture": "transformer", "lstm_hidden": 256,
+    defaults = {"architecture": "transformer", "lstm_hidden": 256, "kv_heads": None,
                 "norm": "layer", "positions": "learned", "activation": "gelu"}   # GPT-2's parts
     for name, value in {**defaults, **PRESETS[args.preset]}.items():
         if getattr(args, name) is None:

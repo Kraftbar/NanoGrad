@@ -124,7 +124,9 @@ class TorchTwin:
     def _attention(self, layer: CausalSelfAttention, x):
         context = x.shape[1]
         heads = []
-        for query, key, value in zip(layer.queries, layer.keys, layer.values):
+        for head, query in enumerate(layer.queries):
+            shared = head // layer.group_size        # grouped-query attention shares keys and values
+            key, value = layer.keys[shared], layer.values[shared]
             q, k, v = self._linear(query, x), self._linear(key, x), self._linear(value, x)
             if layer.rotary:
                 q, k = self._rope(q), self._rope(k)

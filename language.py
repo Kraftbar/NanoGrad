@@ -207,6 +207,11 @@ class CausalSelfAttention(TensorModule):
     Causal (GPT): a token only attends to itself and earlier tokens.
     With ``causal=False`` every token attends to every token, as in a
     vision transformer or a BERT-style encoder.
+
+    ``num_kv_heads`` below ``num_heads`` is grouped-query attention (LLaMA 2
+    70B, LLaMA 3, Mistral): each key/value head is shared by a group of
+    ``num_heads / num_kv_heads`` query heads, so the KV cache shrinks by that
+    factor. ``num_kv_heads=1`` is multi-query attention.
     """
 
     def __init__(
@@ -215,6 +220,7 @@ class CausalSelfAttention(TensorModule):
         context_size: int,
         *,
         num_heads: int = 1,
+        num_kv_heads: int | None = None,
         dropout: float = 0.0,
         causal: bool = True,
         rotary: bool = False,
@@ -228,10 +234,16 @@ class CausalSelfAttention(TensorModule):
             raise ValueError("num_heads must be positive")
         if embedding_dim % num_heads != 0:
             raise ValueError("embedding_dim must be divisible by num_heads")
+        if num_kv_heads is None:
+            num_kv_heads = num_heads
+        if num_kv_heads <= 0 or num_heads % num_kv_heads != 0:
+            raise ValueError("num_heads must be a positive multiple of num_kv_heads")
 
         self.embedding_dim = embedding_dim
         self.context_size = context_size
         self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        self.group_size = num_heads // num_kv_heads   # query heads per key/value head
         self.causal = causal
         self.rotary = rotary          # rotate queries and keys by position (RoPE)
         self.head_dim = embedding_dim // num_heads
@@ -242,11 +254,11 @@ class CausalSelfAttention(TensorModule):
         ]
         self.keys = [
             TensorLinear(embedding_dim, self.head_dim, seed=seed + head * 3 + 1)
-            for head in range(num_heads)
+            for head in range(num_kv_heads)
         ]
         self.values = [
             TensorLinear(embedding_dim, self.head_dim, seed=seed + head * 3 + 2)
-            for head in range(num_heads)
+            for head in range(num_kv_heads)
         ]
         self.projection = TensorLinear(
             embedding_dim,
@@ -277,26 +289,31 @@ class CausalSelfAttention(TensorModule):
         # (B, T, H * D) -> (B * H, T, D) turns the heads into extra batch
         # entries. So the whole layer is 3 projections and 2 batched matrix
         # products, instead of 5 small products per head.
+        #
+        # Grouped-query attention: the G = H / KV query heads that share a
+        # key/value head are stacked along the time axis, (B * KV, G * T, D),
+        # so the same 2 batched products cover them without copying keys.
         batch, length, _ = inputs.shape
-        heads, head_dim = self.num_heads, self.head_dim
+        heads, kv_heads, group, head_dim = self.num_heads, self.num_kv_heads, self.group_size, self.head_dim
         mask = self._causal_mask(length) if self.causal else None
         scale = 1 / math.sqrt(head_dim)
 
         def project(layers: list[TensorLinear]) -> Tensor:
-            weight = concat([layer.weight for layer in layers], axis=0)     # (C, C)
-            bias = concat([layer.bias for layer in layers], axis=0)         # (C,)
-            out = matmul(inputs, weight.T) + bias                           # (B, T, H * D)
-            out = out.reshape((batch, length, heads, head_dim)).permute((0, 2, 1, 3))
-            return out.reshape((batch * heads, length, head_dim))           # (B * H, T, D)
+            weight = concat([layer.weight for layer in layers], axis=0)     # (n * D, C)
+            bias = concat([layer.bias for layer in layers], axis=0)         # (n * D,)
+            out = matmul(inputs, weight.T) + bias                           # (B, T, n * D)
+            out = out.reshape((batch, length, len(layers), head_dim)).permute((0, 2, 1, 3))
+            return out.reshape((batch * len(layers), length, head_dim))     # (B * n, T, D)
 
         query, key, value = project(self.queries), project(self.keys), project(self.values)
         if self.rotary:            # positions rotate queries and keys, never values
             query, key = rotary_embedding(query), rotary_embedding(key)
-        scores = matmul(query, key.permute((0, 2, 1))) * scale             # (B * H, T, T)
+        query = query.reshape((batch * kv_heads, group * length, head_dim))  # a no-op when G = 1
+        scores = matmul(query, key.permute((0, 2, 1))) * scale             # (B * KV, G * T, T)
         if mask is not None:
             scores = scores + mask                                          # hide future keys
         weights = self.attention_dropout(scores.softmax(axis=-1))
-        attended = matmul(weights, value)                                   # (B * H, T, D)
+        attended = matmul(weights, value)                                   # (B * KV, G * T, D)
         # Back to (B, T, H * D): each token's head outputs side by side.
         attended = attended.reshape((batch, heads, length, head_dim)).permute((0, 2, 1, 3))
         attended = attended.reshape((batch, length, heads * head_dim))
@@ -314,24 +331,26 @@ class CausalSelfAttention(TensorModule):
 
         scale = 1 / math.sqrt(self.head_dim)
         head_outputs = []
-        for head, (query_layer, key_layer, value_layer) in enumerate(
-            zip(self.queries, self.keys, self.values)
-        ):
-            query, key, value = query_layer(inputs), key_layer(inputs), value_layer(inputs)  # (1, 1, D)
+        for kv_head, (key_layer, value_layer) in enumerate(zip(self.keys, self.values)):
+            key, value = key_layer(inputs), value_layer(inputs)            # (1, 1, D)
             if self.rotary:
-                query = rotary_embedding(query, start=position)
                 key = rotary_embedding(key, start=position)
-            if cache["keys"][head] is not None:
-                key = concat([cache["keys"][head], key], axis=1)         # (1, t, D)
-                value = concat([cache["values"][head], value], axis=1)
-            cache["keys"][head], cache["values"][head] = key, value
-            scores = matmul(query, key.permute((0, 2, 1))) * scale       # (1, 1, t)
-            head_outputs.append(matmul(scores.softmax(axis=-1), value))           # (1, 1, D)
+            if cache["keys"][kv_head] is not None:
+                key = concat([cache["keys"][kv_head], key], axis=1)      # (1, t, D)
+                value = concat([cache["values"][kv_head], value], axis=1)
+            cache["keys"][kv_head], cache["values"][kv_head] = key, value
+            group = self.queries[kv_head * self.group_size : (kv_head + 1) * self.group_size]
+            for query_layer in group:                                    # the heads sharing this key/value
+                query = query_layer(inputs)
+                if self.rotary:
+                    query = rotary_embedding(query, start=position)
+                scores = matmul(query, key.permute((0, 2, 1))) * scale   # (1, 1, t)
+                head_outputs.append(matmul(scores.softmax(axis=-1), value))       # (1, 1, D)
         return self.projection(concat(head_outputs, axis=-1))
 
     def _causal_mask(self, context_size: int) -> Tensor:
         if context_size not in self._mask_cache:
-            self._mask_cache[context_size] = _causal_attention_mask(context_size)
+            self._mask_cache[context_size] = _causal_attention_mask(context_size, repeats=self.group_size)
         return self._mask_cache[context_size]
 
     def parameters(self) -> list[Tensor]:
@@ -359,6 +378,7 @@ class CausalSelfAttention(TensorModule):
             "embedding_dim": self.embedding_dim,
             "context_size": self.context_size,
             "num_heads": self.num_heads,
+            "num_kv_heads": self.num_kv_heads,
             "queries": [
                 layer.state_dict()
                 for layer in self.queries
@@ -381,13 +401,15 @@ class CausalSelfAttention(TensorModule):
             raise ValueError("state context_size does not match CausalSelfAttention")
         if state.get("num_heads") != self.num_heads:
             raise ValueError("state num_heads does not match CausalSelfAttention")
+        if state.get("num_kv_heads", self.num_heads) != self.num_kv_heads:
+            raise ValueError("state num_kv_heads does not match CausalSelfAttention")
         _load_layer_list(self.queries, state.get("queries"), "queries")
         _load_layer_list(self.keys, state.get("keys"), "keys")
         _load_layer_list(self.values, state.get("values"), "values")
         self.projection.load_state_dict(state["projection"])
 
 
-def _causal_attention_mask(context_size: int) -> Tensor:
+def _causal_attention_mask(context_size: int, *, repeats: int = 1) -> Tensor:
     """(T, T) additive mask: 0 where a query may look, -1e9 at future keys.
 
     Example for T = 3 (rows are queries, columns are keys):
@@ -395,14 +417,18 @@ def _causal_attention_mask(context_size: int) -> Tensor:
         [   0, -1e9, -1e9]
         [   0,    0, -1e9]
         [   0,    0,    0]
+
+    ``repeats`` stacks the rows that many times, (repeats * T, T), for
+    query heads stacked along the time axis (grouped-query attention).
     """
 
     data = [
         0.0 if key_position <= query_position else -1e9
+        for _ in range(repeats)
         for query_position in range(context_size)
         for key_position in range(context_size)
     ]
-    return Tensor(data, (context_size, context_size))
+    return Tensor(data, (repeats * context_size, context_size))
 
 
 def _load_layer_list(layers: list[TensorLinear], state, name: str) -> None:
@@ -422,6 +448,7 @@ class TransformerBlock(TensorModule):
         *,
         hidden_dim: int | None = None,
         num_heads: int = 1,
+        num_kv_heads: int | None = None,
         feed_forward_activation: str = "relu",
         dropout: float = 0.0,
         causal: bool = True,
@@ -453,6 +480,7 @@ class TransformerBlock(TensorModule):
             embedding_dim,
             context_size,
             num_heads=num_heads,
+            num_kv_heads=num_kv_heads,
             dropout=dropout,
             causal=causal,
             rotary=rotary,
@@ -565,6 +593,7 @@ class CharTransformerModel(TensorModule):
         embedding_dim: int = 16,
         hidden_dim: int | None = None,
         num_heads: int = 1,
+        num_kv_heads: int | None = None,
         num_layers: int = 1,
         feed_forward_activation: str = "relu",
         tie_embeddings: bool = False,
@@ -598,6 +627,7 @@ class CharTransformerModel(TensorModule):
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
+        self.num_kv_heads = num_heads if num_kv_heads is None else num_kv_heads
         self.num_layers = num_layers
         self.feed_forward_activation = feed_forward_activation
         self.tie_embeddings = tie_embeddings
@@ -616,6 +646,7 @@ class CharTransformerModel(TensorModule):
                 context_size,
                 hidden_dim=hidden_dim,
                 num_heads=num_heads,
+                num_kv_heads=num_kv_heads,
                 feed_forward_activation=feed_forward_activation,
                 dropout=dropout,
                 norm=norm,
@@ -675,10 +706,10 @@ class CharTransformerModel(TensorModule):
     # -- generation with a KV cache (inference only: no dropout) ----------
 
     def new_cache(self) -> list[dict]:
-        """An empty KV cache: per block, per head, the keys and values so far."""
+        """An empty KV cache: per block, per key/value head, the keys and values so far."""
 
         return [
-            {"keys": [None] * self.num_heads, "values": [None] * self.num_heads}
+            {"keys": [None] * self.num_kv_heads, "values": [None] * self.num_kv_heads}
             for _ in self.blocks
         ]
 
@@ -722,6 +753,7 @@ class CharTransformerModel(TensorModule):
             "embedding_dim": self.embedding_dim,
             "hidden_dim": self.hidden_dim,
             "num_heads": self.num_heads,
+            "num_kv_heads": self.num_kv_heads,
             "num_layers": self.num_layers,
             "feed_forward_activation": self.feed_forward_activation,
             "tie_embeddings": self.tie_embeddings,
@@ -747,6 +779,8 @@ class CharTransformerModel(TensorModule):
             raise ValueError("state hidden_dim does not match CharTransformerModel")
         if state.get("num_heads") != self.num_heads:
             raise ValueError("state num_heads does not match CharTransformerModel")
+        if state.get("num_kv_heads", self.num_heads) != self.num_kv_heads:
+            raise ValueError("state num_kv_heads does not match CharTransformerModel")
         if state.get("num_layers") != self.num_layers:
             raise ValueError("state num_layers does not match CharTransformerModel")
         if state.get("feed_forward_activation", "relu") != self.feed_forward_activation:

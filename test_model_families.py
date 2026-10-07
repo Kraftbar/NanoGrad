@@ -110,6 +110,47 @@ class LlamaPartsTests(unittest.TestCase):
                 for a, b in zip(step, full):
                     self.assertAlmostEqual(a, b, places=12)
 
+    def test_grouped_query_attention_kv_cache_matches_full_forward(self) -> None:
+        from language import CharTransformerModel
+
+        for kv_heads in (2, 1):
+            model = CharTransformerModel(11, context_size=8, embedding_dim=16, num_heads=4, num_kv_heads=kv_heads,
+                                         num_layers=2, feed_forward_activation="swiglu", norm="rms", positions="rope")
+            self.assertEqual(len(model.new_cache()[0]["keys"]), kv_heads)
+            rng = random.Random(12)
+            tokens = [rng.randrange(11) for _ in range(8)]
+            with no_grad():
+                cache = model.new_cache()
+                for position, token in enumerate(tokens):
+                    step = list(model.step_logits(token, position, cache).data)
+                    full = list(model(Tensor.from_list([tokens[: position + 1]])).data)
+                    for a, b in zip(step, full):
+                        self.assertAlmostEqual(a, b, places=12)
+
+    def test_grouped_query_attention_equals_heads_with_copied_keys(self) -> None:
+        """Sharing a key/value head is the same as giving every query head
+        its own copy of it: GQA is a constraint on ordinary attention."""
+
+        from language import CausalSelfAttention
+
+        grouped = CausalSelfAttention(8, 5, num_heads=4, num_kv_heads=2, rotary=True, seed=3)
+        full = CausalSelfAttention(8, 5, num_heads=4, rotary=True, seed=9)
+        for head in range(4):
+            full.queries[head].load_state_dict(grouped.queries[head].state_dict())
+            full.keys[head].load_state_dict(grouped.keys[head // 2].state_dict())
+            full.values[head].load_state_dict(grouped.values[head // 2].state_dict())
+        full.projection.load_state_dict(grouped.projection.state_dict())
+        inputs = Tensor([random.Random(4).uniform(-1, 1) for _ in range(2 * 5 * 8)], (2, 5, 8))
+        for a, b in zip(grouped(inputs).data, full(inputs).data):
+            self.assertAlmostEqual(a, b, places=12)
+        self.assertEqual(grouped.num_parameters(), full.num_parameters() - 2 * 2 * (8 * 2 + 2))
+
+    def test_grouped_query_attention_rejects_uneven_groups(self) -> None:
+        from language import CausalSelfAttention
+
+        with self.assertRaises(ValueError):
+            CausalSelfAttention(8, 4, num_heads=4, num_kv_heads=3)
+
     def test_llama_style_state_round_trip(self) -> None:
         from language import CharTransformerModel
 
@@ -132,10 +173,13 @@ class TorchAgreementTests(unittest.TestCase):
         from language import CharTransformerModel
         from torch_twin import TorchTwin
 
-        for norm, positions, activation in (("layer", "learned", "gelu"), ("rms", "rope", "swiglu")):
-            with self.subTest(norm=norm, positions=positions, activation=activation):
+        for norm, positions, activation, kv_heads in (
+            ("layer", "learned", "gelu", 4), ("rms", "rope", "swiglu", 4), ("rms", "rope", "swiglu", 2),
+            ("layer", "learned", "gelu", 1),
+        ):
+            with self.subTest(norm=norm, positions=positions, activation=activation, kv_heads=kv_heads):
                 model = CharTransformerModel(
-                    13, context_size=10, embedding_dim=16, num_heads=2, num_layers=2,
+                    13, context_size=10, embedding_dim=16, num_heads=4, num_kv_heads=kv_heads, num_layers=2,
                     feed_forward_activation=activation, tie_embeddings=True, init="gpt2",
                     norm=norm, positions=positions, seed=1,
                 )
