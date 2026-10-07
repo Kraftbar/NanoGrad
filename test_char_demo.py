@@ -1264,5 +1264,31 @@ class CharDemoTests(unittest.TestCase):
         self.assertIn("generated:", text)
 
 
+    def test_transformer_generation_starts_from_a_short_seed(self) -> None:
+        vocab = CharVocab.from_text("abc")
+        model = CharTransformerModel(len(vocab), context_size=4, embedding_dim=4, seed=0)
+
+        text = generate_text(
+            model,
+            vocab,
+            seed_text="a",
+            length=6,
+            context_size=4,
+            input_mode="embedding",
+        )
+
+        self.assertEqual(len(text), 7)
+        self.assertTrue(text.startswith("a"))
+        with self.assertRaises(ValueError):
+            generate_text(
+                CharEmbeddingModel(len(vocab), context_size=4, embedding_dim=4),
+                vocab,
+                seed_text="a",
+                length=1,
+                context_size=4,
+                input_mode="embedding",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -467,8 +467,6 @@ def run(args: argparse.Namespace) -> dict:
             _print_step(metrics[-2:])
 
     seed_text = args.seed_text or train_text[: config.context_size]
-    if len(seed_text) < config.context_size:
-        raise ValueError("seed_text must be at least context_size characters")
 
     samples: list[dict] = []
     for sample_index in range(args.num_samples):

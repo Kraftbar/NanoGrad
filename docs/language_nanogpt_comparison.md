@@ -22,12 +22,18 @@ This note compares NanoGrad's tiny character transformer path with the local
   `nanogpt_state_from_nanograd` in `nanogpt_compare.py`).
 - The tied language-model head keeps an output bias; nanoGPT's `lm_head` has
   none.
-- Fixed-length contexts: NanoGrad models always see exactly `context_size`
-  tokens, while nanoGPT also accepts shorter prompts.
+- Like nanoGPT, the transformer accepts any context up to `context_size`,
+  so generation can start from one character and grow its context. With
+  shared weights and a one-character prompt, NanoGrad and nanoGPT still
+  produce identical samples. (The bigram and embedding baselines need a
+  full window.)
 - Xavier-uniform initialization by default instead of nanoGPT's
   `normal(0, 0.02)` with scaled residual projections; `init="gpt2"` selects
   the nanoGPT scheme.
-- No dropout, optimizer scheduling, mixed precision, or GPU path.
+- Dropout (`dropout=` / `--dropout`) and nanoGPT's warmup + cosine
+  learning-rate schedule (`schedules.py`, `--warmup-steps` / `--min-lr`)
+  are available; the comparison runs keep dropout at 0 so both frameworks
+  stay deterministic. No mixed precision or GPU path.
 - Character-level vocabulary only.
 
 ## Behavior Checks
@@ -190,7 +196,5 @@ here, so `CharTransformerModel` keeps Xavier as its default and offers
 
 ## Next Gaps
 
-- Allow prompts shorter than `context_size` (nanoGPT-style cropping) so
-  generation can start from a single character.
 - Keep tracking train/validation curves on larger capped Tiny Shakespeare
   slices now that the tensor core is roughly 20x faster.

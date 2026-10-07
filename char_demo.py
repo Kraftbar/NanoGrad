@@ -568,7 +568,11 @@ def generate_text(
         raise ValueError("length must be non-negative")
     if context_size <= 0:
         raise ValueError("context_size must be positive")
-    if len(seed_text) < context_size:
+    # A transformer reads any context up to context_size (like nanoGPT's
+    # generate, which crops to block_size). The bigram and embedding models
+    # read a fixed-size window, so they need a full one from the start.
+    variable_context = isinstance(model, CharTransformerModel)
+    if len(seed_text) < context_size and not variable_context:
         raise ValueError("seed_text must be at least context_size characters")
 
     text = seed_text

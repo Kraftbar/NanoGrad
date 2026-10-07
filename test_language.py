@@ -153,7 +153,7 @@ class LanguageModuleTests(unittest.TestCase):
             attention(Tensor.from_list([[1.0, 2.0]]))
 
         with self.assertRaises(ValueError):
-            attention(Tensor.zeros((1, 2, 2)))
+            attention(Tensor.zeros((1, 4, 2)))
 
         with self.assertRaises(ValueError):
             attention(Tensor.zeros((1, 3, 1)))
@@ -336,7 +336,7 @@ class LanguageModuleTests(unittest.TestCase):
             block(Tensor.from_list([[1.0, 2.0]]))
 
         with self.assertRaises(ValueError):
-            block(Tensor.zeros((1, 2, 2)))
+            block(Tensor.zeros((1, 4, 2)))
 
         with self.assertRaises(ValueError):
             block(Tensor.zeros((1, 3, 1)))
@@ -641,6 +641,30 @@ class LanguageModuleTests(unittest.TestCase):
         self.assertEqual(model.blocks[0].norm1.weight.data, [1.0] * 32)
         with self.assertRaises(ValueError):
             CharTransformerModel(vocab_size=4, init="kaiming")
+
+
+    def test_transformer_accepts_shorter_contexts(self) -> None:
+        model = CharTransformerModel(
+            vocab_size=6, context_size=4, embedding_dim=4, num_heads=2, num_layers=2, seed=3,
+        )
+        tokens = Tensor.from_list([[1, 2, 3, 4], [5, 0, 1, 2]])
+        prefix = Tensor.from_list([[1, 2], [5, 0]])
+
+        full = model.sequence_logits(tokens)
+        short = model.sequence_logits(prefix)
+
+        # Causal attention + the same positions: the first two positions of
+        # the full sequence must give exactly the prefix's logits.
+        self.assertEqual(short.shape, (2, 2, 6))
+        for batch in range(2):
+            for position in range(2):
+                for vocab in range(6):
+                    self.assertAlmostEqual(
+                        short[batch, position, vocab],
+                        full[batch, position, vocab],
+                    )
+        with self.assertRaises(ValueError):
+            model.sequence_logits(Tensor.zeros((1, 5)))
 
 
 if __name__ == "__main__":

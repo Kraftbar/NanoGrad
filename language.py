@@ -47,13 +47,18 @@ class TokenPositionEmbedding(TensorModule):
         )
 
     def __call__(self, indices) -> Tensor:
-        token_vectors = self.token_embedding(indices)
-        if token_vectors.shape[-2] != self.context_size:
-            raise ValueError("input last dimension must match context_size")
+        """Token vectors plus position vectors for positions 0 .. T - 1.
 
-        position_vectors = self.position_embedding(
-            list(range(self.context_size)),
-        )
+        Any length T up to ``context_size`` works (like nanoGPT): a shorter
+        input simply uses the first T learned positions.
+        """
+
+        token_vectors = self.token_embedding(indices)
+        length = token_vectors.shape[-2]
+        if length > self.context_size:
+            raise ValueError("input is longer than context_size")
+
+        position_vectors = self.position_embedding(list(range(length)))
         return token_vectors + position_vectors
 
     def parameters(self) -> list[Tensor]:
@@ -159,6 +164,10 @@ class CharEmbeddingModel(TensorModule):
         )
 
     def __call__(self, inputs: Tensor) -> Tensor:
+        # The projection reads every position's features at once, so this
+        # model needs exactly context_size tokens.
+        if inputs.shape[-1] != self.context_size:
+            raise ValueError("input last dimension must match context_size")
         embedded = self.embedding(inputs)
         return self.projection(embedded.flatten(start_axis=1))
 
@@ -241,8 +250,8 @@ class CausalSelfAttention(TensorModule):
             raise ValueError("CausalSelfAttention expects (batch, context, embedding)")
 
         _, context_size, embedding_dim = inputs.shape
-        if context_size != self.context_size:
-            raise ValueError("input context dimension must match context_size")
+        if context_size > self.context_size:
+            raise ValueError("input is longer than context_size")
         if embedding_dim != self.embedding_dim:
             raise ValueError("input embedding dimension must match embedding_dim")
 
@@ -407,8 +416,8 @@ class TransformerBlock(TensorModule):
             raise ValueError("TransformerBlock expects (batch, context, embedding)")
 
         _, context_size, embedding_dim = inputs.shape
-        if context_size != self.context_size:
-            raise ValueError("input context dimension must match context_size")
+        if context_size > self.context_size:
+            raise ValueError("input is longer than context_size")
         if embedding_dim != self.embedding_dim:
             raise ValueError("input embedding dimension must match embedding_dim")
 
