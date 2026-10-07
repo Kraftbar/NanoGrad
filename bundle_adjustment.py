@@ -52,8 +52,9 @@ from linalg import Matrix, Vector, inverse, mat_mul, mat_vec, norm, solve, trans
 @dataclass(frozen=True)
 class TwoViewResult:
     pose: Pose
-    points: list[Vector]
+    points: list[Vector]        # only the kept points
     history: list[RefinementStep]
+    kept: list[int]             # indices (into the inputs) of the kept points
 
 
 @dataclass(frozen=True)
@@ -74,22 +75,94 @@ def two_view_bundle_adjustment(
     *,
     iterations: int = 10,
     damping: float = 1e-3,
+    huber_px: float | None = None,
+    reject_px: float | None = None,
+    rounds: int = 3,
 ) -> TwoViewResult:
-    """Levenberg-Marquardt over (second pose, all points) via the Schur complement."""
+    """Levenberg-Marquardt over (second pose, all points) via the Schur complement.
 
-    points = [list(point) for point in points]
+    With ``huber_px`` set, each observation's squared pixel error e^2 is
+    replaced by the Huber cost
+
+        rho(e) = e^2                    if e <= delta
+                 2 delta e - delta^2    otherwise
+
+    which grows only linearly for large errors, so a few wrong matches
+    cannot dominate the fit. It is solved by iteratively reweighted least
+    squares: each observation gets weight w = min(1, delta / e) and its
+    Jacobian rows and residuals are scaled by sqrt(w). (ORB-SLAM3 uses the
+    same Huber kernel in its g2o bundle adjustment.)
+
+    With ``reject_px`` set, this runs up to ``rounds`` rounds: after each
+    round, points whose reprojection error exceeds ``reject_px`` in either
+    image are dropped and the rest are adjusted again. A wrong match that
+    slipped past RANSAC pulls the whole solution toward itself; once the
+    good matches are fit well, it stands out and can be removed.
+    """
+
+    kept = list(range(len(points)))
+    current_points = [list(point) for point in points]
+    history: list[RefinementStep] = []
+    for _ in range(rounds if reject_px is not None else 1):
+        pose, current_points, round_history = _adjust(
+            camera,
+            pose,
+            current_points,
+            [first_pixels[i] for i in kept],
+            [second_pixels[i] for i in kept],
+            iterations=iterations,
+            damping=damping,
+            huber_px=huber_px,
+        )
+        history.extend(round_history if not history else round_history[1:])
+        if reject_px is None:
+            break
+        survivors = [
+            position
+            for position, index in enumerate(kept)
+            if _max_pixel_error(camera, pose, current_points[position],
+                                first_pixels[index], second_pixels[index]) <= reject_px
+        ]
+        if len(survivors) == len(kept) or len(survivors) < 6:
+            break
+        kept = [kept[position] for position in survivors]
+        current_points = [current_points[position] for position in survivors]
+    return TwoViewResult(pose, current_points, history, kept)
+
+
+def _adjust(
+    camera: PinholeCamera,
+    pose: Pose,
+    points: list[Vector],
+    first_pixels: Sequence[Vector],
+    second_pixels: Sequence[Vector],
+    *,
+    iterations: int,
+    damping: float,
+    huber_px: float | None = None,
+) -> tuple[Pose, list[Vector], list[RefinementStep]]:
+    """One round of damped Gauss-Newton steps on a fixed set of points."""
+
     baseline = norm(pose.translation)
 
-    def error(candidate_pose: Pose, candidate_points: list[Vector]) -> float:
+    def rmse(candidate_pose: Pose, candidate_points: list[Vector]) -> float:
         return two_view_rmse(camera, candidate_pose, candidate_points, first_pixels, second_pixels)
 
-    history = [RefinementStep(0, error(pose, points), damping)]
+    def cost(candidate_pose: Pose, candidate_points: list[Vector]) -> float:
+        if huber_px is None:
+            return rmse(candidate_pose, candidate_points)
+        return _huber_cost(camera, candidate_pose, candidate_points, first_pixels, second_pixels, huber_px)
+
+    history = [RefinementStep(0, rmse(pose, points), damping)]
+    current = cost(pose, points)
     for iteration in range(1, iterations + 1):
         blocks = [
             _linearize_point(camera, pose, point, first, second)
             for point, first, second in zip(points, first_pixels, second_pixels)
         ]
-        current = history[-1].rmse
+        if huber_px is not None:
+            blocks = [_huber_weighted(block, huber_px) for block in blocks]
+        previous = current
 
         while damping <= 1e12:
             pose_step, point_steps = _schur_step(blocks, damping)
@@ -99,16 +172,66 @@ def two_view_bundle_adjustment(
                 for point, step in zip(points, point_steps)
             ]
             candidate_pose, candidate_points = _fix_scale(candidate_pose, candidate_points, baseline)
-            if error(candidate_pose, candidate_points) < current:
-                pose, points = candidate_pose, candidate_points
+            candidate_cost = cost(candidate_pose, candidate_points)
+            if candidate_cost < current:
+                pose, points, current = candidate_pose, candidate_points, candidate_cost
                 damping = max(damping / 10.0, 1e-12)
                 break
             damping *= 10.0
 
-        history.append(RefinementStep(iteration, error(pose, points), damping))
-        if current - history[-1].rmse < 1e-12:
+        history.append(RefinementStep(iteration, rmse(pose, points), damping))
+        if previous - current < 1e-12:
             break
-    return TwoViewResult(pose, points, history)
+    return pose, points, history
+
+
+def _huber_weighted(block: _PointBlock, delta: float) -> _PointBlock:
+    """Scale each observation's rows by sqrt(w), w = min(1, delta / error)."""
+
+    pose_rows, point_rows, residuals = [], [], []
+    for start in (0, 2):  # rows 0-1: first image (u, v); rows 2-3: second image
+        error = math.hypot(block.residuals[start], block.residuals[start + 1])
+        scale = 1.0 if error <= delta else math.sqrt(delta / error)
+        for row in (start, start + 1):
+            pose_rows.append([scale * value for value in block.pose_jacobian[row]])
+            point_rows.append([scale * value for value in block.point_jacobian[row]])
+            residuals.append(scale * block.residuals[row])
+    return _PointBlock(pose_rows, point_rows, residuals)
+
+
+def _huber_cost(
+    camera: PinholeCamera,
+    pose: Pose,
+    points: Sequence[Vector],
+    first_pixels: Sequence[Vector],
+    second_pixels: Sequence[Vector],
+    delta: float,
+) -> float:
+    total = 0.0
+    for point, first, second in zip(points, first_pixels, second_pixels):
+        for view_pose, observed in ((Pose.identity(), first), (pose, second)):
+            projected = camera.project(view_pose.apply(point))
+            if projected is None:
+                return math.inf
+            error = math.dist(projected, observed)
+            total += error * error if error <= delta else 2.0 * delta * error - delta * delta
+    return total
+
+
+def _max_pixel_error(
+    camera: PinholeCamera,
+    pose: Pose,
+    point: Vector,
+    first_pixel: Vector,
+    second_pixel: Vector,
+) -> float:
+    worst = 0.0
+    for view_pose, observed in ((Pose.identity(), first_pixel), (pose, second_pixel)):
+        projected = camera.project(view_pose.apply(point))
+        if projected is None:
+            return math.inf
+        worst = max(worst, math.dist(projected, observed))
+    return worst
 
 
 def two_view_rmse(

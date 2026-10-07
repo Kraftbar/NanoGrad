@@ -281,6 +281,34 @@ def triangulate_point(
     return [value / homogeneous[3] for value in homogeneous[:3]]
 
 
+
+def triangulate_matches(
+    second: Pose,
+    first_normalized: Sequence[Vector],
+    second_normalized: Sequence[Vector],
+) -> tuple[list[Vector], list[int]]:
+    """Triangulate matches between the origin camera and ``second``.
+
+    Returns the points that land in front of both cameras, plus the indices
+    of the matches they came from. A point behind a camera means a wrong
+    match (or one too close to the epipole to triangulate), and it would make
+    reprojection error meaningless, so it is dropped.
+    """
+
+    first = Pose.identity()
+    points: list[Vector] = []
+    kept: list[int] = []
+    for index, (n1, n2) in enumerate(zip(first_normalized, second_normalized)):
+        try:
+            point = triangulate_point(first, second, n1, n2)
+        except ValueError:
+            continue
+        if point[2] > 0.0 and second.apply(point)[2] > 0.0:
+            points.append(point)
+            kept.append(index)
+    return points, kept
+
+
 def estimate_pose_dlt(points: Sequence[Vector], normalized: Sequence[Vector]) -> Pose:
     """Linear PnP: camera pose from >= 6 known 3D points and their projections.
 

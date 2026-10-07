@@ -81,6 +81,13 @@ Gather every kernel-sized image patch into a row (index lists cached per
 shape), then `out = dot_table(kernels, patches)`. The backward pass is two
 more tables plus a scatter-add of patch gradients back onto pixels.
 
+Average pooling is written as a sum of shifted images: for each offset
+inside the window, add one strided slice per output row. It no longer needs
+a table of every window's pixel indices. Building that table dominated the
+first call on each new image size: 0.61 s versus 0.12 s for a 5x5 box filter
+on a 238x318 image. Once the table was cached, the two were close (0.107 s
+versus 0.092 s).
+
 ### 4. Reductions and softmax work on lanes
 
 A "lane" is every value that differs only along the reduced axis. Each lane

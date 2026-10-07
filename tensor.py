@@ -1343,35 +1343,57 @@ def avg_pool2d(
     *,
     stride: tuple[int, int] | None = None,
 ) -> Tensor:
-    """Average-pool a 2D tensor or each channel in a 3D/4D tensor."""
+    """Average-pool a 2D tensor or each channel in a 3D/4D tensor.
 
-    planes, out_shape, windows = _pool2d_setup("avg_pool2d", image, window, stride)
-    plane_size = image.shape[-2] * image.shape[-1]
-    scale = 1 / (window[0] * window[1])
+    Written as a sum of shifted images: for every offset (dr, dc) inside the
+    window, add the input sampled at (stride * out + offset). Each term is a
+    strided slice of one input row, so the work happens in list slices
+    rather than per-pixel Python loops:
+
+        out[r, c] = (1 / n) * sum over (dr, dc) of image[sr*r + dr, sc*c + dc]
+    """
+
+    planes, out_shape, (stride_rows, stride_cols) = _pool2d_setup(
+        "avg_pool2d", image, window, stride
+    )
+    image_cols = image.shape[-1]
+    out_rows, out_cols = out_shape[-2:]
+    plane_size = image.shape[-2] * image_cols
+    window_rows, window_cols = window
+    scale = 1 / (window_rows * window_cols)
     source = image.data
+
+    def row_slice(plane: int, out_row: int, d_row: int, d_col: int) -> slice:
+        start = plane * plane_size + (out_row * stride_rows + d_row) * image_cols + d_col
+        return slice(start, start + (out_cols - 1) * stride_cols + 1, stride_cols)
 
     data: list[float] = []
     for plane in range(planes):
-        offset = plane * plane_size
-        data.extend([
-            sum(source[offset + index] for index in indices) * scale
-            for indices in windows
-        ])
+        for out_row in range(out_rows):
+            total = [0.0] * out_cols
+            for d_row in range(window_rows):
+                for d_col in range(window_cols):
+                    shifted = source[row_slice(plane, out_row, d_row, d_col)]
+                    total = [a + b for a, b in zip(total, shifted)]
+            data.extend([value * scale for value in total])
 
     out = _op_result(data, out_shape, (image,), "avg_pool2d")
 
     def _backward() -> None:
-        # Every pixel in a window gets an equal share of that window's grad.
+        # Every pixel in a window gets an equal share of that window's grad,
+        # i.e. the same shifted slices, now scattered back.
         grad = _grad_data(out)
         image_grad = [0.0] * image.numel
-        grad_index = 0
         for plane in range(planes):
-            offset = plane * plane_size
-            for indices in windows:
-                share = grad[grad_index] * scale
-                grad_index += 1
-                for index in indices:
-                    image_grad[offset + index] += share
+            for out_row in range(out_rows):
+                start = (plane * out_rows + out_row) * out_cols
+                share = [value * scale for value in grad[start : start + out_cols]]
+                for d_row in range(window_rows):
+                    for d_col in range(window_cols):
+                        target = row_slice(plane, out_row, d_row, d_col)
+                        image_grad[target] = [
+                            a + b for a, b in zip(image_grad[target], share)
+                        ]
         _add_grad(image, image_grad)
 
     out._backward = _backward
@@ -1390,8 +1412,19 @@ def max_pool2d(
     maximum in row-major order.
     """
 
-    planes, out_shape, windows = _pool2d_setup("max_pool2d", image, window, stride)
+    planes, out_shape, (stride_rows, stride_cols) = _pool2d_setup(
+        "max_pool2d", image, window, stride
+    )
     plane_size = image.shape[-2] * image.shape[-1]
+    windows = _pool2d_windows(
+        image.shape[-1],
+        window[0],
+        window[1],
+        stride_rows,
+        stride_cols,
+        out_shape[-2],
+        out_shape[-1],
+    )
     source = image.data
 
     data: list[float] = []
@@ -1424,8 +1457,8 @@ def _pool2d_setup(
     image: Tensor,
     window: tuple[int, int],
     stride: tuple[int, int] | None,
-) -> tuple[int, tuple[int, ...], tuple[tuple[int, ...], ...]]:
-    """Validate pooling arguments; return (planes, out shape, windows)."""
+) -> tuple[int, tuple[int, ...], tuple[int, int]]:
+    """Validate pooling arguments; return (planes, out shape, stride)."""
 
     if image.ndim not in (2, 3, 4):
         raise ValueError(f"{name} expects a 2D, 3D, or 4D tensor")
@@ -1449,16 +1482,7 @@ def _pool2d_setup(
     out_cols = ((image_cols - window_cols) // stride_cols) + 1
     planes = _numel(image.shape[:-2])
     out_shape = (*image.shape[:-2], out_rows, out_cols)
-    windows = _pool2d_windows(
-        image_cols,
-        window_rows,
-        window_cols,
-        stride_rows,
-        stride_cols,
-        out_rows,
-        out_cols,
-    )
-    return planes, out_shape, windows
+    return planes, out_shape, (stride_rows, stride_cols)
 
 
 @lru_cache(maxsize=64)

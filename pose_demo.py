@@ -40,7 +40,7 @@ from geometry import (
     relative_pose_from_essential,
     reprojection_rmse,
     rotation_angle_degrees,
-    triangulate_point,
+    triangulate_matches,
 )
 from linalg import Vector, dot, norm, normalize
 from ransac import ransac_pose_dlt, ransac_relative_pose
@@ -166,13 +166,14 @@ def relative_pose_report(scene: Scene, *, threshold_px: float = 2.0) -> dict:
     second = [camera.normalize(pixel) for pixel in scene.second_pixels]
     plain = relative_pose_from_essential(essential_matrix(first, second), first, second)
     relative, robust = ransac_relative_pose(first, second, threshold=threshold_px / camera.fx)
-    inliers = robust.inliers
     truth = scene.second_pose  # the first camera is the world frame
 
-    triangulated = [
-        triangulate_point(Pose.identity(), relative, first[i], second[i])
-        for i in inliers
-    ]
+    triangulated, kept = triangulate_matches(
+        relative,
+        [first[i] for i in robust.inliers],
+        [second[i] for i in robust.inliers],
+    )
+    inliers = [robust.inliers[k] for k in kept]   # RANSAC inliers in front of both cameras
     adjusted = two_view_bundle_adjustment(
         camera,
         relative,
@@ -207,8 +208,8 @@ def relative_pose_report(scene: Scene, *, threshold_px: float = 2.0) -> dict:
         ),
         "ba_median_point_error": median_point_error(adjusted.points),
         "ba_history": adjusted.history,
-        "inliers": inliers,
-        "outlier_recall": _outlier_recall(scene, inliers),
+        "inliers": robust.inliers,
+        "outlier_recall": _outlier_recall(scene, robust.inliers),
         "mean_scene_depth": sum(point[2] for point in scene.points) / len(scene.points),
     }
 

@@ -81,8 +81,10 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] [Explore camera geometry and pose estimation](./docs/camera_geometry.md)
 - [ ] Keep ORB-SLAM3 and DROID-SLAM as distant reference points
   ([how today's pieces map onto them](./docs/camera_geometry.md#how-this-maps-to-the-reference-points))
-- [ ] Two-view bundle adjustment and RANSAC on the synthetic scene
-- [ ] Corner detection and matching on a real image pair
+- [x] [Two-view bundle adjustment and RANSAC on the synthetic scene](./docs/camera_geometry.md#results-synthetic-matches-pose_demopy)
+- [x] [Corner detection and matching on a rendered image pair](./docs/camera_geometry.md#results-rendered-image-pair-image_pair_demopy)
+- [ ] Track points into a third view (PnP) to reject epipolar-consistent mismatches
+- [ ] Corner detection and matching on real camera images
 
 NanoGrad does not aim to maximize benchmark scores by hiding complexity,
 over-tuning parameters, or making the code unreadable. Benchmarks should help
@@ -150,7 +152,11 @@ nanogpt_compare.py # train NanoGrad and nanoGPT side by side (needs torch)
 language_benchmark.py # tiny transformer timing check
 linalg.py        # small list-of-lists linear algebra (solve, eigen, SVD)
 geometry.py      # pinhole camera, rotations, triangulation, PnP, essential matrix
+ransac.py        # robust estimation: RANSAC for PnP and two-view geometry
+bundle_adjustment.py # two-view bundle adjustment (Schur complement, Huber)
+features.py      # Harris corners, patch descriptors, matching, PGM files
 pose_demo.py     # synthetic-scene camera pose estimation demo
+image_pair_demo.py # rendered image pair -> corners -> matches -> pose
 ```
 
 ## Reference Implementations
@@ -179,7 +185,8 @@ python3 mnist_smoke_demo.py
 python3 char_demo.py --preset tiny-transformer
 python3 char_compare.py
 python3 language_benchmark.py --repeat 1
-python3 pose_demo.py
+python3 pose_demo.py --outliers 0.3
+python3 image_pair_demo.py
 ```
 
 The core has no third-party dependencies. Only `nanogpt_compare.py` needs
