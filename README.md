@@ -189,6 +189,7 @@ train.py         # scalar and tensor training loops
 demo.py          # scalar autograd training demo
 tensor_demo.py   # tensor math and tensor-autograd demos
 benchmark.py     # op-by-op timing against PyTorch (DeepBench-style)
+benchmark_suite.py # every model comparison against PyTorch in one table
 mnist_compare.py # LeNet / ResNet / ViT on MNIST, Fashion-MNIST or CIFAR-10, NanoGrad vs PyTorch
 bert_compare.py  # the BERT-style encoder on Tiny Shakespeare in both
 vision.py        # reusable small CNN model implementations
@@ -273,6 +274,7 @@ python3 -m venv .venv && .venv/bin/pip install torch
 .venv/bin/python mnist_compare.py --epochs 1 --model resnet
 .venv/bin/python bert_compare.py --steps 500
 .venv/bin/python benchmark.py --torch
+.venv/bin/python benchmark_suite.py      # every comparison, one table
 ```
 
 Use the test suite as the main correctness check; `test_gradcheck.py` compares
