@@ -51,6 +51,19 @@ class WikiTextTests(unittest.TestCase):
             self.assertAlmostEqual(a, b, places=12)
         self.assertFalse(detach_state(state)[0][0].requires_grad)
 
+    def test_zaremba_preset_uses_a_fixed_schedule(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            tiny_corpus(Path(folder))
+            args = parse_args(["--preset", "zaremba-small", "--data", folder, "--emsize", "8", "--nhid", "8",
+                               "--epochs", "3", "--decay-after", "1", "--batch-size", "4", "--log-every", "1000"])
+            self.assertEqual((args.bptt, args.dropout, args.init_range, args.eval_batch_size), (20, 0.0, 0.1, 1))
+            import contextlib
+            import io
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                results = run(args)
+        self.assertEqual([row["lr"] for row in results["history"]], [20.0, 10.0, 5.0])
+
     def test_state_dict_round_trip(self) -> None:
         for tied in (False, True):
             model = WordRNNModel(9, embedding_dim=6, hidden=6, tied=tied, dropout=0.0, seed=1)

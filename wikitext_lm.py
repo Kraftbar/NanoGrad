@@ -26,13 +26,22 @@ over, as in the example's Transformer model. Its PyTorch side is
 torch_twin.py.
 
 The data is in data/wikitext-2 ({train,valid,test}.txt, from the
-pytorch/examples repository).
+pytorch/examples repository). Any folder of the same three files works:
+``--data data/ptb --preset zaremba-small`` is the Penn Treebank and the
+"small" LSTM of Zaremba et al. (2014), the classic word-level benchmark
+(test perplexity 114.5 in the paper). Its recipe is the example's with
+20-word windows, no dropout, every weight drawn from uniform(-0.1, 0.1),
+and the learning rate halved after every epoch from the fifth on, for 13
+epochs. (Zaremba sums the loss over the 20 steps at learning rate 1 with
+gradients clipped to norm 5; on the mean loss used here that is learning
+rate 20 and norm 0.25, the example's numbers.)
 """
 
 from __future__ import annotations
 
 import argparse
 import math
+import random
 from pathlib import Path
 from time import perf_counter
 
@@ -317,6 +326,15 @@ def train_epoch(runner, columns, *, bptt: int, lr: float, epoch: int, log_every:
 
 
 def build_model(vocab_size: int, args: argparse.Namespace, *, dropout: float | None = None):
+    model = _build_model(vocab_size, args, dropout=dropout)
+    if args.init_range is not None:            # every weight from uniform(-r, r), as Zaremba et al.
+        rng = random.Random(args.seed)
+        for parameter in model.parameters():
+            parameter.data = [rng.uniform(-args.init_range, args.init_range) for _ in range(parameter.numel)]
+    return model
+
+
+def _build_model(vocab_size: int, args: argparse.Namespace, *, dropout: float | None = None):
     if args.cell == "transformer":
         return CharTransformerModel(
             vocab_size, context_size=args.bptt, embedding_dim=args.emsize, hidden_dim=args.nhid,
@@ -350,11 +368,17 @@ def run(args: argparse.Namespace) -> dict:
         print(f"| end of epoch {epoch:3d} | {minutes:5.1f} min | valid loss {valid:5.2f} | "
               f"valid ppl {math.exp(valid):8.2f}", flush=True)
         history.append({"epoch": epoch, "valid_ppl": math.exp(valid), "minutes": minutes, "lr": lr})
-        if best is None or valid < best:
+        if args.decay_after is not None:       # a fixed schedule (Zaremba et al.): test the last model
+            best_weights = None
+            if epoch >= args.decay_after:
+                lr /= args.decay
+        elif best is None or valid < best:
             best, best_weights = valid, runner.weights()
         else:
             lr /= 4.0                         # the example's annealing
-    runner.load_weights(best_weights)
+    if best_weights is not None:
+        runner.load_weights(best_weights)
+    best = min(math.log(row["valid_ppl"]) for row in history) if best is None else best
     test = evaluate(runner, test_columns, args.bptt)
     print(f"| end of training | test loss {test:5.2f} | test ppl {math.exp(test):8.2f}", flush=True)
     return {"history": history, "valid_ppl": math.exp(best), "test_ppl": math.exp(test)}
@@ -388,8 +412,16 @@ def compare(args: argparse.Namespace) -> dict:
     return results
 
 
+PRESETS = {
+    # Zaremba, Sutskever and Vinyals (2014), "small" non-regularized LSTM on PTB.
+    "zaremba-small": dict(bptt=20, dropout=0.0, epochs=13, decay_after=4, decay=2.0, init_range=0.1,
+                          eval_batch_size=1),
+}
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--preset", choices=tuple(PRESETS), help="another paper's recipe (other flags still override)")
     parser.add_argument("--data", default="data/wikitext-2")
     parser.add_argument("--framework", choices=("nanograd", "torch"), default="nanograd")
     parser.add_argument("--compare", action="store_true", help="time both frameworks on the same steps")
@@ -410,7 +442,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=50, help="--compare: training steps")
     parser.add_argument("--threads", type=int, default=1, help="--compare / torch: PyTorch threads")
     parser.add_argument("--log-every", type=int, default=200)
+    parser.add_argument("--decay-after", type=int, help="fixed schedule: divide the lr by --decay after this epoch")
+    parser.add_argument("--decay", type=float, default=2.0)
+    parser.add_argument("--init-range", type=float, help="draw every weight from uniform(-r, r)")
     parser.add_argument("--seed", type=int, default=1111)
+    preset = parser.parse_known_args(argv)[0].preset
+    if preset:
+        parser.set_defaults(**PRESETS[preset])
     args = parser.parse_args(argv)
     if args.dtype:
         kernels.set_default_dtype(args.dtype)
