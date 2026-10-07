@@ -195,3 +195,26 @@ class TorchTwin:
         for block in model.blocks:
             hidden = self._transformer_block(block, hidden)
         return self._linear(model.projection, self._norm(model.norm, hidden))
+
+    # -- diffusion U-Net (diffusion.py); takes images and time steps --------
+
+    def unet(self, model, images, steps: list[int]):
+        from diffusion import timestep_embedding
+
+        silu = F.silu
+        embedding = torch.tensor(list(timestep_embedding(steps, model.time_width).data), dtype=self.dtype)
+        time = self._linear(model.time_out, silu(self._linear(model.time_in, embedding.reshape(len(steps), -1))))
+
+        def block(b, x):
+            hidden = silu(self._conv(b.conv1, x))
+            hidden = hidden + self._linear(b.time, time).reshape(x.shape[0], b.out_channels, 1, 1)
+            hidden = silu(self._conv(b.conv2, hidden))
+            return hidden + (x if b.skip is None else self._conv(b.skip, x))
+
+        up = lambda x: F.interpolate(x, scale_factor=2, mode="nearest")
+        skip1 = block(model.down1, self._conv(model.stem, images))
+        skip2 = block(model.down2, self._conv(model.shrink1, skip1))
+        hidden = block(model.middle, self._conv(model.shrink2, skip2))
+        hidden = block(model.up2, torch.cat([up(hidden), skip2], dim=1))
+        hidden = block(model.up1, torch.cat([up(hidden), skip1], dim=1))
+        return self._conv(model.head, hidden)

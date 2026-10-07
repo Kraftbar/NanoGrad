@@ -102,7 +102,10 @@ are in [docs/benchmarks.md](./docs/benchmarks.md).
   SwiGLU](./docs/llm_gears.md)
 - [x] Recurrent family: LSTM and GRU matching `torch.nn.LSTM`/`GRU`, and
   char-rnn in the same training recipe as the GPT (`--preset baby-lstm`)
-- [x] Generative family: a VAE on MNIST, trained identically to PyTorch
+- [x] Generative family: a VAE on MNIST, trained identically to PyTorch,
+  and a diffusion model (DDPM, small U-Net) whose U-Net matches PyTorch
+- [x] Pretrain-then-fine-tune: the BERT encoder learns speaker
+  classification on Tiny Shakespeare (`bert_finetune.py`)
 - [x] float32 tensors (`kernels.set_default_dtype("float32")`, `--dtype float32`)
 - [x] Keep tensors in C arrays between kernels, so data stops being copied
   to and from Python lists at every op
@@ -194,6 +197,10 @@ bpe.py           # byte-level byte-pair-encoding tokenizer (GPT-2 style)
 rnn.py           # LSTM, GRU and a char-rnn language model
 vae.py           # variational autoencoder (generative model)
 vae_compare.py   # the VAE on MNIST in NanoGrad and PyTorch
+diffusion.py     # denoising diffusion (DDPM) with a small U-Net
+diffusion_demo.py # train it on MNIST and draw new digits (PNG)
+speakers.py      # speaker classification task hidden in Tiny Shakespeare
+bert_finetune.py # pretrain the BERT encoder, then fine-tune it on speakers
 torch_twin.py    # runs a NanoGrad architecture in PyTorch with the same weights
 mnist_demo.py    # local-file MNIST MLP demo
 mnist_cnn_demo.py # local-file MNIST CNN demo

@@ -1149,26 +1149,26 @@ def _join_chunks(
     from every input in turn.
     """
 
+    # Each input's chunk sits at a fixed offset inside every output row of
+    # sum(chunks) values: copying it there is a scatter through an index
+    # table of that range, and its gradient is the matching gather.
     outer = len(tensors[0].data) // chunks[0]
-    data: list[float] = []
-    for outer_index in range(outer):
-        for tensor, chunk in zip(tensors, chunks):
-            start = outer_index * chunk
-            data.extend(tensor.data[start : start + chunk])
+    full = sum(chunks)
+    indices, offset = [], 0
+    for chunk in chunks:
+        indices.append(_range_index(offset, chunk))
+        offset += chunk
+    data = kernels.zeros(outer * full)
+    for tensor, index in zip(tensors, indices):
+        kernels.scatter_add_indexed(tensor.data, index, batches=outer, image_size=full, into=data)
 
     out = _op_result(data, out_shape, tuple(tensors), op)
 
     def _backward() -> None:
         grad = _grad_data(out)
-        tensor_grads: list[list[float]] = [[] for _ in tensors]
-        offset = 0
-        for _ in range(outer):
-            for tensor_grad, chunk in zip(tensor_grads, chunks):
-                tensor_grad.extend(grad[offset : offset + chunk])
-                offset += chunk
-        for tensor, tensor_grad in zip(tensors, tensor_grads):
+        for tensor, index in zip(tensors, indices):
             if tensor.requires_grad:
-                _add_grad(tensor, tensor_grad)
+                _add_grad(tensor, kernels.gather_indexed(grad, index, batches=outer, image_size=full))
 
     _set_backward(out, _backward)
     return out
@@ -1418,6 +1418,38 @@ def _pad2d_index(rows: int, cols: int, padding: int) -> tuple[int, ...]:
         (row + padding) * padded_cols + col + padding
         for row in range(rows)
         for col in range(cols)
+    )
+
+
+def upsample_nearest2d(image: Tensor, factor: int = 2) -> Tensor:
+    """Make the last two axes ``factor`` times larger by repeating pixels.
+
+    out[r, c] = image[r // factor, c // factor]: a gather through an index
+    table, so the backward pass scatters each output gradient back onto the
+    pixel it copied (every input pixel collects factor * factor of them).
+    """
+
+    if factor < 1:
+        raise ValueError("upsample factor must be at least 1")
+    rows, cols = image.shape[-2:]
+    out_shape = (*image.shape[:-2], rows * factor, cols * factor)
+    index = _upsample_index(rows, cols, factor)
+    sizes = dict(batches=image.numel // (rows * cols), image_size=rows * cols)
+    out = _op_result(kernels.gather_indexed(image.data, index, **sizes), out_shape, (image,), "upsample")
+
+    def _backward() -> None:
+        _add_grad(image, kernels.scatter_add_indexed(_grad_data(out), index, **sizes))
+
+    _set_backward(out, _backward)
+    return out
+
+
+@lru_cache(maxsize=64)
+def _upsample_index(rows: int, cols: int, factor: int):
+    return kernels.index_table(
+        (row // factor) * cols + col // factor
+        for row in range(rows * factor)
+        for col in range(cols * factor)
     )
 
 

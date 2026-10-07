@@ -253,6 +253,32 @@ def save_pgm(path: str | Path, image: Tensor) -> None:
     Path(path).write_bytes(f"P5\n{width} {height}\n255\n".encode("ascii") + pixels)
 
 
+def save_png(path: str | Path, image: Tensor) -> None:
+    """Write a grayscale PNG (values in [0, 1]) with only the standard library.
+
+    A PNG is a signature, then chunks of (length, type, data, CRC32): IHDR
+    (size, 8-bit grayscale), IDAT (zlib-compressed rows, each prefixed by a
+    0 byte meaning "no filter"), and IEND.
+    """
+
+    import struct
+    import zlib
+
+    height, width = image.shape
+    rows = b"".join(
+        b"\x00" + bytes(max(0, min(255, round(value * 255))) for value in image.data[r * width : (r + 1) * width])
+        for r in range(height)
+    )
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    Path(path).write_bytes(
+        b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+    )
+
+
 def load_pgm(path: str | Path) -> Tensor:
     """Read an 8-bit binary PGM file into a (height, width) Tensor in [0, 1].
 
