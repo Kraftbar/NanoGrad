@@ -110,10 +110,10 @@ def random_batch(
 
 
 def build_model(vocab_size: int, config: argparse.Namespace):
-    if config.architecture == "lstm":
+    if config.architecture in ("lstm", "gru"):
         return CharLSTMModel(
             vocab_size, embedding_dim=config.embedding_dim, hidden=config.lstm_hidden,
-            num_layers=config.layers, seed=config.seed,
+            num_layers=config.layers, cell=config.architecture, seed=config.seed,
         )
     hidden_dim = 4 * config.embedding_dim
     if config.activation == "swiglu":
@@ -361,7 +361,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.add_argument("--" + name.replace("_", "-"), type=int)
     for name in ("lr", "min_lr", "dropout"):
         parser.add_argument("--" + name.replace("_", "-"), type=float)
-    parser.add_argument("--architecture", choices=("transformer", "lstm"))
+    parser.add_argument("--architecture", choices=("transformer", "lstm", "gru"))
     parser.add_argument("--lstm-hidden", type=int)
     parser.add_argument("--norm", choices=("layer", "rms"))
     parser.add_argument("--positions", choices=("learned", "rope"))

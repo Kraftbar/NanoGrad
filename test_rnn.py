@@ -3,7 +3,7 @@ import random
 import unittest
 
 from gradcheck import max_gradient_error
-from rnn import LSTM, CharLSTMModel
+from rnn import GRU, LSTM, CharLSTMModel
 from tensor import Tensor
 
 
@@ -64,6 +64,48 @@ class LSTMTests(unittest.TestCase):
             (layer.bias.grad, reference.bias_ih_l0.grad),
         ):
             for a, b in zip(ours, theirs.reshape(-1).tolist()):
+                self.assertAlmostEqual(a, b, places=12)
+
+
+
+class GRUTests(unittest.TestCase):
+    def test_gradients_match_finite_differences(self) -> None:
+        layer = GRU(3, 4, seed=7)
+        inputs = random_tensor((2, 4, 3), 8)
+        weights = random_tensor((2, 4, 4), 9, requires_grad=False)
+        error = max_gradient_error(lambda: (layer(inputs) * weights).sum(), [inputs, *layer.parameters()])
+        self.assertLess(error, 1e-5)
+
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "PyTorch is not installed")
+    def test_matches_pytorch_gru(self) -> None:
+        import torch
+
+        batch, length, inputs_size, hidden = 3, 5, 4, 6
+        layer = GRU(inputs_size, hidden, seed=10)
+        inputs = random_tensor((batch, length, inputs_size), 11)
+        out = layer(inputs)
+        weights = [random.Random(12).uniform(-1.0, 1.0) for _ in range(out.numel)]
+        (out * Tensor(weights, out.shape)).sum().backward()
+
+        double = torch.float64
+        reference = torch.nn.GRU(inputs_size, hidden, batch_first=True).double()
+        pairs = (
+            (reference.weight_ih_l0, layer.input_weight), (reference.weight_hh_l0, layer.hidden_weight),
+            (reference.bias_ih_l0, layer.input_bias), (reference.bias_hh_l0, layer.hidden_bias),
+        )
+        with torch.no_grad():
+            for target, source in pairs:
+                target.copy_(torch.tensor(list(source.data), dtype=double).reshape(target.shape))
+        torch_inputs = torch.tensor(list(inputs.data), dtype=double).reshape(batch, length, inputs_size).requires_grad_()
+        torch_out, _ = reference(torch_inputs)
+        (torch_out * torch.tensor(weights, dtype=double).reshape(torch_out.shape)).sum().backward()
+
+        for a, b in zip(out.data, torch_out.detach().reshape(-1).tolist()):
+            self.assertAlmostEqual(a, b, places=12)
+        for a, b in zip(inputs.grad, torch_inputs.grad.reshape(-1).tolist()):
+            self.assertAlmostEqual(a, b, places=12)
+        for target, source in pairs:
+            for a, b in zip(source.grad, target.grad.reshape(-1).tolist()):
                 self.assertAlmostEqual(a, b, places=12)
 
 
