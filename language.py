@@ -622,6 +622,8 @@ class TransformerBlock(TensorModule):
         self.norm1.load_state_dict(state["norm1"])
         self.attention.load_state_dict(state["attention"])
         self.norm2.load_state_dict(state["norm2"])
+        if ("moe" in state) != (self.moe is not None):
+            raise ValueError("state feed-forward (experts or not) does not match TransformerBlock")
         if self.moe is not None:
             self.moe.load_state_dict(state["moe"])
             return
