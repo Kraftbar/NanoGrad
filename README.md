@@ -19,7 +19,7 @@ and each can be read on its own:
 | gpt_train | mnist_compare | bert_compare | nanogpt_compare | bench  |
 +---------------------------------------------------------------------+
 | Model families                                                      |
-| lenet | resnet | vit | GPT | bert | rnn (LSTM, GRU) | vae         |
+| lenet | resnet | vit | GPT | bert | rnn (LSTM, GRU) | vae           |
 +---------------------------------------------------------------------+
 | Layers, losses, optimizers, training                                |
 | tensor_nn | losses | optim | schedules | train | parallel           |
