@@ -29,15 +29,15 @@ PyTorch is only needed for the comparison side:
 from __future__ import annotations
 
 import argparse
+import gzip
 import importlib.util
 import random
+import struct
+from functools import partial
 from pathlib import Path
 from time import perf_counter
 
-import gzip
-import struct
-from functools import partial
-
+import kernels
 from losses import softmax_cross_entropy
 from optim import TensorAdam
 from parallel import DataParallel
@@ -239,6 +239,8 @@ def run(args: argparse.Namespace) -> dict:
     print(f"{args.dataset} ({data_dir}): train {len(train_labels)} images, "
           f"test {len(test_labels)} images, batch {args.batch_size}")
 
+    kernels.set_default_dtype(args.dtype)
+    torch_dtype = args.torch_dtype or args.dtype
     model = build_nanograd(args.seed, args.model, image_shape)
     print(f"model {args.model}, {model.num_parameters()} parameters")
     runners = {}
@@ -249,7 +251,7 @@ def run(args: argparse.Namespace) -> dict:
             if importlib.util.find_spec("torch") is None:
                 raise SystemExit("PyTorch is not installed; use --frameworks nanograd")
             # Built before NanoGrad trains, so it copies the initial weights.
-            runners[name] = TorchRunner(model, args.lr, args.torch_dtype, args.torch_threads, image_shape)
+            runners[name] = TorchRunner(model, args.lr, torch_dtype, args.torch_threads, image_shape)
 
     rng = random.Random(args.seed)
     schedule = [epoch_batches(len(train_labels), args.batch_size, rng) for _ in range(args.epochs)]
@@ -302,7 +304,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--test-limit", type=int)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--workers", type=int, default=1, help="NanoGrad worker processes")
-    parser.add_argument("--torch-dtype", choices=("float64", "float32"), default="float64")
+    parser.add_argument("--dtype", choices=("float64", "float32"), default="float64",
+                        help="number type for both frameworks")
+    parser.add_argument("--torch-dtype", choices=("float64", "float32"), help="override for PyTorch only")
     parser.add_argument("--torch-threads", type=int, default=1)
     return parser.parse_args(argv)
 

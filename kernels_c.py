@@ -4,8 +4,10 @@
 ``cc``) the first time it is needed and caches the library under
 ``~/.cache/nanograd/``. The functions below have the same names and
 arguments as their Python twins in ``kernels_reference.py``. They take any
-flat sequence of floats (a C array passes through without a copy) and
-return C arrays of doubles (``array("d")``).
+flat sequence of floats (a C array of the current precision passes through
+without a copy) and return C arrays: ``array("d")`` (float64), or
+``array("f")`` after ``set_precision("f")``, which loads a second copy of
+the kernels built with ``-DREAL=float``.
 
 This file is plumbing: the math is in ``kernels.c`` and, readably, in
 ``kernels_reference.py``.
@@ -27,18 +29,33 @@ from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parent / "kernels.c"
 
-library: ctypes.CDLL | None = None
+library: ctypes.CDLL | None = None     # the library for the current precision
+typecode = "d"                          # "d": float64, "f": float32
+_libraries: dict[str, ctypes.CDLL] = {}
+_C_TYPES = {"d": ctypes.c_double, "f": ctypes.c_float}
+_ZEROS = {"d": array("d", [0.0]), "f": array("f", [0.0])}
 
 
 def load() -> bool:
     """Build (if needed) and load the C library; False if that fails."""
 
-    global library
-    if library is None:
-        library = _build_library()
-        if library is not None:
-            _keep_freed_memory()
-    return library is not None
+    return set_precision(typecode)
+
+
+def set_precision(code: str) -> bool:
+    """Use the float64 ("d") or float32 ("f") kernels; False if they fail to build."""
+
+    global library, typecode
+    if code not in _C_TYPES:
+        raise ValueError("precision must be 'd' (float64) or 'f' (float32)")
+    if code not in _libraries:
+        built = _build_library(code)
+        if built is None:
+            return False
+        _libraries[code] = built
+        _keep_freed_memory()
+    library, typecode = _libraries[code], code
+    return True
 
 
 def _keep_freed_memory() -> None:
@@ -105,8 +122,8 @@ def _cpu_signature() -> str:
     return "\n".join(dict.fromkeys(wanted))
 
 
-def _build_library() -> ctypes.CDLL | None:
-    """Compile kernels.c (once per source version) and load it, or None."""
+def _build_library(code: str) -> ctypes.CDLL | None:
+    """Compile kernels.c for one precision (once per source version) and load it."""
 
     compiler = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
     if compiler is None or not SOURCE.exists():
@@ -121,8 +138,9 @@ def _build_library() -> ctypes.CDLL | None:
     # NANOGRAD_CFLAGS replaces "-march=native" (set it empty for a portable build).
     extra = os.environ.get("NANOGRAD_CFLAGS")
     attempts = [extra.split()] if extra is not None else [["-march=native"], []]
+    real = "-DREAL=double" if code == "d" else "-DREAL=float"
     for flags in attempts:
-        library_path = _compile(compiler, ["-O3", *flags])
+        library_path = _compile(compiler, ["-O3", real, *flags])
         if library_path is not None:
             break
     else:
@@ -132,7 +150,7 @@ def _build_library() -> ctypes.CDLL | None:
         library = ctypes.CDLL(str(library_path))
     except OSError:
         return None
-    pointer = ctypes.POINTER(ctypes.c_double)
+    pointer = ctypes.POINTER(_C_TYPES[code])
     library.gemm.argtypes = [
         pointer, pointer, pointer,
         ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
@@ -172,13 +190,13 @@ def _build_library() -> ctypes.CDLL | None:
 
 
 def _buffer(values: array):
-    return (ctypes.c_double * len(values)).from_buffer(values)
+    return (_C_TYPES[values.typecode] * len(values)).from_buffer(values)
 
 
-def _doubles(values: Sequence[float]) -> array:
-    """The values as a C double array; an array passes through uncopied."""
+def _reals(values: Sequence[float]) -> array:
+    """The values as a C array of the current precision (passed through if it is one)."""
 
-    return values if type(values) is array and values.typecode == "d" else array("d", values)
+    return values if type(values) is array and values.typecode == typecode else array(typecode, values)
 
 
 def gemm(
@@ -195,8 +213,8 @@ def gemm(
     trans_b: bool,
 ) -> array:
     size = c_step * (batches - 1) + m * n if c_step else m * n
-    a_buffer = _doubles(a)
-    b_buffer = _doubles(b)
+    a_buffer = _reals(a)
+    b_buffer = _reals(b)
     c_buffer = zeros(size)
     library.gemm(
         _buffer(a_buffer), _buffer(b_buffer), _buffer(c_buffer),
@@ -207,34 +225,31 @@ def gemm(
     return c_buffer
 
 
-_ZERO = array("d", [0.0])
-
-
 def zeros(count: int) -> array:
-    return _ZERO * count   # repeating a one-element array is a fast fill
+    return _ZEROS[typecode] * count   # repeating a one-element array is a fast fill
 
 
 def gelu(x: list[float]) -> tuple[array, array]:
-    x_buffer, y, cdf = _doubles(x), zeros(len(x)), zeros(len(x))
+    x_buffer, y, cdf = _reals(x), zeros(len(x)), zeros(len(x))
     library.gelu_forward(_buffer(x_buffer), _buffer(y), _buffer(cdf), len(x))
     return y, cdf
 
 
 def gelu_backward(x: list[float], cdf: list[float], grad: list[float]) -> array:
     dx = zeros(len(x))
-    buffers = [_doubles(values) for values in (x, cdf, grad)]
+    buffers = [_reals(values) for values in (x, cdf, grad)]
     library.gelu_backward(*map(_buffer, buffers), _buffer(dx), len(x))
     return dx
 
 
 def softmax_rows(x: list[float], width: int) -> array:
-    x_buffer, y = _doubles(x), zeros(len(x))
+    x_buffer, y = _reals(x), zeros(len(x))
     library.softmax_rows(_buffer(x_buffer), _buffer(y), len(x) // width, width)
     return y
 
 
 def softmax_rows_backward(y: list[float], grad: list[float], width: int) -> array:
-    y_buffer, grad_buffer, dx = _doubles(y), _doubles(grad), zeros(len(y))
+    y_buffer, grad_buffer, dx = _reals(y), _reals(grad), zeros(len(y))
     library.softmax_rows_backward(
         _buffer(y_buffer), _buffer(grad_buffer), _buffer(dx), len(y) // width, width,
     )
@@ -245,7 +260,7 @@ def layer_norm_rows(
     x: list[float], weight: list[float], bias: list[float], width: int, eps: float,
 ) -> tuple[array, array, array]:
     rows = len(x) // width
-    inputs = [_doubles(values) for values in (x, weight, bias)]
+    inputs = [_reals(values) for values in (x, weight, bias)]
     y, x_hat, inv_std = zeros(len(x)), zeros(len(x)), zeros(rows)
     library.layer_norm_rows(
         *map(_buffer, inputs), _buffer(y), _buffer(x_hat), _buffer(inv_std), rows, width, eps,
@@ -257,7 +272,7 @@ def layer_norm_rows_backward(
     grad: list[float], x_hat: list[float], inv_std: list[float], weight: list[float],
     width: int, need_dx: bool,
 ) -> tuple[array | None, array, array]:
-    inputs = [_doubles(values) for values in (grad, x_hat, inv_std, weight)]
+    inputs = [_reals(values) for values in (grad, x_hat, inv_std, weight)]
     dx = zeros(len(grad) if need_dx else 1)
     dweight, dbias = zeros(width), zeros(width)
     library.layer_norm_rows_backward(
@@ -269,21 +284,21 @@ def layer_norm_rows_backward(
 
 def rms_norm_rows(x, weight, width: int, eps: float) -> tuple[array, array]:
     rows = len(x) // width
-    x_buffer, weight_buffer = _doubles(x), _doubles(weight)
+    x_buffer, weight_buffer = _reals(x), _reals(weight)
     y, inv_rms = zeros(len(x)), zeros(rows)
     library.rms_norm_rows(_buffer(x_buffer), _buffer(weight_buffer), _buffer(y), _buffer(inv_rms), rows, width, eps)
     return y, inv_rms
 
 
 def rms_norm_rows_backward(grad, x, inv_rms, weight, width: int) -> tuple[array, array]:
-    buffers = [_doubles(values) for values in (grad, x, inv_rms, weight)]
+    buffers = [_reals(values) for values in (grad, x, inv_rms, weight)]
     dx, dweight = zeros(len(x)), zeros(width)
     library.rms_norm_rows_backward(*map(_buffer, buffers), _buffer(dx), _buffer(dweight), len(inv_rms), width)
     return dx, dweight
 
 
 def batch_norm_channels(x, weight, bias, batch: int, channels: int, plane: int, eps: float):
-    inputs = [_doubles(values) for values in (x, weight, bias)]
+    inputs = [_reals(values) for values in (x, weight, bias)]
     y, x_hat = zeros(len(x)), zeros(len(x))
     inv_std, mean, variance = zeros(channels), zeros(channels), zeros(channels)
     library.batch_norm_channels(
@@ -294,7 +309,7 @@ def batch_norm_channels(x, weight, bias, batch: int, channels: int, plane: int, 
 
 
 def batch_norm_channels_backward(grad, x_hat, inv_std, weight, batch: int, channels: int, plane: int):
-    inputs = [_doubles(values) for values in (grad, x_hat, inv_std, weight)]
+    inputs = [_reals(values) for values in (grad, x_hat, inv_std, weight)]
     dx, dweight, dbias = zeros(len(grad)), zeros(channels), zeros(channels)
     library.batch_norm_channels_backward(
         *map(_buffer, inputs), _buffer(dx), _buffer(dweight), _buffer(dbias), batch, channels, plane,
@@ -311,7 +326,7 @@ def _index_buffer(index: Sequence[int]):
 def gather_indexed(
     image: list[float], index: Sequence[int], batches: int, image_size: int,
 ) -> array:
-    image_buffer = _doubles(image)
+    image_buffer = _reals(image)
     keep, index_buffer = _index_buffer(index)
     out = zeros(batches * len(index))
     library.gather_indexed(
@@ -323,7 +338,7 @@ def gather_indexed(
 def scatter_add_indexed(
     grad: list[float], index: Sequence[int], batches: int, image_size: int, into: array | None = None,
 ) -> array:
-    grad_buffer = _doubles(grad)
+    grad_buffer = _reals(grad)
     keep, index_buffer = _index_buffer(index)
     image_grad = zeros(batches * image_size) if into is None else into
     library.scatter_add_indexed(
@@ -335,7 +350,7 @@ def scatter_add_indexed(
 def _elementwise(function, x: list[float], y: list[float]) -> array:
     if len(x) != len(y):
         raise ValueError("elementwise kernels need equal lengths")
-    x_buffer, y_buffer, out = _doubles(x), _doubles(y), zeros(len(x))
+    x_buffer, y_buffer, out = _reals(x), _reals(y), zeros(len(x))
     function(_buffer(x_buffer), _buffer(y_buffer), _buffer(out), len(x))
     return out
 
@@ -349,7 +364,7 @@ def multiply(x: list[float], y: list[float]) -> array:
 
 
 def scale(x: list[float], factor: float) -> array:
-    x_buffer, out = _doubles(x), zeros(len(x))
+    x_buffer, out = _reals(x), zeros(len(x))
     library.scale_vector(_buffer(x_buffer), factor, _buffer(out), len(x))
     return out
 
@@ -359,7 +374,7 @@ def adam_update(w, grad, m, v, *hyperparameters) -> tuple[array, array, array]:
     # C arrays (the first call converts them). The weights get a new array.
     if not len(w) == len(grad) == len(m) == len(v):
         raise ValueError("adam_update needs weights, gradient and moments of equal length")
-    buffers = [_doubles(values) for values in (w, grad, m, v)]
+    buffers = [_reals(values) for values in (w, grad, m, v)]
     new_w = zeros(len(w))
     library.adam_update(*map(_buffer, buffers), _buffer(new_w), len(w), *hyperparameters)
     return new_w, buffers[2], buffers[3]
@@ -368,43 +383,43 @@ def adam_update(w, grad, m, v, *hyperparameters) -> tuple[array, array, array]:
 def sum_repeated(x: list[float], outer: int, size: int, inner: int) -> array:
     if len(x) != outer * size * inner:
         raise ValueError("sum_repeated needs outer * size * inner values")
-    x_buffer, out = _doubles(x), zeros(size)
+    x_buffer, out = _reals(x), zeros(size)
     library.sum_repeated(_buffer(x_buffer), _buffer(out), outer, size, inner)
     return out
 
 
 def sigmoid(x: list[float]) -> array:
-    x_buffer, y = _doubles(x), zeros(len(x))
+    x_buffer, y = _reals(x), zeros(len(x))
     library.sigmoid_forward(_buffer(x_buffer), _buffer(y), len(x))
     return y
 
 
 def sigmoid_backward(y: list[float], grad: list[float]) -> array:
-    y_buffer, grad_buffer, dx = _doubles(y), _doubles(grad), zeros(len(y))
+    y_buffer, grad_buffer, dx = _reals(y), _reals(grad), zeros(len(y))
     library.sigmoid_backward(_buffer(y_buffer), _buffer(grad_buffer), _buffer(dx), len(y))
     return dx
 
 
 def relu(x: list[float]) -> array:
-    x_buffer, y = _doubles(x), zeros(len(x))
+    x_buffer, y = _reals(x), zeros(len(x))
     library.relu_forward(_buffer(x_buffer), _buffer(y), len(x))
     return y
 
 
 def relu_backward(x: list[float], grad: list[float]) -> array:
-    x_buffer, grad_buffer, dx = _doubles(x), _doubles(grad), zeros(len(x))
+    x_buffer, grad_buffer, dx = _reals(x), _reals(grad), zeros(len(x))
     library.relu_backward(_buffer(x_buffer), _buffer(grad_buffer), _buffer(dx), len(x))
     return dx
 
 
 def tanh(x: list[float]) -> array:
-    x_buffer, y = _doubles(x), zeros(len(x))
+    x_buffer, y = _reals(x), zeros(len(x))
     library.tanh_forward(_buffer(x_buffer), _buffer(y), len(x))
     return y
 
 
 def tanh_backward(y: list[float], grad: list[float]) -> array:
-    y_buffer, grad_buffer, dx = _doubles(y), _doubles(grad), zeros(len(y))
+    y_buffer, grad_buffer, dx = _reals(y), _reals(grad), zeros(len(y))
     library.tanh_backward(_buffer(y_buffer), _buffer(grad_buffer), _buffer(dx), len(y))
     return dx
 
@@ -412,7 +427,7 @@ def tanh_backward(y: list[float], grad: list[float]) -> array:
 def window_mean(
     image: list[float], index: Sequence[int], planes: int, plane_size: int, window_size: int,
 ) -> array:
-    image_buffer = _doubles(image)
+    image_buffer = _reals(image)
     keep, index_buffer = _index_buffer(index)
     windows = len(index) // window_size
     out = zeros(planes * windows)
@@ -425,7 +440,7 @@ def window_mean(
 def window_mean_backward(
     grad: list[float], index: Sequence[int], planes: int, plane_size: int, window_size: int,
 ) -> array:
-    grad_buffer = _doubles(grad)
+    grad_buffer = _reals(grad)
     keep, index_buffer = _index_buffer(index)
     image_grad = zeros(planes * plane_size)
     library.window_mean_backward(
@@ -438,7 +453,7 @@ def window_mean_backward(
 def window_max(
     image: list[float], index: Sequence[int], planes: int, plane_size: int, window_size: int,
 ) -> tuple[list[float], list[int]]:
-    image_buffer = _doubles(image)
+    image_buffer = _reals(image)
     keep, index_buffer = _index_buffer(index)
     windows = len(index) // window_size
     out = zeros(planes * windows)

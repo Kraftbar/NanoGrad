@@ -58,16 +58,39 @@ def use_backend(name: str) -> None:
 def storage(values: Sequence[float]) -> array | list[float]:
     """Tensor values in the active backend's own form.
 
-    The C kernels read and write C arrays of doubles (``array("d")``), so
-    with the C backend tensors keep their values in one: data then flows
-    from kernel to kernel without being copied into Python lists and back.
+    The C kernels read and write C arrays (``array("d")`` for float64, or
+    ``array("f")`` after ``set_default_dtype("float32")``), so with the C
+    backend tensors keep their values in one: data then flows from kernel
+    to kernel without being copied into Python lists and back.
     The Python backend keeps plain lists. Both are flat sequences of floats
     that index, slice and iterate the same way.
     """
 
     if BACKEND == "c":
-        return values if type(values) is array and values.typecode == "d" else array("d", values)
+        code = kernels_c.typecode
+        return values if type(values) is array and values.typecode == code else array(code, values)
     return values if type(values) is list else list(values)
+
+
+def set_default_dtype(name: str) -> None:
+    """Store new tensors as "float64" (the default) or "float32" C arrays.
+
+    float32 halves memory traffic and doubles how many numbers each vector
+    instruction handles, so the C kernels run about twice as fast; results
+    are then accurate to about 7 digits instead of 16. Like
+    ``torch.set_default_dtype``, it affects tensors created afterwards. The
+    Python backend always computes in float64.
+    """
+
+    codes = {"float64": "d", "float32": "f"}
+    if name not in codes:
+        raise ValueError("dtype must be 'float64' or 'float32'")
+    if not kernels_c.set_precision(codes[name]) and name == "float32":
+        raise RuntimeError("the float32 C kernels could not be built")
+
+
+def default_dtype() -> str:
+    return "float32" if kernels_c.typecode == "f" else "float64"
 
 
 def index_table(indices: Sequence[int]) -> array | tuple[int, ...]:
@@ -299,3 +322,8 @@ def window_max(
 
     kernel = kernels_c.window_max if BACKEND == "c" else reference.window_max
     return kernel(image, index, planes, plane_size, window_size)
+
+
+# NANOGRAD_DTYPE=float32 starts in float32 (see set_default_dtype).
+if BACKEND == "c" and os.environ.get("NANOGRAD_DTYPE"):
+    set_default_dtype(os.environ["NANOGRAD_DTYPE"])

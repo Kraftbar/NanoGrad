@@ -6,12 +6,20 @@
  * runs the pure-Python versions instead, which compute the same thing and
  * are the readable reference. Tests check that the two agree.
  *
- * Matrices are flat row-major arrays of doubles, exactly like Tensor.data.
+ * Matrices are flat row-major arrays of `real` numbers, exactly like
+ * Tensor.data: double by default. kernels_c.py also builds a float32 copy of
+ * this file with -DREAL=float. Scalar settings (eps, learning rates) stay
+ * double, and so do the running sums inside reductions.
  */
 
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef REAL
+#define REAL double
+#endif
+typedef REAL real;
 
 /*
  * Batched matrix product, accumulated into c:
@@ -31,7 +39,8 @@
 
 /*
  * The fast path, used when the compiler may emit wide vector instructions
- * (AVX: 4 doubles at once, AVX-512: 8; kernels.py builds with -march=native).
+ * (AVX: 32 bytes at once, AVX-512: 64 bytes, i.e. 8 doubles or 16 floats;
+ * kernels.py builds with -march=native).
  * It is the core idea of every fast BLAS, in three steps:
  *
  * 1. Register tile: compute an 8 x (2 vectors) block of C at a time, kept
@@ -48,13 +57,14 @@
  * used, since emulating wide vectors would only slow things down.
  */
 #if defined(__AVX512F__)
-#define VECTOR_WIDTH 8
+#define VECTOR_BYTES 64
 #elif defined(__AVX__)
-#define VECTOR_WIDTH 4
+#define VECTOR_BYTES 32
 #endif
 
-#ifdef VECTOR_WIDTH
-typedef double vec __attribute__((vector_size(VECTOR_WIDTH * sizeof(double))));
+#ifdef VECTOR_BYTES
+#define VECTOR_WIDTH (VECTOR_BYTES / (int)sizeof(real))   /* 8 doubles or 16 floats */
+typedef real vec __attribute__((vector_size(VECTOR_BYTES)));
 #define TILE_ROWS 8
 #define TILE_COLS (2 * VECTOR_WIDTH)
 #define K_BLOCK 256
@@ -66,8 +76,8 @@ typedef double vec __attribute__((vector_size(VECTOR_WIDTH * sizeof(double))));
  * Always inlined, so the full-tile call (rows = TILE_ROWS) gets a constant
  * row count the compiler can unroll. */
 static inline __attribute__((always_inline)) void tile(
-    const double *A, double *C, int m, int k, int n, int trans_a,
-    const double *panel, int i, int j, int p0, int kb, int rows)
+    const real *A, real *C, int m, int k, int n, int trans_a,
+    const real *panel, int i, int j, int p0, int kb, int rows)
 {
     vec acc[TILE_ROWS][2];
     memset(acc, 0, sizeof acc);
@@ -76,13 +86,13 @@ static inline __attribute__((always_inline)) void tile(
         VEC_LOAD(b0, panel + (long)p * TILE_COLS);
         VEC_LOAD(b1, panel + (long)p * TILE_COLS + VECTOR_WIDTH);
         for (int r = 0; r < rows; r++) {
-            double a_rp = A_AT(i + r, p0 + p);
+            real a_rp = A_AT(i + r, p0 + p);
             acc[r][0] += a_rp * b0;
             acc[r][1] += a_rp * b1;
         }
     }
     for (int r = 0; r < rows; r++) {
-        double *c_row = C + (long)(i + r) * n + j;
+        real *c_row = C + (long)(i + r) * n + j;
         vec c0, c1;
         VEC_LOAD(c0, c_row);
         VEC_LOAD(c1, c_row + VECTOR_WIDTH);
@@ -94,15 +104,15 @@ static inline __attribute__((always_inline)) void tile(
 }
 
 /* C (m x n) += op(A) (m x k) @ B (k x n, row-major). panel: K_BLOCK * TILE_COLS doubles. */
-static void gemm_tiled(const double *A, const double *B, double *C,
-                       int m, int k, int n, int trans_a, double *panel)
+static void gemm_tiled(const real *A, const real *B, real *C,
+                       int m, int k, int n, int trans_a, real *panel)
 {
     int full_cols = n - n % TILE_COLS;
     for (int j = 0; j < full_cols; j += TILE_COLS) {
         for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
             int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
             for (int p = 0; p < kb; p++)                       /* 2. pack */
-                memcpy(panel + (long)p * TILE_COLS, B + (long)(p0 + p) * n + j, sizeof(double) * TILE_COLS);
+                memcpy(panel + (long)p * TILE_COLS, B + (long)(p0 + p) * n + j, sizeof(real) * TILE_COLS);
 
             int i = 0;
             for (; i + TILE_ROWS <= m; i += TILE_ROWS)          /* 1. register tiles */
@@ -113,10 +123,10 @@ static void gemm_tiled(const double *A, const double *B, double *C,
     }
     if (full_cols < n) {                                       /* leftover columns */
         for (int i = 0; i < m; i++) {
-            double *c_row = C + (long)i * n;
+            real *c_row = C + (long)i * n;
             for (int p = 0; p < k; p++) {
-                double a_ip = A_AT(i, p);
-                const double *b_row = B + (long)p * n;
+                real a_ip = A_AT(i, p);
+                const real *b_row = B + (long)p * n;
                 for (int jj = full_cols; jj < n; jj++) c_row[jj] += a_ip * b_row[jj];
             }
         }
@@ -125,7 +135,7 @@ static void gemm_tiled(const double *A, const double *B, double *C,
 #endif
 
 void gemm(
-    const double *a, const double *b, double *c,
+    const real *a, const real *b, real *c,
     int batches, int m, int k, int n,
     long a_step, long b_step, long c_step,
     int trans_a, int trans_b)
@@ -134,21 +144,21 @@ void gemm(
      * entry, so the inner loop below always walks contiguous rows of op(B).
      * (Summing dot products instead would be a reduction, which compilers
      * will not vectorize without permission to reorder additions.) */
-    double *scratch = trans_b ? malloc(sizeof(double) * (size_t)k * n) : NULL;
+    real *scratch = trans_b ? malloc(sizeof(real) * (size_t)k * n) : NULL;
     if (trans_b && scratch == NULL) {
         abort();  /* out of memory: fail loudly rather than return zeros */
     }
 #ifdef VECTOR_WIDTH
-    double *panel = malloc(sizeof(double) * K_BLOCK * TILE_COLS);
+    real *panel = malloc(sizeof(real) * K_BLOCK * TILE_COLS);
     if (panel == NULL) {
         abort();
     }
 #endif
 
     for (int batch = 0; batch < batches; batch++) {
-        const double *A = a + batch * a_step;
-        const double *B = b + batch * b_step;
-        double *C = c + batch * c_step;
+        const real *A = a + batch * a_step;
+        const real *B = b + batch * b_step;
+        real *C = c + batch * c_step;
 
         if (trans_b) {
             for (int j = 0; j < n; j++)
@@ -172,12 +182,12 @@ void gemm(
          * from memory is used four times. (Any leftover rows, one by one.) */
         int i = 0;
         for (; i + 4 <= m; i += 4) {
-            double *c0 = C + (long)i * n, *c1 = c0 + n, *c2 = c1 + n, *c3 = c2 + n;
+            real *c0 = C + (long)i * n, *c1 = c0 + n, *c2 = c1 + n, *c3 = c2 + n;
             for (int p = 0; p < k; p++) {
-                double a0 = A_AT(i, p), a1 = A_AT(i + 1, p), a2 = A_AT(i + 2, p), a3 = A_AT(i + 3, p);
-                const double *b_row = B + (long)p * n;
+                real a0 = A_AT(i, p), a1 = A_AT(i + 1, p), a2 = A_AT(i + 2, p), a3 = A_AT(i + 3, p);
+                const real *b_row = B + (long)p * n;
                 for (int j = 0; j < n; j++) {
-                    double b = b_row[j];
+                    real b = b_row[j];
                     c0[j] += a0 * b;
                     c1[j] += a1 * b;
                     c2[j] += a2 * b;
@@ -186,10 +196,10 @@ void gemm(
             }
         }
         for (; i < m; i++) {
-            double *c_row = C + (long)i * n;
+            real *c_row = C + (long)i * n;
             for (int p = 0; p < k; p++) {
-                double a_ip = A_AT(i, p);
-                const double *b_row = B + (long)p * n;
+                real a_ip = A_AT(i, p);
+                const real *b_row = B + (long)p * n;
                 for (int j = 0; j < n; j++) {
                     c_row[j] += a_ip * b_row[j];
                 }
@@ -209,7 +219,7 @@ void gemm(
  * GELU, exact erf form:  y = x * Phi(x),  dy/dx = Phi(x) + x * phi(x)
  * The forward pass also stores Phi(x) ("cdf") for the backward pass.
  */
-void gelu_forward(const double *x, double *y, double *cdf, long count)
+void gelu_forward(const real *x, real *y, real *cdf, long count)
 {
     for (long i = 0; i < count; i++) {
         cdf[i] = 0.5 * (1.0 + erf(x[i] / sqrt(2.0)));
@@ -217,7 +227,7 @@ void gelu_forward(const double *x, double *y, double *cdf, long count)
     }
 }
 
-void gelu_backward(const double *x, const double *cdf, const double *grad, double *dx, long count)
+void gelu_backward(const real *x, const real *cdf, const real *grad, real *dx, long count)
 {
     const double inv_sqrt_two_pi = 0.3989422804014327;  /* 1 / sqrt(2 pi) */
     for (long i = 0; i < count; i++) {
@@ -231,11 +241,11 @@ void gelu_backward(const double *x, const double *cdf, const double *grad, doubl
  *     y_i = e^(x_i - max) / sum_j e^(x_j - max)
  *     dx_i = y_i * (dy_i - sum_j dy_j y_j)
  */
-void softmax_rows(const double *x, double *y, long rows, long width)
+void softmax_rows(const real *x, real *y, long rows, long width)
 {
     for (long r = 0; r < rows; r++) {
-        const double *in = x + r * width;
-        double *out = y + r * width;
+        const real *in = x + r * width;
+        real *out = y + r * width;
         double row_max = in[0];
         for (long i = 1; i < width; i++) if (in[i] > row_max) row_max = in[i];
         double total = 0.0;
@@ -244,11 +254,11 @@ void softmax_rows(const double *x, double *y, long rows, long width)
     }
 }
 
-void softmax_rows_backward(const double *y, const double *grad, double *dx, long rows, long width)
+void softmax_rows_backward(const real *y, const real *grad, real *dx, long rows, long width)
 {
     for (long r = 0; r < rows; r++) {
-        const double *yr = y + r * width, *gr = grad + r * width;
-        double *out = dx + r * width;
+        const real *yr = y + r * width, *gr = grad + r * width;
+        real *out = dx + r * width;
         double weighted = 0.0;
         for (long i = 0; i < width; i++) weighted += gr[i] * yr[i];
         for (long i = 0; i < width; i++) out[i] = yr[i] * (gr[i] - weighted);
@@ -263,12 +273,12 @@ void softmax_rows_backward(const double *y, const double *grad, double *dx, long
  *     dx = inv_std * (g - mean(g) - x_hat * mean(g * x_hat))
  *     dweight += dy * x_hat,  dbias += dy        (summed over rows)
  */
-void layer_norm_rows(const double *x, const double *weight, const double *bias,
-                     double *y, double *x_hat, double *inv_std,
+void layer_norm_rows(const real *x, const real *weight, const real *bias,
+                     real *y, real *x_hat, real *inv_std,
                      long rows, long width, double eps)
 {
     for (long r = 0; r < rows; r++) {
-        const double *in = x + r * width;
+        const real *in = x + r * width;
         double mean = 0.0, variance = 0.0;
         for (long i = 0; i < width; i++) mean += in[i];
         mean /= width;
@@ -284,12 +294,12 @@ void layer_norm_rows(const double *x, const double *weight, const double *bias,
     }
 }
 
-void layer_norm_rows_backward(const double *grad, const double *x_hat, const double *inv_std,
-                              const double *weight, double *dx, double *dweight, double *dbias,
+void layer_norm_rows_backward(const real *grad, const real *x_hat, const real *inv_std,
+                              const real *weight, real *dx, real *dweight, real *dbias,
                               long rows, long width, int need_dx)
 {
     for (long r = 0; r < rows; r++) {
-        const double *dy = grad + r * width, *h = x_hat + r * width;
+        const real *dy = grad + r * width, *h = x_hat + r * width;
         double mean_g = 0.0, mean_g_h = 0.0;
         for (long i = 0; i < width; i++) {
             dweight[i] += dy[i] * h[i];
@@ -314,22 +324,22 @@ void layer_norm_rows_backward(const double *grad, const double *x_hat, const dou
  *     gather:  out[b, i] = image[b, index[i]]
  *     scatter: image_grad[b, index[i]] += grad[b, i]   (overlapping patches add up)
  */
-void gather_indexed(const double *image, const long *index, double *out,
+void gather_indexed(const real *image, const long *index, real *out,
                     long batches, long image_size, long count)
 {
     for (long b = 0; b < batches; b++) {
-        const double *in = image + b * image_size;
-        double *o = out + b * count;
+        const real *in = image + b * image_size;
+        real *o = out + b * count;
         for (long i = 0; i < count; i++) o[i] = in[index[i]];
     }
 }
 
-void scatter_add_indexed(const double *grad, const long *index, double *image_grad,
+void scatter_add_indexed(const real *grad, const long *index, real *image_grad,
                          long batches, long image_size, long count)
 {
     for (long b = 0; b < batches; b++) {
-        const double *g = grad + b * count;
-        double *o = image_grad + b * image_size;
+        const real *g = grad + b * count;
+        real *o = image_grad + b * image_size;
         for (long i = 0; i < count; i++) o[index[i]] += g[i];
     }
 }
@@ -337,12 +347,12 @@ void scatter_add_indexed(const double *grad, const long *index, double *image_gr
 /*
  * tanh, elementwise:  y = tanh(x),  dx = dy * (1 - y^2)
  */
-void tanh_forward(const double *x, double *y, long count)
+void tanh_forward(const real *x, real *y, long count)
 {
     for (long i = 0; i < count; i++) y[i] = tanh(x[i]);
 }
 
-void tanh_backward(const double *y, const double *grad, double *dx, long count)
+void tanh_backward(const real *y, const real *grad, real *dx, long count)
 {
     for (long i = 0; i < count; i++) dx[i] = grad[i] * (1.0 - y[i] * y[i]);
 }
@@ -354,11 +364,11 @@ void tanh_backward(const double *y, const double *grad, double *dx, long count)
  *     max:   out[p, w] = max_j plane_p[index[w, j]], and argmax[p, w] is the
  *            winning pixel's offset in the whole input (first one on ties)
  */
-void window_mean(const double *image, const long *index, double *out,
+void window_mean(const real *image, const long *index, real *out,
                  long planes, long plane_size, long windows, long window_size)
 {
     for (long p = 0; p < planes; p++) {
-        const double *in = image + p * plane_size;
+        const real *in = image + p * plane_size;
         for (long w = 0; w < windows; w++) {
             const long *cells = index + w * window_size;
             double total = 0.0;
@@ -368,11 +378,11 @@ void window_mean(const double *image, const long *index, double *out,
     }
 }
 
-void window_mean_backward(const double *grad, const long *index, double *image_grad,
+void window_mean_backward(const real *grad, const long *index, real *image_grad,
                           long planes, long plane_size, long windows, long window_size)
 {
     for (long p = 0; p < planes; p++) {
-        double *g = image_grad + p * plane_size;
+        real *g = image_grad + p * plane_size;
         for (long w = 0; w < windows; w++) {
             const long *cells = index + w * window_size;
             double share = grad[p * windows + w] / window_size;
@@ -381,11 +391,11 @@ void window_mean_backward(const double *grad, const long *index, double *image_g
     }
 }
 
-void window_max(const double *image, const long *index, double *out, long *argmax,
+void window_max(const real *image, const long *index, real *out, long *argmax,
                 long planes, long plane_size, long windows, long window_size)
 {
     for (long p = 0; p < planes; p++) {
-        const double *in = image + p * plane_size;
+        const real *in = image + p * plane_size;
         for (long w = 0; w < windows; w++) {
             const long *cells = index + w * window_size;
             long best = cells[0];
@@ -399,17 +409,17 @@ void window_max(const double *image, const long *index, double *out, long *argma
 /*
  * Elementwise arithmetic on equal-length arrays.
  */
-void add_vectors(const double *x, const double *y, double *out, long count)
+void add_vectors(const real *x, const real *y, real *out, long count)
 {
     for (long i = 0; i < count; i++) out[i] = x[i] + y[i];
 }
 
-void multiply_vectors(const double *x, const double *y, double *out, long count)
+void multiply_vectors(const real *x, const real *y, real *out, long count)
 {
     for (long i = 0; i < count; i++) out[i] = x[i] * y[i];
 }
 
-void scale_vector(const double *x, double factor, double *out, long count)
+void scale_vector(const real *x, double factor, real *out, long count)
 {
     for (long i = 0; i < count; i++) out[i] = x[i] * factor;
 }
@@ -422,7 +432,7 @@ void scale_vector(const double *x, double factor, double *out, long count)
  *     v     = beta2 * v + (1 - beta2) * g * g      (updated in place)
  *     new_w = w * decay - step_size * m / (sqrt(v) / sqrt_correction + eps)
  */
-void adam_update(const double *w, const double *grad, double *m, double *v, double *new_w,
+void adam_update(const real *w, const real *grad, real *m, real *v, real *new_w,
                  long count, double grad_scale, double beta1, double beta2, double decay,
                  double step_size, double sqrt_correction, double eps)
 {
@@ -437,12 +447,12 @@ void adam_update(const double *w, const double *grad, double *m, double *v, doub
 /*
  * ReLU, elementwise:  y = max(0, x),  dx = dy where x > 0, else 0
  */
-void relu_forward(const double *x, double *y, long count)
+void relu_forward(const real *x, real *y, long count)
 {
     for (long i = 0; i < count; i++) y[i] = x[i] > 0.0 ? x[i] : 0.0;
 }
 
-void relu_backward(const double *x, const double *grad, double *dx, long count)
+void relu_backward(const real *x, const real *grad, real *dx, long count)
 {
     for (long i = 0; i < count; i++) dx[i] = x[i] > 0.0 ? grad[i] : 0.0;
 }
@@ -452,12 +462,12 @@ void relu_backward(const double *x, const double *grad, double *dx, long count)
  * [each of `size` source values repeated `inner` times]; sum every copy of
  * each source value back into out[s].
  */
-void sum_repeated(const double *x, double *out, long outer, long size, long inner)
+void sum_repeated(const real *x, real *out, long outer, long size, long inner)
 {
     for (long s = 0; s < size; s++) out[s] = 0.0;
     for (long o = 0; o < outer; o++) {
         for (long s = 0; s < size; s++) {
-            const double *run = x + (o * size + s) * inner;
+            const real *run = x + (o * size + s) * inner;
             double total = 0.0;
             for (long i = 0; i < inner; i++) total += run[i];
             out[s] += total;
@@ -471,11 +481,11 @@ void sum_repeated(const double *x, double *out, long outer, long size, long inne
  * Saves r per row. Backward, with g = dy * weight:
  *     dx = r * (g - x * r^2 * mean(g * x)),   dweight += dy * x * r
  */
-void rms_norm_rows(const double *x, const double *weight, double *y, double *inv_rms,
+void rms_norm_rows(const real *x, const real *weight, real *y, real *inv_rms,
                    long rows, long width, double eps)
 {
     for (long r = 0; r < rows; r++) {
-        const double *in = x + r * width;
+        const real *in = x + r * width;
         double squares = 0.0;
         for (long i = 0; i < width; i++) squares += in[i] * in[i];
         double scale = 1.0 / sqrt(squares / width + eps);
@@ -484,12 +494,12 @@ void rms_norm_rows(const double *x, const double *weight, double *y, double *inv
     }
 }
 
-void rms_norm_rows_backward(const double *grad, const double *x, const double *inv_rms,
-                            const double *weight, double *dx, double *dweight,
+void rms_norm_rows_backward(const real *grad, const real *x, const real *inv_rms,
+                            const real *weight, real *dx, real *dweight,
                             long rows, long width)
 {
     for (long r = 0; r < rows; r++) {
-        const double *dy = grad + r * width, *in = x + r * width;
+        const real *dy = grad + r * width, *in = x + r * width;
         double scale = inv_rms[r], mean_g_x = 0.0;
         for (long i = 0; i < width; i++) {
             dweight[i] += dy[i] * in[i] * scale;
@@ -511,20 +521,20 @@ void rms_norm_rows_backward(const double *grad, const double *x, const double *i
  *     dx = inv_std_c * (g - mean(g) - x_hat * mean(g * x_hat))
  *     dweight_c = sum dy * x_hat,   dbias_c = sum dy
  */
-void batch_norm_channels(const double *x, const double *weight, const double *bias,
-                         double *y, double *x_hat, double *inv_std, double *mean, double *variance,
+void batch_norm_channels(const real *x, const real *weight, const real *bias,
+                         real *y, real *x_hat, real *inv_std, real *mean, real *variance,
                          long batch, long channels, long plane, double eps)
 {
     double count = (double)(batch * plane);
     for (long c = 0; c < channels; c++) {
         double total = 0.0;
         for (long b = 0; b < batch; b++) {
-            const double *in = x + (b * channels + c) * plane;
+            const real *in = x + (b * channels + c) * plane;
             for (long i = 0; i < plane; i++) total += in[i];
         }
         double m = total / count, squares = 0.0;
         for (long b = 0; b < batch; b++) {
-            const double *in = x + (b * channels + c) * plane;
+            const real *in = x + (b * channels + c) * plane;
             for (long i = 0; i < plane; i++) squares += (in[i] - m) * (in[i] - m);
         }
         double v = squares / count, scale = 1.0 / sqrt(v + eps);
@@ -542,8 +552,8 @@ void batch_norm_channels(const double *x, const double *weight, const double *bi
     }
 }
 
-void batch_norm_channels_backward(const double *grad, const double *x_hat, const double *inv_std,
-                                  const double *weight, double *dx, double *dweight, double *dbias,
+void batch_norm_channels_backward(const real *grad, const real *x_hat, const real *inv_std,
+                                  const real *weight, real *dx, real *dweight, real *dbias,
                                   long batch, long channels, long plane)
 {
     double count = (double)(batch * plane);
@@ -571,7 +581,7 @@ void batch_norm_channels_backward(const double *grad, const double *x_hat, const
  * Sigmoid, elementwise:  y = 1 / (1 + e^-x),  dx = dy * y * (1 - y)
  * Two algebraically equal forms, each safe from overflow on its own side.
  */
-void sigmoid_forward(const double *x, double *y, long count)
+void sigmoid_forward(const real *x, real *y, long count)
 {
     for (long i = 0; i < count; i++) {
         if (x[i] >= 0.0) {
@@ -583,7 +593,7 @@ void sigmoid_forward(const double *x, double *y, long count)
     }
 }
 
-void sigmoid_backward(const double *y, const double *grad, double *dx, long count)
+void sigmoid_backward(const real *y, const real *grad, real *dx, long count)
 {
     for (long i = 0; i < count; i++) dx[i] = grad[i] * y[i] * (1.0 - y[i]);
 }
