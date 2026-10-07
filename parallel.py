@@ -21,11 +21,12 @@ it pays off when a step is much more expensive than copying the model.
 from __future__ import annotations
 
 import multiprocessing
+import random
 from collections.abc import Callable, Sequence
 
 from losses import softmax_cross_entropy
 from tensor import Tensor
-from tensor_nn import TensorModule
+from tensor_nn import TensorDropout, TensorModule
 
 
 LossFunction = Callable[[TensorModule, list, list], Tensor]
@@ -65,9 +66,13 @@ class DataParallel:
         context = multiprocessing.get_context()
         self._connections = []
         self._processes = []
-        for _ in range(workers):
+        for index in range(workers):
             parent_end, child_end = context.Pipe()
-            process = context.Process(target=_worker, args=(child_end, model, loss_fn), daemon=True)
+            process = context.Process(
+                target=_worker,
+                args=(child_end, model, loss_fn, index),
+                daemon=True,
+            )
             process.start()
             child_end.close()
             self._connections.append(parent_end)
@@ -133,8 +138,14 @@ def _split(xs: list, ys: list, parts: int) -> list[tuple[list, list]]:
     return shards
 
 
-def _worker(connection, model: TensorModule, loss_fn: LossFunction) -> None:
+def _worker(connection, model: TensorModule, loss_fn: LossFunction, index: int) -> None:
     """Worker loop: load weights, forward + backward on a slice, reply."""
+
+    # Every worker starts as a copy of the same model, including its dropout
+    # random generators; without this they would all draw the same masks.
+    for module in model.modules():
+        if isinstance(module, TensorDropout):
+            module.rng = random.Random(f"worker {index}: {module.rng.random()}")
 
     parameters = model.parameters()
     while True:

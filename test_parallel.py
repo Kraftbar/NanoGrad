@@ -76,6 +76,19 @@ class DataParallelTests(unittest.TestCase):
         for single, parallel in zip(*histories):
             self.assertAlmostEqual(single, parallel, places=10)
 
+    def test_workers_draw_different_dropout_masks(self) -> None:
+        model = CharTransformerModel(7, context_size=5, embedding_dim=8, dropout=0.5, seed=0)
+        xs, ys = random_batch(1)
+
+        # The same row twice: with independent masks the two halves differ,
+        # so the gradient is not just the one-worker gradient of that row.
+        with DataParallel(model, sequence_loss, workers=2) as parallel:
+            both = parallel.loss_and_gradients(xs * 2, ys * 2)
+        with DataParallel(model, sequence_loss, workers=1) as parallel:
+            one = parallel.loss_and_gradients(xs, ys)
+
+        self.assertNotAlmostEqual(both, one)
+
     def test_rejects_zero_workers(self) -> None:
         with self.assertRaises(ValueError):
             DataParallel(small_model(), sequence_loss, workers=0)
