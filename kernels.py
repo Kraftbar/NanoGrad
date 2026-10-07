@@ -194,11 +194,17 @@ def gather_indexed(image: list[float], index: Sequence[int], *, batches: int, im
     return kernel(image, index, batches, image_size)
 
 
-def scatter_add_indexed(grad: list[float], index: Sequence[int], *, batches: int, image_size: int) -> list[float]:
-    """Inverse of ``gather_indexed`` for gradients: add values back (col2im)."""
+def scatter_add_indexed(
+    grad: list[float], index: Sequence[int], *, batches: int, image_size: int, into=None,
+) -> list[float]:
+    """Inverse of ``gather_indexed`` for gradients: add values back (col2im).
+
+    With ``into`` (a buffer from ``zeros``, owned by the caller) the values
+    are added to it in place instead of to a new zero buffer.
+    """
 
     kernel = kernels_c.scatter_add_indexed if BACKEND == "c" else reference.scatter_add_indexed
-    return kernel(grad, index, batches, image_size)
+    return kernel(grad, index, batches, image_size, into)
 
 
 def add(x: list[float], y: list[float]) -> list[float]:
@@ -236,6 +242,16 @@ def sum_repeated(x: list[float], *, outer: int, size: int, inner: int) -> list[f
 
     kernel = kernels_c.sum_repeated if BACKEND == "c" else reference.sum_repeated
     return kernel(x, outer, size, inner)
+
+
+def sigmoid(x: list[float]) -> list[float]:
+    return (kernels_c.sigmoid if BACKEND == "c" else reference.sigmoid)(x)
+
+
+def sigmoid_backward(y: list[float], grad: list[float]) -> list[float]:
+    """Gradient of sigmoid from its output: ``grad * y * (1 - y)``."""
+
+    return (kernels_c.sigmoid_backward if BACKEND == "c" else reference.sigmoid_backward)(y, grad)
 
 
 def relu(x: list[float]) -> list[float]:

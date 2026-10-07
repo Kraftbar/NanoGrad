@@ -61,6 +61,38 @@ typedef double vec __attribute__((vector_size(VECTOR_WIDTH * sizeof(double))));
 #define VEC_LOAD(v, p) memcpy(&(v), (p), sizeof(vec))
 #define VEC_STORE(p, v) memcpy((p), &(v), sizeof(vec))
 
+/* One register tile: rows (<= TILE_ROWS) rows of C, TILE_COLS columns at
+ * column j, summing over p0 .. p0 + kb - 1 with B's columns packed in panel.
+ * Always inlined, so the full-tile call (rows = TILE_ROWS) gets a constant
+ * row count the compiler can unroll. */
+static inline __attribute__((always_inline)) void tile(
+    const double *A, double *C, int m, int k, int n, int trans_a,
+    const double *panel, int i, int j, int p0, int kb, int rows)
+{
+    vec acc[TILE_ROWS][2];
+    memset(acc, 0, sizeof acc);
+    for (int p = 0; p < kb; p++) {
+        vec b0, b1;
+        VEC_LOAD(b0, panel + (long)p * TILE_COLS);
+        VEC_LOAD(b1, panel + (long)p * TILE_COLS + VECTOR_WIDTH);
+        for (int r = 0; r < rows; r++) {
+            double a_rp = A_AT(i + r, p0 + p);
+            acc[r][0] += a_rp * b0;
+            acc[r][1] += a_rp * b1;
+        }
+    }
+    for (int r = 0; r < rows; r++) {
+        double *c_row = C + (long)(i + r) * n + j;
+        vec c0, c1;
+        VEC_LOAD(c0, c_row);
+        VEC_LOAD(c1, c_row + VECTOR_WIDTH);
+        c0 += acc[r][0];
+        c1 += acc[r][1];
+        VEC_STORE(c_row, c0);
+        VEC_STORE(c_row + VECTOR_WIDTH, c1);
+    }
+}
+
 /* C (m x n) += op(A) (m x k) @ B (k x n, row-major). panel: K_BLOCK * TILE_COLS doubles. */
 static void gemm_tiled(const double *A, const double *B, double *C,
                        int m, int k, int n, int trans_a, double *panel)
@@ -73,37 +105,10 @@ static void gemm_tiled(const double *A, const double *B, double *C,
                 memcpy(panel + (long)p * TILE_COLS, B + (long)(p0 + p) * n + j, sizeof(double) * TILE_COLS);
 
             int i = 0;
-            for (; i + TILE_ROWS <= m; i += TILE_ROWS) {       /* 1. register tile */
-                vec acc[TILE_ROWS][2];
-                memset(acc, 0, sizeof acc);
-                for (int p = 0; p < kb; p++) {
-                    vec b0, b1;
-                    VEC_LOAD(b0, panel + (long)p * TILE_COLS);
-                    VEC_LOAD(b1, panel + (long)p * TILE_COLS + VECTOR_WIDTH);
-                    for (int r = 0; r < TILE_ROWS; r++) {
-                        double a_rp = A_AT(i + r, p0 + p);
-                        acc[r][0] += a_rp * b0;
-                        acc[r][1] += a_rp * b1;
-                    }
-                }
-                for (int r = 0; r < TILE_ROWS; r++) {
-                    double *c_row = C + (long)(i + r) * n + j;
-                    vec c0, c1;
-                    VEC_LOAD(c0, c_row);
-                    VEC_LOAD(c1, c_row + VECTOR_WIDTH);
-                    c0 += acc[r][0];
-                    c1 += acc[r][1];
-                    VEC_STORE(c_row, c0);
-                    VEC_STORE(c_row + VECTOR_WIDTH, c1);
-                }
-            }
-            for (; i < m; i++) {                               /* leftover rows */
-                double *c_row = C + (long)i * n + j;
-                for (int p = 0; p < kb; p++) {
-                    double a_ip = A_AT(i, p0 + p);
-                    for (int jj = 0; jj < TILE_COLS; jj++) c_row[jj] += a_ip * panel[(long)p * TILE_COLS + jj];
-                }
-            }
+            for (; i + TILE_ROWS <= m; i += TILE_ROWS)          /* 1. register tiles */
+                tile(A, C, m, k, n, trans_a, panel, i, j, p0, kb, TILE_ROWS);
+            if (i < m)                                           /* leftover rows */
+                tile(A, C, m, k, n, trans_a, panel, i, j, p0, kb, m - i);
         }
     }
     if (full_cols < n) {                                       /* leftover columns */
@@ -153,7 +158,7 @@ void gemm(
         }
 
 #ifdef VECTOR_WIDTH
-        if (m >= TILE_ROWS && n >= TILE_COLS) {
+        if (n >= TILE_COLS) {
             gemm_tiled(A, B, C, m, k, n, trans_a, panel);
             continue;
         }
@@ -560,4 +565,25 @@ void batch_norm_channels_backward(const double *grad, const double *x_hat, const
                 dx[offset + i] = inv_std[c] * (grad[offset + i] * weight[c] - mean_g - x_hat[offset + i] * mean_g_h);
         }
     }
+}
+
+/*
+ * Sigmoid, elementwise:  y = 1 / (1 + e^-x),  dx = dy * y * (1 - y)
+ * Two algebraically equal forms, each safe from overflow on its own side.
+ */
+void sigmoid_forward(const double *x, double *y, long count)
+{
+    for (long i = 0; i < count; i++) {
+        if (x[i] >= 0.0) {
+            y[i] = 1.0 / (1.0 + exp(-x[i]));
+        } else {
+            double e = exp(x[i]);
+            y[i] = e / (1.0 + e);
+        }
+    }
+}
+
+void sigmoid_backward(const double *y, const double *grad, double *dx, long count)
+{
+    for (long i = 0; i < count; i++) dx[i] = grad[i] * y[i] * (1.0 - y[i]);
 }

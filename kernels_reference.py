@@ -226,9 +226,9 @@ def gather_indexed(
 
 
 def scatter_add_indexed(
-    grad: list[float], index: Sequence[int], batches: int, image_size: int,
+    grad: list[float], index: Sequence[int], batches: int, image_size: int, into: list[float] | None = None,
 ) -> list[float]:
-    image_grad = [0.0] * (batches * image_size)
+    image_grad = [0.0] * (batches * image_size) if into is None else into
     count = len(index)
     for batch in range(batches):
         start = batch * image_size
@@ -281,6 +281,18 @@ def relu(x: list[float]) -> list[float]:
 
 def relu_backward(x: list[float], grad: list[float]) -> list[float]:
     return [g if value > 0.0 else 0.0 for g, value in zip(grad, x)]
+
+
+def sigmoid(x: list[float]) -> list[float]:
+    # Two algebraically equal forms, each safe from overflow on its own side.
+    return [
+        1.0 / (1.0 + math.exp(-value)) if value >= 0.0 else math.exp(value) / (1.0 + math.exp(value))
+        for value in x
+    ]
+
+
+def sigmoid_backward(y: list[float], grad: list[float]) -> list[float]:
+    return [g * value * (1.0 - value) for g, value in zip(grad, y)]
 
 
 def tanh(x: list[float]) -> list[float]:

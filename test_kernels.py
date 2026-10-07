@@ -177,6 +177,15 @@ class KernelBackendTests(unittest.TestCase):
         for p, q in zip(python, c):
             self.assertListsClose(p, q)
 
+    def test_sigmoid_agrees(self) -> None:
+        x = values(40, 35) + [800.0, -800.0, 0.0]          # extremes must not overflow
+        grad = values(43, 36)
+        python, c = self.run_both(lambda: kernels.sigmoid(x))
+        self.assertListsClose(python, c)
+        self.assertEqual((python[-3], python[-2], python[-1]), (1.0, 0.0, 0.5))
+        python, c = self.run_both(lambda: kernels.sigmoid_backward(python, grad))
+        self.assertListsClose(python, c)
+
     def test_relu_agrees(self) -> None:
         x, grad = values(40, 25), values(40, 26)
         python, c = self.run_both(lambda: kernels.relu(x))

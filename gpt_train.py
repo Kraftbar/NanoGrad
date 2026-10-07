@@ -41,6 +41,7 @@ from char_demo import generate_text
 from language import CharTransformerModel
 from optim import TensorAdam
 from parallel import DataParallel, sequence_loss
+from rnn import CharLSTMModel
 from sampling import select_next_index
 from schedules import warmup_cosine
 from tensor import no_grad
@@ -61,6 +62,12 @@ PRESETS = {
         layers=4, heads=4, embedding_dim=128, context_size=64, batch_size=12,
         steps=2000, lr=1e-3, min_lr=1e-4, warmup_steps=100, dropout=0.0,
         norm="rms", positions="rope", activation="swiglu",
+    ),
+    # Karpathy's char-rnn in the same recipe: a 2-layer LSTM of about the
+    # same size (embedding 64, hidden 256: 874,881 parameters).
+    "baby-lstm": dict(
+        architecture="lstm", layers=2, embedding_dim=64, lstm_hidden=256, context_size=64,
+        batch_size=12, steps=2000, lr=1e-3, min_lr=1e-4, warmup_steps=100, dropout=0.0,
     ),
     # A smaller rung that trains in minutes, for trying things out.
     "mini": dict(
@@ -102,7 +109,12 @@ def random_batch(
 # ---------------------------------------------------------------------------
 
 
-def build_model(vocab_size: int, config: argparse.Namespace) -> CharTransformerModel:
+def build_model(vocab_size: int, config: argparse.Namespace):
+    if config.architecture == "lstm":
+        return CharLSTMModel(
+            vocab_size, embedding_dim=config.embedding_dim, hidden=config.lstm_hidden,
+            num_layers=config.layers, seed=config.seed,
+        )
     hidden_dim = 4 * config.embedding_dim
     if config.activation == "swiglu":
         hidden_dim = -(-8 * config.embedding_dim // 3 // 8) * 8   # 8/3 * C, rounded up to 8
@@ -219,7 +231,7 @@ def train(args: argparse.Namespace) -> dict:
         if args.tokenizer == "bpe":
             vocab.save(out_dir / "tokenizer.json")
         if args.resume and (out_dir / "model.json").exists():
-            if args.tokenizer == "bpe":
+            if not _char_checkpoint(args):
                 model.load(out_dir / "model.json")
             else:
                 load_checkpoint(out_dir / "model.json", model, vocab, model_name="transformer")
@@ -267,7 +279,7 @@ def train(args: argparse.Namespace) -> dict:
                     _write_log(out_dir / "log.csv", log_rows)
                     if losses["val"] < best_val:
                         best_val = losses["val"]
-                        if args.tokenizer == "bpe":
+                        if not _char_checkpoint(args):
                             model.save(out_dir / "model.json")
                         else:
                             save_checkpoint(out_dir / "model.json", model, vocab, model_name="transformer")
@@ -289,22 +301,30 @@ def train(args: argparse.Namespace) -> dict:
                 sequence_loss(model, xs, ys).backward()
             optimizer.step()
 
-    if args.tokenizer == "bpe":
+    if _char_checkpoint(args):
+        samples = [_char_sample(model, vocab, args, index) for index in range(args.num_samples)]
+    else:
         samples = [
             vocab.decode(generate_tokens(
                 model, vocab.encode(args.seed_text), length=args.generate, context_size=args.context_size,
                 temperature=args.temperature, top_k=args.top_k, rng=random.Random(args.seed + 100 + index),
+                kv_cache=args.architecture == "transformer",
             ))
             for index in range(args.num_samples)
         ]
-    else:
-        samples = [_char_sample(model, vocab, args, index) for index in range(args.num_samples)]
     for sample in samples:
         print("-" * 60)
         print(sample)
     if out_dir is not None:
         (out_dir / "samples.txt").write_text(("\n" + "-" * 60 + "\n").join(samples) + "\n")
     return {"log": log_rows, "samples": samples, "best_val": best_val}
+
+
+def _char_checkpoint(args: argparse.Namespace) -> bool:
+    """Character transformers use char_checkpoint's format (char_demo can load
+    them); other models save their state plus, for BPE, tokenizer.json."""
+
+    return args.tokenizer == "char" and args.architecture == "transformer"
 
 
 def _char_sample(model, vocab, args, index: int) -> str:
@@ -341,6 +361,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.add_argument("--" + name.replace("_", "-"), type=int)
     for name in ("lr", "min_lr", "dropout"):
         parser.add_argument("--" + name.replace("_", "-"), type=float)
+    parser.add_argument("--architecture", choices=("transformer", "lstm"))
+    parser.add_argument("--lstm-hidden", type=int)
     parser.add_argument("--norm", choices=("layer", "rms"))
     parser.add_argument("--positions", choices=("learned", "rope"))
     parser.add_argument("--activation", choices=("gelu", "relu", "swiglu"))
@@ -358,7 +380,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=20)
     args = parser.parse_args(argv)
-    defaults = {"norm": "layer", "positions": "learned", "activation": "gelu"}   # GPT-2's parts
+    defaults = {"architecture": "transformer", "lstm_hidden": 256,
+                "norm": "layer", "positions": "learned", "activation": "gelu"}   # GPT-2's parts
     for name, value in {**defaults, **PRESETS[args.preset]}.items():
         if getattr(args, name) is None:
             setattr(args, name, value)

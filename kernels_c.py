@@ -156,6 +156,8 @@ def _build_library() -> ctypes.CDLL | None:
     library.adam_update.argtypes = [pointer] * 5 + [count] + [ctypes.c_double] * 7
     library.tanh_forward.argtypes = [pointer, pointer, count]
     library.relu_forward.argtypes = [pointer, pointer, count]
+    library.sigmoid_forward.argtypes = [pointer, pointer, count]
+    library.sigmoid_backward.argtypes = [pointer, pointer, pointer, count]
     library.batch_norm_channels.argtypes = [pointer] * 8 + [count] * 3 + [ctypes.c_double]
     library.batch_norm_channels_backward.argtypes = [pointer] * 7 + [count] * 3
     library.rms_norm_rows.argtypes = [pointer] * 4 + [count, count, ctypes.c_double]
@@ -319,11 +321,11 @@ def gather_indexed(
 
 
 def scatter_add_indexed(
-    grad: list[float], index: Sequence[int], batches: int, image_size: int,
+    grad: list[float], index: Sequence[int], batches: int, image_size: int, into: array | None = None,
 ) -> array:
     grad_buffer = _doubles(grad)
     keep, index_buffer = _index_buffer(index)
-    image_grad = zeros(batches * image_size)
+    image_grad = zeros(batches * image_size) if into is None else into
     library.scatter_add_indexed(
         _buffer(grad_buffer), index_buffer, _buffer(image_grad), batches, image_size, len(index),
     )
@@ -369,6 +371,18 @@ def sum_repeated(x: list[float], outer: int, size: int, inner: int) -> array:
     x_buffer, out = _doubles(x), zeros(size)
     library.sum_repeated(_buffer(x_buffer), _buffer(out), outer, size, inner)
     return out
+
+
+def sigmoid(x: list[float]) -> array:
+    x_buffer, y = _doubles(x), zeros(len(x))
+    library.sigmoid_forward(_buffer(x_buffer), _buffer(y), len(x))
+    return y
+
+
+def sigmoid_backward(y: list[float], grad: list[float]) -> array:
+    y_buffer, grad_buffer, dx = _doubles(y), _doubles(grad), zeros(len(y))
+    library.sigmoid_backward(_buffer(y_buffer), _buffer(grad_buffer), _buffer(dx), len(y))
+    return dx
 
 
 def relu(x: list[float]) -> array:

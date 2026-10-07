@@ -195,6 +195,9 @@ class Tensor:
     def flatten(self, start_axis: int = 0) -> "Tensor":
         return flatten(self, start_axis=start_axis)
 
+    def split(self, sizes: Sequence[int], axis: int = -1) -> list["Tensor"]:
+        return split(self, sizes, axis=axis)
+
     def permute(self, axes: tuple[int, ...]) -> "Tensor":
         return permute(self, axes)
 
@@ -721,21 +724,13 @@ def tensor_gelu(tensor: Tensor) -> Tensor:
 def tensor_sigmoid(tensor: Tensor) -> Tensor:
     """Elementwise sigmoid: y = 1 / (1 + e^-x), dy/dx = y (1 - y)."""
 
-    out_data = [_sigmoid(value) for value in tensor.data]
+    out_data = kernels.sigmoid(tensor.data)
     return _unary(
         tensor,
         out_data,
-        lambda grad: [g * y * (1.0 - y) for g, y in zip(grad, out_data)],
+        lambda grad: kernels.sigmoid_backward(out_data, grad),
         "sigmoid",
     )
-
-
-def _sigmoid(value: float) -> float:
-    # Two algebraically equal forms; each avoids overflow on its own side.
-    if value >= 0.0:
-        return 1.0 / (1.0 + math.exp(-value))
-    exp_value = math.exp(value)
-    return exp_value / (1.0 + exp_value)
 
 
 def tensor_tanh(tensor: Tensor) -> Tensor:
@@ -1083,6 +1078,62 @@ def concat(tensors: Sequence[Tensor], axis: int = 0) -> Tensor:
     out_shape = base_shape[:axis] + (joined,) + base_shape[axis + 1 :]
     chunks = [_numel(tensor.shape[axis:]) for tensor in tensors]
     return _join_chunks(tensors, out_shape, chunks, "concat")
+
+
+def split(tensor: Tensor, sizes: Sequence[int], axis: int = -1) -> list[Tensor]:
+    """Cut one axis into consecutive pieces of the given sizes (undoes concat).
+
+    For every outer index (the axes before ``axis``), piece p is one
+    contiguous chunk of the input row, so each piece is a gather through an
+    index table of its chunk, and its gradient scatters back into place.
+
+    All pieces hang off one shared node whose gradient buffer they add into
+    in place; that node passes the finished buffer on once. (Scattering each
+    piece into its own full-size buffer would cost a full copy per piece,
+    which for an LSTM's time steps grows with the square of the length.)
+    """
+
+    axis = _normalize_axis(axis, tensor.ndim)
+    if sum(sizes) != tensor.shape[axis] or any(size <= 0 for size in sizes):
+        raise ValueError("split sizes must be positive and add up to the axis length")
+    inner = _numel(tensor.shape[axis + 1 :])
+    full = tensor.shape[axis] * inner                       # one outer index's values
+    outer = tensor.numel // full
+
+    whole = _op_result(tensor.data, tensor.shape, (tensor,), "split")
+
+    def _backward_whole() -> None:
+        _add_grad(tensor, _grad_data(whole))
+
+    _set_backward(whole, _backward_whole)
+
+    pieces = []
+    offset = 0
+    for size in sizes:
+        index = _range_index(offset * inner, size * inner)
+        out_shape = tensor.shape[:axis] + (size,) + tensor.shape[axis + 1 :]
+        piece = _op_result(
+            kernels.gather_indexed(tensor.data, index, batches=outer, image_size=full),
+            out_shape, (whole,), "split_piece",
+        )
+        _set_backward(piece, _split_piece_backward(whole, piece, index, outer, full))
+        pieces.append(piece)
+        offset += size
+    return pieces
+
+
+def _split_piece_backward(whole: Tensor, piece: Tensor, index, outer: int, full: int) -> Callable[[], None]:
+    def _backward() -> None:
+        if whole.grad is None:
+            whole.grad = kernels.zeros(whole.numel)   # private to this split
+        kernels.scatter_add_indexed(_grad_data(piece), index, batches=outer, image_size=full, into=whole.grad)
+
+    return _backward
+
+
+@lru_cache(maxsize=256)
+def _range_index(start: int, count: int):
+    return kernels.index_table(range(start, start + count))
 
 
 def _join_chunks(

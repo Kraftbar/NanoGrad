@@ -103,5 +103,26 @@ class GptTrainTests(unittest.TestCase):
         self.assertTrue(all(0 <= token < 9 for token in longer))
 
 
+    def test_lstm_architecture_trains_and_saves(self) -> None:
+        from rnn import CharLSTMModel
+
+        with tempfile.TemporaryDirectory() as directory:
+            text_path = Path(directory) / "text.txt"
+            text_path.write_text(TEXT)
+            out_dir = Path(directory) / "run"
+            args = parse_args([
+                "--text-file", str(text_path), "--preset", "baby-lstm", "--layers", "1",
+                "--embedding-dim", "8", "--lstm-hidden", "16", "--context-size", "8",
+                "--steps", "10", "--eval-every", "10", "--eval-batches", "2",
+                "--generate", "5", "--num-samples", "1", "--out-dir", str(out_dir),
+            ])
+            with redirect_stdout(StringIO()):
+                result = train(args)
+            self.assertLess(result["log"][-1]["train_loss"], result["log"][0]["train_loss"])
+            model = build_model(len(CharVocab.from_text(TEXT)), args)
+            self.assertIsInstance(model, CharLSTMModel)
+            model.load(out_dir / "model.json")
+
+
 if __name__ == "__main__":
     unittest.main()
