@@ -65,6 +65,8 @@ def ransac(
 
     if count < sample_size:
         raise ValueError("not enough data for one minimal sample")
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must be in (0, 1)")
 
     rng = rng or random.Random(0)
 

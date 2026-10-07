@@ -77,6 +77,8 @@ def harris_response(image: Tensor, *, window: int = 5, k: float = 0.05) -> tuple
     image pixel (row + offset, col + offset).
     """
 
+    if window % 2 == 0:
+        raise ValueError("harris window must be odd so corners land on pixels")
     with no_grad():
         ix = conv2d_valid(image, SOBEL_X)
         iy = conv2d_valid(image, SOBEL_Y)
@@ -121,11 +123,13 @@ def harris_corners(
     )
 
     corners: list[Corner] = []
+    taken: list[tuple[int, int]] = []  # whole-pixel positions of accepted corners
     for score, index in candidates:
         row, col = divmod(index, cols)
         x, y = col + offset, row + offset
-        if all((x - c.x) ** 2 + (y - c.y) ** 2 >= min_distance ** 2 for c in corners):
+        if all((x - tx) ** 2 + (y - ty) ** 2 >= min_distance ** 2 for tx, ty in taken):
             dx, dy = _subpixel_offset(scores, row, col, rows, cols)
+            taken.append((x, y))
             corners.append(Corner(x + dx, y + dy, score))
             if len(corners) == max_corners:
                 break
@@ -250,24 +254,35 @@ def save_pgm(path: str | Path, image: Tensor) -> None:
 
 
 def load_pgm(path: str | Path) -> Tensor:
-    """Read an 8-bit binary PGM file into a (height, width) Tensor in [0, 1]."""
+    """Read an 8-bit binary PGM file into a (height, width) Tensor in [0, 1].
+
+    The header is four whitespace-separated fields (magic, width, height,
+    max value), with ``#`` comments running to the end of a line allowed
+    anywhere between them, followed by one whitespace byte and the pixels.
+    """
 
     raw = Path(path).read_bytes()
     fields: list[bytes] = []
     position = 0
     while len(fields) < 4:
-        # Skip whitespace and '#' comments between header fields.
-        while raw[position:position + 1].isspace():
+        if position >= len(raw):
+            raise ValueError("PGM header is truncated")
+        byte = raw[position:position + 1]
+        if byte.isspace():
             position += 1
-        if raw[position:position + 1] == b"#":
-            position = raw.index(b"\n", position) + 1
-            continue
-        start = position
-        while not raw[position:position + 1].isspace():
-            position += 1
-        fields.append(raw[start:position])
+        elif byte == b"#":
+            end = raw.find(b"\n", position)
+            position = len(raw) if end < 0 else end + 1
+        else:
+            start = position
+            while position < len(raw) and not raw[position:position + 1].isspace() \
+                    and raw[position:position + 1] != b"#":
+                position += 1
+            fields.append(raw[start:position])
     magic, width, height, max_value = fields[0], int(fields[1]), int(fields[2]), int(fields[3])
-    if magic != b"P5" or max_value > 255:
+    if magic != b"P5" or not 0 < max_value <= 255:
         raise ValueError("load_pgm reads 8-bit binary (P5) PGM files only")
     pixels = raw[position + 1 : position + 1 + width * height]
+    if len(pixels) != width * height:
+        raise ValueError("PGM pixel data is truncated")
     return Tensor([value / max_value for value in pixels], (height, width))

@@ -75,6 +75,41 @@ class BundleAdjustmentTests(unittest.TestCase):
         for a, b in zip(dense, expected):
             self.assertAlmostEqual(a, b, places=8)
 
+    def test_rejection_refits_after_the_last_prune(self) -> None:
+        scene = synthetic_scene(points=30, noise=0.0, seed=5)
+        second = [pixel[:] for pixel in scene.second_pixels]
+        for index in (0, 1, 2):
+            second[index] = [second[index][0] + 25.0, second[index][1] - 15.0]
+
+        result = two_view_bundle_adjustment(
+            scene.camera,
+            scene.second_pose,
+            scene.points,
+            scene.first_pixels,
+            second,
+            huber_px=0.5,
+            reject_px=1.0,
+            rounds=2,
+        )
+
+        self.assertEqual(result.kept, list(range(3, 30)))
+        kept_rmse = two_view_rmse(
+            scene.camera,
+            result.pose,
+            result.points,
+            [scene.first_pixels[i] for i in result.kept],
+            [second[i] for i in result.kept],
+        )
+        self.assertAlmostEqual(result.history[-1].rmse, kept_rmse)
+        self.assertLess(kept_rmse, 1e-6)
+        iterations = [step.iteration for step in result.history]
+        self.assertEqual(iterations, sorted(set(iterations)))
+
+    def test_needs_points(self) -> None:
+        with self.assertRaises(ValueError):
+            camera = synthetic_scene(points=8).camera
+            two_view_bundle_adjustment(camera, Pose.identity(), [], [], [])
+
     def test_rmse_counts_both_images(self) -> None:
         scene = synthetic_scene(points=5, noise=0.0, seed=4)
         shifted = [[u + 3.0, v + 4.0] for u, v in scene.second_pixels]

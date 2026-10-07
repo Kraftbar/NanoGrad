@@ -281,7 +281,6 @@ def triangulate_point(
     return [value / homogeneous[3] for value in homogeneous[:3]]
 
 
-
 def triangulate_matches(
     second: Pose,
     first_normalized: Sequence[Vector],

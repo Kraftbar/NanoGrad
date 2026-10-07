@@ -73,7 +73,7 @@ def two_view_bundle_adjustment(
     first_pixels: Sequence[Vector],
     second_pixels: Sequence[Vector],
     *,
-    iterations: int = 10,
+    iterations: int = 50,
     damping: float = 1e-3,
     huber_px: float | None = None,
     reject_px: float | None = None,
@@ -93,17 +93,24 @@ def two_view_bundle_adjustment(
     Jacobian rows and residuals are scaled by sqrt(w). (ORB-SLAM3 uses the
     same Huber kernel in its g2o bundle adjustment.)
 
-    With ``reject_px`` set, this runs up to ``rounds`` rounds: after each
-    round, points whose reprojection error exceeds ``reject_px`` in either
-    image are dropped and the rest are adjusted again. A wrong match that
+    With ``reject_px`` set, this runs up to ``rounds`` fits: after each fit,
+    points whose reprojection error exceeds ``reject_px`` in either image
+    are dropped and the rest are adjusted again. Use it together with
+    ``huber_px``: under plain least squares a few bad matches can bend the
+    fit so much that good points get rejected. A wrong match that
     slipped past RANSAC pulls the whole solution toward itself; once the
     good matches are fit well, it stands out and can be removed.
     """
 
+    if not points:
+        raise ValueError("bundle adjustment needs at least one point")
+
     kept = list(range(len(points)))
     current_points = [list(point) for point in points]
     history: list[RefinementStep] = []
-    for _ in range(rounds if reject_px is not None else 1):
+
+    def adjust() -> None:
+        nonlocal pose, current_points
         pose, current_points, round_history = _adjust(
             camera,
             pose,
@@ -114,9 +121,15 @@ def two_view_bundle_adjustment(
             damping=damping,
             huber_px=huber_px,
         )
-        history.extend(round_history if not history else round_history[1:])
-        if reject_px is None:
-            break
+        # Number iterations continuously across rounds.
+        offset = history[-1].iteration if history else 0
+        steps = round_history if not history else round_history[1:]
+        history.extend(
+            RefinementStep(step.iteration + offset, step.rmse, step.damping) for step in steps
+        )
+
+    adjust()
+    for _ in range((rounds - 1) if reject_px is not None else 0):
         survivors = [
             position
             for position, index in enumerate(kept)
@@ -127,6 +140,7 @@ def two_view_bundle_adjustment(
             break
         kept = [kept[position] for position in survivors]
         current_points = [current_points[position] for position in survivors]
+        adjust()  # every prune is followed by a fit on the survivors
     return TwoViewResult(pose, current_points, history, kept)
 
 
@@ -356,7 +370,8 @@ def _fix_scale(pose: Pose, points: list[Vector], baseline: float) -> tuple[Pose,
     """Rescale the scene so the baseline keeps its length (no change in pixels)."""
 
     length = norm(pose.translation)
-    if length == 0.0:
+    if length == 0.0 or baseline == 0.0:
+        # Pure rotation: there is no baseline to hold fixed.
         return pose, points
     scale = baseline / length
     return (

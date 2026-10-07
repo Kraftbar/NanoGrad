@@ -156,10 +156,17 @@ wrong matches:
 | 0.5 px | RANSAC eight-point | 0.70 deg | 3.6 deg | 0.55 |
 | 0.5 px | + bundle adjustment | 0.54 deg | 0.88 deg | 0.41 |
 | 1.0 px | RANSAC eight-point | 2.6 deg | 13.5 deg | 1.57 |
-| 1.0 px | + bundle adjustment | 1.3 deg | 2.8 deg | 1.09 |
+| 1.0 px | + bundle adjustment | 1.2 deg | 2.8 deg | 1.06 |
 
 Wrong matches rejected: 98% at 0.5 px, 92% at 1.0 px. The rest happen to
 lie on their epipolar lines (see below).
+
+Bundle adjustment helps in the median, but not on every draw: its rotation
+ends up *worse* than the eight-point estimate on 4 of 20 seeds at 0.5 px
+(5 of 20 at 1.0 px), and the default seed above is one of them. It fits the
+noise in both images, and with a short baseline rotation and translation
+can trade off against each other (the "bas-relief" ambiguity), so a
+lower reprojection error does not always mean a lower rotation error.
 
 ## Results: Rendered Image Pair (`image_pair_demo.py`)
 
@@ -169,17 +176,20 @@ sideways and turned about 7 degrees. Ground truth grades each stage:
 
 ```text
 Harris corners:      250 / 250
-NCC matches:         113 (92 correct within 2 px)
-RANSAC inliers:      93 (92 correct, 93 in front of both cameras), 30 iterations
-RANSAC pose:         rotation err 0.122 deg, translation direction err 1.75 deg
-BA outlier rejection: kept 93 (92 correct)
-bundle adjusted:     rotation err 0.077 deg, translation direction err 0.85 deg, reprojection 0.105 px
-reconstructed depth: median error 1.0% (true scale)
+NCC matches:         114 (93 correct within 2 px)
+RANSAC inliers:      95 (92 correct, 94 in front of both cameras), 27 iterations
+RANSAC pose:         rotation err 1.722 deg, translation direction err 47.22 deg
+BA outlier rejection: kept 92 (91 correct)
+bundle adjusted:     rotation err 0.054 deg, translation direction err 0.37 deg, reprojection 0.106 px
+reconstructed depth: median error 1.1% (true scale)
 ```
 
-Over render seeds 0 to 3, bundle adjustment lands at 0.85, 0.11, 4.5, and
-0.21 degrees of translation-direction error, and 0.9 to 1.7% median depth
-error. Matched corners agree with ground truth to about 0.33 px (median).
+The eight-point start is poor here (47 degrees off in translation
+direction), so bundle adjustment needs its full iteration budget (it stops
+early once converged). Over render seeds 0 to 3 it lands at 0.37, 0.07,
+4.5, and 0.12 degrees of translation-direction error, and 0.8 to 1.3% median
+depth error. Correctly matched corners agree with ground truth to 0.26 px
+(median over the four seeds).
 
 Three lessons from getting this to work:
 

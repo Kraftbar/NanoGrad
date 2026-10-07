@@ -155,8 +155,12 @@ def render(
     return Tensor(data, (camera.height, camera.width))
 
 
-def pixel_center_offset(corner: Corner) -> Vector:
-    """Pixel (col, row) covers [col, col + 1); its center is at +0.5."""
+def pixel_center(corner: Corner) -> Vector:
+    """Image position of a corner's pixel center.
+
+    Pixel (col, row) covers [col, col + 1) x [row, row + 1) in the renderer's
+    image coordinates, so its center is at (col + 0.5, row + 0.5).
+    """
 
     return [corner.x + 0.5, corner.y + 0.5]
 
@@ -195,8 +199,8 @@ def run_pipeline(
         [patch_descriptor(first_image, corner, radius=patch_radius) for corner in first_corners],
         [patch_descriptor(second_image, corner, radius=patch_radius) for corner in second_corners],
     )
-    first_pixels = [pixel_center_offset(first_corners[m.first]) for m in matches]
-    second_pixels = [pixel_center_offset(second_corners[m.second]) for m in matches]
+    first_pixels = [pixel_center(first_corners[m.first]) for m in matches]
+    second_pixels = [pixel_center(second_corners[m.second]) for m in matches]
 
     # Grade matches with ground truth: project the true 3D point seen at the
     # first corner into the second image and measure the distance.
