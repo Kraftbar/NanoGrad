@@ -12,6 +12,7 @@ checked against PyTorch where PyTorch has an equivalent.
 | rotary position embeddings | `tensor.rotary_embedding` | positions as rotations of queries and keys |
 | SwiGLU | `language.py` (feed-forward) | gated feed-forward: `silu(x W_in) * (x W_up)` |
 | mixture of experts | `moe.py`, `--preset baby-moe` / `--experts 4` | each token uses 2 of 4 feed-forward experts, chosen by a router (Mixtral) |
+| weight quantization | `quantize.py` | int8 / int4 weights with one scale per 32 numbers: 4-6x smaller |
 | LoRA | `lora.py`, `bert_finetune.py --lora 4` | fine-tune through small low-rank updates to frozen attention weights |
 | grouped-query attention | `num_kv_heads` / `--kv-heads` | query heads share key/value heads: a smaller KV cache (LLaMA 3, Mistral) |
 | bidirectional attention | `causal=False` | for encoders: ViT (`vit.py`) and BERT (`bert.py`) |
@@ -157,3 +158,21 @@ out    = softmax(scores + mask) @ value         (B * KV, G * T, D)  ->  (B, H, T
 
 A test checks that this equals ordinary attention whose heads hold copies
 of the shared weights, and the PyTorch twin computes each head separately.
+
+## Weight Quantization
+
+`quantize.py` rounds every weight matrix to 8, 4 or 3-bit integers, with
+one scale per group of 32 weights (symmetric round-to-nearest, the idea
+behind llama.cpp's Q8_0/Q4_0 formats), and measures the validation loss of
+the LLaMA-style baby model over the whole validation text:
+
+| weights | size | val bits / char | change |
+| --- | ---: | ---: | ---: |
+| float32 | 3,120 KB | 2.4085 | |
+| int8 | 878 KB | 2.4085 | +0.0000 |
+| int4 | 488 KB | 2.4229 | +0.0144 |
+| int3 | 391 KB | 2.4801 | +0.0716 |
+
+8 bits cost nothing measurable; 4 bits cost 0.6% at a sixth of the size;
+at 3 bits the error starts to show. (Smarter schemes such as GPTQ or AWQ
+choose the rounding to keep the layer outputs, not the weights, close.)
