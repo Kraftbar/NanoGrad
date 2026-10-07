@@ -69,6 +69,7 @@ class CompareConfig:
     batch_size: int
     steps: int
     seed: int
+    nanograd_init: str = "xavier"
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +139,7 @@ def build_nanograd_model(config: CompareConfig, vocab_size: int) -> CharTransfor
         num_layers=config.layers,
         feed_forward_activation="gelu",
         tie_embeddings=True,
+        init=config.nanograd_init,
         seed=config.seed,
     )
 
@@ -416,6 +418,7 @@ def run(args: argparse.Namespace) -> dict:
         batch_size=args.batch_size or preset["batch_size"],
         steps=args.steps,
         seed=args.seed,
+        nanograd_init=args.nanograd_init,
     )
 
     text = _load_text(args)
@@ -622,6 +625,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--validation-chars", type=int, default=256)
     parser.add_argument("--preset", choices=COMPARE_PRESETS, default="small-gpt")
     parser.add_argument("--init", choices=("shared", "independent"), default="shared")
+    parser.add_argument(
+        "--nanograd-init",
+        choices=("xavier", "gpt2"),
+        default="xavier",
+        help="NanoGrad's initializer (with --init shared, nanoGPT copies it)",
+    )
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--lr", type=float)

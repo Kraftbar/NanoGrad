@@ -619,5 +619,29 @@ class LanguageModuleTests(unittest.TestCase):
             })
 
 
+    def test_char_transformer_gpt2_init_scales_residual_projections(self) -> None:
+        model = CharTransformerModel(
+            vocab_size=20,
+            context_size=4,
+            embedding_dim=32,
+            num_heads=2,
+            num_layers=2,
+            tie_embeddings=True,
+            init="gpt2",
+            seed=1,
+        )
+
+        def std(values):
+            mean = sum(values) / len(values)
+            return (sum((value - mean) ** 2 for value in values) / len(values)) ** 0.5
+
+        self.assertAlmostEqual(std(model.blocks[0].feed_forward_in.weight.data), 0.02, delta=0.003)
+        self.assertAlmostEqual(std(model.blocks[1].feed_forward_out.weight.data), 0.01, delta=0.0015)
+        self.assertIs(model.projection.weight, model.embedding.token_embedding.weight)
+        self.assertEqual(model.blocks[0].norm1.weight.data, [1.0] * 32)
+        with self.assertRaises(ValueError):
+            CharTransformerModel(vocab_size=4, init="kaiming")
+
+
 if __name__ == "__main__":
     unittest.main()

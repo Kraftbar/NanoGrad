@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import math
+import random
 
 from tensor import Tensor, _add_grad, _grad_data, _op_result, concat, matmul
 from tensor_nn import TensorEmbedding, TensorLayerNorm, TensorLinear, TensorModule
+
+
+TRANSFORMER_INITS = ("xavier", "gpt2")
 
 
 class TokenPositionEmbedding(TensorModule):
@@ -461,6 +465,7 @@ class CharTransformerModel(TensorModule):
         num_layers: int = 1,
         feed_forward_activation: str = "relu",
         tie_embeddings: bool = False,
+        init: str = "xavier",
         seed: int = 0,
     ) -> None:
         if vocab_size <= 0:
@@ -475,6 +480,8 @@ class CharTransformerModel(TensorModule):
             raise ValueError("hidden_dim must be positive")
         if num_layers <= 0:
             raise ValueError("num_layers must be positive")
+        if init not in TRANSFORMER_INITS:
+            raise ValueError(f"init must be one of {TRANSFORMER_INITS}")
         if feed_forward_activation not in ("relu", "gelu"):
             raise ValueError("feed_forward_activation must be 'relu' or 'gelu'")
 
@@ -514,6 +521,30 @@ class CharTransformerModel(TensorModule):
             ),
             seed=seed + 2 + num_layers * 8,
         )
+        if init == "gpt2":
+            self._gpt2_init(random.Random(seed))
+
+    def _gpt2_init(self, rng: random.Random) -> None:
+        """Re-draw weights the way GPT-2 / nanoGPT initialize them.
+
+        - every linear weight and embedding table ~ normal(0, 0.02)
+        - biases 0, LayerNorm scale 1 and shift 0 (already true)
+        - projections that write into the residual stream (attention output
+          and feed-forward output) ~ normal(0, 0.02 / sqrt(2 * num_layers)),
+          so the residual sum does not grow with depth
+        """
+
+        residual_std = 0.02 / math.sqrt(2 * self.num_layers)
+        residual_writers = {
+            id(layer.weight)
+            for block in self.blocks
+            for layer in (block.attention.projection, block.feed_forward_out)
+        }
+        for parameter in self.parameters():
+            if parameter.ndim < 2:
+                continue
+            std = residual_std if id(parameter) in residual_writers else 0.02
+            parameter.data = [rng.gauss(0.0, std) for _ in parameter.data]
 
     def __call__(self, inputs: Tensor) -> Tensor:
         return _last_time_step(self.sequence_logits(inputs))
