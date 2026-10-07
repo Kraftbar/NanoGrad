@@ -334,6 +334,22 @@ class WordRNNModel(TensorModule):
             *decoder,
         ]
 
+    def state_dict(self) -> dict:
+        return {
+            "tied": self.tied,
+            "embedding": self.embedding.state_dict(),
+            "layers": [layer.state_dict() for layer in self.layers],
+            "decoder": self.decoder.state_dict(),      # with tied weights, the embedding table again
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        if state.get("tied") != self.tied:
+            raise ValueError("state tied does not match WordRNNModel")
+        self.embedding.load_state_dict(state["embedding"])
+        for layer, layer_state in zip(self.layers, state["layers"], strict=True):
+            layer.load_state_dict(layer_state)
+        self.decoder.load_state_dict(state["decoder"])
+
 
 def detach_state(state):
     """Cut a recurrent state off from the graph that produced it."""

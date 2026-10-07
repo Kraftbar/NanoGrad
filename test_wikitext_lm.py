@@ -51,6 +51,13 @@ class WikiTextTests(unittest.TestCase):
             self.assertAlmostEqual(a, b, places=12)
         self.assertFalse(detach_state(state)[0][0].requires_grad)
 
+    def test_state_dict_round_trip(self) -> None:
+        for tied in (False, True):
+            model = WordRNNModel(9, embedding_dim=6, hidden=6, tied=tied, dropout=0.0, seed=1)
+            copy = WordRNNModel(9, embedding_dim=6, hidden=6, tied=tied, dropout=0.0, seed=2)
+            copy.load_state_dict(model.state_dict())
+            self.assertEqual(list(copy([[1, 2, 3]])[0].data), list(model([[1, 2, 3]])[0].data))
+
     def test_tied_model_shares_the_embedding(self) -> None:
         model = WordRNNModel(9, embedding_dim=6, hidden=6, tied=True)
         self.assertIs(model.decoder.weight, model.embedding.weight)

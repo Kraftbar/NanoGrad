@@ -381,7 +381,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--kv-heads", type=int, help="key/value heads (grouped-query attention); default: --heads")
     parser.add_argument("--window", type=int, help="sliding-window attention: tokens each position sees")
     parser.add_argument("--experts", type=int, help="mixture-of-experts feed-forward with this many experts")
-    parser.add_argument("--expert-top-k", type=int, default=2, help="experts per token")
+    parser.add_argument("--expert-top-k", type=int, help="experts per token (default: 2, or 1 with one expert)")
     parser.add_argument("--norm", choices=("layer", "rms"))
     parser.add_argument("--positions", choices=("learned", "rope"))
     parser.add_argument("--activation", choices=("gelu", "relu", "swiglu"))
@@ -407,6 +407,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     for name, value in {**defaults, **PRESETS[args.preset]}.items():
         if getattr(args, name) is None:
             setattr(args, name, value)
+    if args.expert_top_k is None:
+        args.expert_top_k = min(2, args.experts) or 2
     return args
 
 

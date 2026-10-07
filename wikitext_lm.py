@@ -369,7 +369,7 @@ def compare(args: argparse.Namespace) -> dict:
     torch.set_num_threads(args.threads)
     corpus = Corpus(args.data)
     model = build_model(len(corpus.words), args, dropout=0.0)
-    runners = {"torch": torch_runner(model, args, dropout=0.0),               # copies the initial weights
+    runners = {"torch": torch_runner(model, args, dropout=0.0, dtype=args.dtype or "float64"),  # copies the weights
                "nanograd": NanoGradRunner(model, clip=args.clip)}
     batches = list(windows(batchify(corpus.train, args.batch_size), args.bptt))[: args.steps]
     results = {}

@@ -25,7 +25,11 @@ from tensor_nn import TensorLinear, TensorModule, linear
 
 
 class LoRALinear(TensorModule):
-    """A frozen ``TensorLinear`` plus a trainable rank-``rank`` update."""
+    """A frozen ``TensorLinear`` plus a trainable rank-``rank`` update.
+
+    ``parameters()`` are only the adapter's two matrices (what trains); the
+    frozen weights are still in ``state_dict()``.
+    """
 
     def __init__(self, base: TensorLinear, *, rank: int = 4, alpha: float | None = None, seed: int = 0) -> None:
         if rank <= 0:
@@ -57,12 +61,38 @@ class LoRALinear(TensorModule):
     def parameters(self) -> list[Tensor]:
         return [self.down, self.up]
 
+    def state_dict(self) -> dict:
+        """The frozen layer's own state plus the adapter (a plain TensorLinear
+        loads the first part; ``merged()`` gives a layer without the adapter)."""
+
+        return {
+            **self.base.state_dict(),
+            "lora_rank": self.rank,
+            "lora_scale": self.scale,
+            "lora_down": list(self.down.data),
+            "lora_up": list(self.up.data),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        """Load a LoRA state, or a plain linear layer's (the adapter then restarts at zero)."""
+
+        self.base.load_state_dict(state)
+        if "lora_down" not in state:
+            self.up.data = [0.0] * self.up.numel
+            return
+        if state.get("lora_rank") != self.rank or len(state["lora_down"]) != self.down.numel:
+            raise ValueError("state LoRA rank does not match LoRALinear")
+        self.scale = state["lora_scale"]
+        self.down.data = [float(value) for value in state["lora_down"]]
+        self.up.data = [float(value) for value in state["lora_up"]]
+
     def merged(self) -> TensorLinear:
-        """A plain linear layer with the update folded into its weight."""
+        """A plain linear layer with the update folded into its weight (frozen,
+        like the layer it came from)."""
 
         outputs, inputs = self.base.weight.shape
-        weight = Tensor(list(self.weight.data), (outputs, inputs), requires_grad=True)
-        return TensorLinear(inputs, outputs, weight=weight, bias=Tensor(list(self.bias.data), (outputs,), requires_grad=True))
+        weight = Tensor(list(self.weight.data), (outputs, inputs))
+        return TensorLinear(inputs, outputs, weight=weight, bias=Tensor(list(self.bias.data), (outputs,)))
 
 
 def add_lora(model: TensorModule, *, rank: int = 4, alpha: float | None = None, seed: int = 0) -> list[Tensor]:
@@ -79,6 +109,8 @@ def add_lora(model: TensorModule, *, rank: int = 4, alpha: float | None = None, 
         if isinstance(module, CausalSelfAttention):
             for layers in (module.queries, module.values):
                 for index, layer in enumerate(layers):
+                    if isinstance(layer, LoRALinear):
+                        raise ValueError("the model already has LoRA adapters (merge_lora them first)")
                     layers[index] = LoRALinear(layer, rank=rank, alpha=alpha, seed=seed + len(adapters))
                     adapters.append(layers[index])
     return [parameter for adapter in adapters for parameter in adapter.parameters()]

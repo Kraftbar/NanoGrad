@@ -146,9 +146,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--layers", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--finetune-lr", type=float, default=3e-4)
-    parser.add_argument("--probe", action="store_true", help="freeze the encoder, train only the classifier")
-    parser.add_argument("--lora", type=int, default=0, metavar="RANK",
-                        help="freeze the encoder, train LoRA adapters of this rank and the classifier")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--probe", action="store_true", help="freeze the encoder, train only the classifier")
+    mode.add_argument("--lora", type=int, default=0, metavar="RANK",
+                      help="freeze the encoder, train LoRA adapters of this rank and the classifier")
     parser.add_argument("--eval-windows", type=int, default=2000)
     parser.add_argument("--report-every", type=int, default=250)
     parser.add_argument("--seed", type=int, default=0)

@@ -46,6 +46,25 @@ class LoRATests(unittest.TestCase):
         for a, b in zip(model.encode(tokens(4)).data, adapted):
             self.assertAlmostEqual(a, b, places=12)
 
+    def test_state_round_trips_and_plain_checkpoints_load(self) -> None:
+        from language import CharTransformerModel
+
+        settings = dict(context_size=6, embedding_dim=8, num_heads=2, num_layers=1)
+        plain = CharTransformerModel(9, seed=1, **settings)
+        adapted = CharTransformerModel(9, seed=2, **settings)
+        add_lora(adapted, rank=2)
+        adapted.load_state_dict(plain.state_dict())                     # a normal checkpoint loads
+        x = Tensor.from_list([[1, 2, 3]])
+        self.assertEqual(list(adapted.sequence_logits(x).data), list(plain.sequence_logits(x).data))
+        attention = adapted.blocks[0].attention
+        attention.queries[0].up.data = [0.1] * attention.queries[0].up.numel
+        copy = CharTransformerModel(9, seed=3, **settings)
+        add_lora(copy, rank=2)
+        copy.load_state_dict(adapted.state_dict())
+        self.assertEqual(list(copy.sequence_logits(x).data), list(adapted.sequence_logits(x).data))
+        with self.assertRaises(ValueError):
+            add_lora(copy, rank=2)                                       # adapters twice
+
     def test_rank_must_be_positive(self) -> None:
         with self.assertRaises(ValueError):
             LoRALinear(TensorLinear(2, 2), rank=0)

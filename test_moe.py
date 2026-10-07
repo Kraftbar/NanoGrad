@@ -81,5 +81,15 @@ class MoETransformerTests(unittest.TestCase):
         self.assertIsNotNone(model.auxiliary_loss())
 
 
+class ExpertOptionTests(unittest.TestCase):
+    def test_one_expert_defaults_to_top_1(self) -> None:
+        from gpt_train import build_model, parse_args
+
+        args = parse_args(["--text-file", "x", "--preset", "mini", "--experts", "1"])
+        self.assertEqual(args.expert_top_k, 1)
+        self.assertEqual(build_model(7, args).blocks[0].moe.top_k, 1)
+        self.assertEqual(parse_args(["--text-file", "x", "--experts", "4"]).expert_top_k, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

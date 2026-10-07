@@ -89,7 +89,7 @@ def load_run(run_dir: str | Path):
     config = argparse.Namespace(**json.loads((run_dir / "config.json").read_text(encoding="utf-8")))
     config.kv_heads = getattr(config, "kv_heads", None)
     config.experts = getattr(config, "experts", 0)
-    config.expert_top_k = getattr(config, "expert_top_k", 2)
+    config.expert_top_k = getattr(config, "expert_top_k", None) or 2
     config.window = getattr(config, "window", None)
     text = Path(config.text_file).read_text(encoding="utf-8")
     vocab = CharVocab.from_text(text)
