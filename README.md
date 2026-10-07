@@ -46,7 +46,9 @@ The bottom split keeps the code readable without giving up speed:
 The model families share everything below them. A ResNet, a vision
 transformer, a BERT-style encoder and an LSTM needed only a few new pieces
 in the lower layers (padded and strided convolution, batch norm, ReLU,
-sigmoid, split, a switch to turn off causal masking); the rest is reuse. Each family is checked against
+sigmoid, split, a switch to turn off causal masking); the rest is reuse.
+[docs/model_families.md](./docs/model_families.md) maps which core pieces
+each family uses and what each one added. Each family is checked against
 PyTorch running the same architecture from the same weights
 (`torch_twin.py`): see [docs/benchmarks.md](./docs/benchmarks.md).
 
