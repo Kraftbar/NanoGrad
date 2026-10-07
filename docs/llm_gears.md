@@ -4,21 +4,21 @@ The character GPT in `language.py` follows GPT-2 / nanoGPT. Real language
 models add a few more parts. Each one is here in readable form, tested, and
 checked against PyTorch where PyTorch has an equivalent.
 
-| part | where | what it does |
-| --- | --- | --- |
-| byte-pair encoding | `bpe.py` | tokens for frequent character sequences instead of single characters |
-| KV cache | `language.py` (`step_logits`) | generation adds one row of work per token instead of re-running the context |
-| RMSNorm | `tensor_nn.rms_norm` | LLaMA's simpler LayerNorm: no mean, no bias |
-| rotary position embeddings | `tensor.rotary_embedding` | positions as rotations of queries and keys |
-| SwiGLU | `language.py` (feed-forward) | gated feed-forward: `silu(x W_in) * (x W_up)` |
-| mixture of experts | `moe.py`, `--preset baby-moe` / `--experts 4` | each token uses 2 of 4 feed-forward experts, chosen by a router (Mixtral) |
-| speculative decoding | `speculative.py` | a small model drafts k tokens, the large one checks them in one pass, same output distribution |
-| weight quantization | `quantize.py` | int8 / int4 weights with one scale per 32 numbers: 4-6x smaller |
-| LoRA | `lora.py`, `bert_finetune.py --lora 4` | fine-tune through small low-rank updates to frozen attention weights |
-| sliding-window attention | `attention_window` / `--window` | each token attends to the last W tokens; the KV cache is a rolling buffer (Mistral) |
-| grouped-query attention | `num_kv_heads` / `--kv-heads` | query heads share key/value heads: a smaller KV cache (LLaMA 3, Mistral) |
-| bidirectional attention | `causal=False` | for encoders: ViT (`vit.py`) and BERT (`bert.py`) |
-| masked language modeling | `bert.py` | BERT's training task |
+| stage | part | where | what it does |
+| --- | --- | --- | --- |
+| tokens | byte-pair encoding | `bpe.py` | tokens for frequent character sequences instead of single characters |
+| architecture | RMSNorm | `tensor_nn.rms_norm` | LLaMA's simpler LayerNorm: no mean, no bias |
+| | rotary position embeddings | `tensor.rotary_embedding` | positions as rotations of queries and keys |
+| | SwiGLU | `language.py` (feed-forward) | gated feed-forward: `silu(x W_in) * (x W_up)` |
+| | grouped-query attention | `num_kv_heads` / `--kv-heads` | query heads share key/value heads: a smaller KV cache (LLaMA 3, Mistral) |
+| | sliding-window attention | `attention_window` / `--window` | each token attends to the last W tokens; the KV cache is a rolling buffer (Mistral) |
+| | mixture of experts | `moe.py`, `--preset baby-moe` | each token uses 2 of 4 feed-forward experts, chosen by a router (Mixtral) |
+| | bidirectional attention | `causal=False` | for encoders: ViT (`vit.py`) and BERT (`bert.py`) |
+| training | masked language modeling | `bert.py` | BERT's pretraining task |
+| | LoRA | `lora.py`, `bert_finetune.py --lora 4` | fine-tune through small low-rank updates to frozen attention weights |
+| inference | KV cache | `language.py` (`step_logits`) | generation adds one row of work per token instead of re-running the context |
+| | speculative decoding | `speculative.py` | a small model drafts k tokens, the large one checks them in one pass; same output distribution |
+| | weight quantization | `quantize.py` | int8 / int4 weights with one scale per 32 numbers: 4-6x smaller |
 
 ## Results: the Baby GPT on Tiny Shakespeare
 
