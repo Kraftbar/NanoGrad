@@ -9,7 +9,10 @@ model families from the standard benchmarks:
   transformer; on MNIST, Fashion-MNIST and CIFAR-10
 - **language**: a GPT (nanoGPT's recipe, with GPT-2 or LLaMA parts, BPE or
   characters), a BERT-style encoder with pretraining and fine-tuning, LSTM
-  and GRU char-rnns; on Tiny Shakespeare
+  and GRU char-rnns; on Tiny Shakespeare, and word-level LSTM and
+  transformer language models on WikiText-2 (PyTorch's own example recipe)
+- **LLM gears**: KV cache, grouped-query and sliding-window attention,
+  mixture of experts, LoRA, weight quantization, speculative decoding
 - **generative**: a variational autoencoder and a diffusion model on MNIST
 
 Every family is checked against PyTorch running the same architecture from
@@ -27,10 +30,11 @@ and each can be read on its own:
 ```text
 +---------------------------------------------------------------------+
 | Recipes and benchmarks                                              |
-| gpt_train | mnist_compare | bert_compare | nanogpt_compare | bench  |
+| gpt_train | mnist_compare | wikitext_lm | bert_compare | bench | ... |
 +---------------------------------------------------------------------+
-| Model families                                                      |
-| lenet | resnet | vit | GPT | bert | lstm / gru | vae | diffusion    |
+| Model families                      | LLM gears                     |
+| lenet | resnet | vit | GPT | bert   | moe | lora | quantize |      |
+| lstm / gru | vae | diffusion        | speculative | bpe            |
 +---------------------------------------------------------------------+
 | Layers, losses, optimizers, training                                |
 | tensor_nn | losses | optim | schedules | train | parallel           |
@@ -123,6 +127,12 @@ are in [docs/benchmarks.md](./docs/benchmarks.md).
 - [x] float32 tensors (`kernels.set_default_dtype("float32")`, `--dtype float32`)
 - [x] Keep tensors in C arrays between kernels, so data stops being copied
   to and from Python lists at every op
+- [x] A blocked, register-tiled matrix product and implicit-GEMM
+  convolutions in C (40-47 GFLOP/s in float64 on one core)
+- [x] [More LLM gears: grouped-query and sliding-window attention, mixture
+  of experts, LoRA, weight quantization, speculative decoding](./docs/llm_gears.md)
+- [x] [WikiText-2 word-level language modeling with PyTorch's
+  `word_language_model` recipe, LSTM and transformer, against PyTorch](./docs/benchmarks.md)
 
 ### First Real Datasets
 
@@ -209,7 +219,12 @@ resnet.py        # a small residual network (ResNet) with batch norm
 vit.py           # a tiny vision transformer (ViT)
 bert.py          # a tiny BERT-style encoder and its masking recipe
 bpe.py           # byte-level byte-pair-encoding tokenizer (GPT-2 style)
-rnn.py           # LSTM, GRU and a char-rnn language model
+rnn.py           # LSTM, GRU, a char-rnn and a word-level language model
+wikitext_lm.py   # WikiText-2 with PyTorch's word_language_model recipe, NanoGrad vs PyTorch
+moe.py           # mixture-of-experts feed-forward layer (router + experts)
+lora.py          # LoRA adapters for fine-tuning frozen attention weights
+quantize.py      # int8 / int4 weight quantization and what it costs in loss
+speculative.py   # speculative decoding: a small model drafts, the large one checks
 vae.py           # variational autoencoder (generative model)
 vae_compare.py   # the VAE on MNIST in NanoGrad and PyTorch
 diffusion.py     # denoising diffusion (DDPM) with a small U-Net
@@ -287,6 +302,7 @@ python3 -m venv .venv && .venv/bin/pip install torch
 .venv/bin/python bert_compare.py --steps 500
 .venv/bin/python benchmark.py --torch
 .venv/bin/python benchmark_suite.py      # every comparison, one table
+.venv/bin/python wikitext_lm.py --compare --steps 20   # WikiText-2, both frameworks
 ```
 
 Use the test suite as the main correctness check; `test_gradcheck.py` compares
