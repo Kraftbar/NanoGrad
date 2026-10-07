@@ -79,12 +79,15 @@ this config ("it's still good fun").
 | | wall time for 2000 steps |
 | --- | --- |
 | nanoGPT, PyTorch, 4 CPU threads | 1 min 53 s |
-| NanoGrad, 4 worker processes, C kernels | 11 min 20 s |
+| NanoGrad, 4 worker processes, C kernels, float32 | 3 min 24 s |
+| NanoGrad, 4 worker processes, C kernels, float64 | 5 min 42 s |
+| NanoGrad, earlier C kernels (plain loops), float64 | 11 min 20 s |
 | NanoGrad, first run (C matmul only) | about 2 hours |
 | NanoGrad, 1 process, pure Python (estimated from a 46 s step) | about 26 hours |
 
-The 11-minute run reproduces the 2-hour run exactly: same loss at every
-evaluation, same samples. Only the speed changed.
+Every float64 run reproduces the 2-hour run exactly: same loss at every
+evaluation, same samples. Only the speed changed. The float32 run ends at
+the same validation loss to four decimals (1.9210).
 
 Getting here took:
 
@@ -97,8 +100,11 @@ Getting here took:
   3.5 GB and the first run was killed by the out-of-memory killer.
 - storing tensor values as C arrays, so data goes from kernel to kernel
   without copies, plus kernels for elementwise math and a fused Adam
-  update ([benchmarks.md](./benchmarks.md#how-the-gap-closed))
+  update ([benchmarks.md](./benchmarks.md))
+- a blocked, register-tiled matrix product (`gemm` in kernels.c: packed
+  panels, 8 x 32 register tiles, cache blocking), at 40-47 GFLOP/s in
+  float64 on one core, about what this CPU's vector units allow, and
+  computing all attention heads in one batched product
 
-The remaining 6x gap to PyTorch is mostly matrix products: NanoGrad's
-plain C loop runs at about 8 GFLOP/s against about 60 for PyTorch's tuned
-BLAS on this CPU.
+What remains between NanoGrad and PyTorch here is mostly Python: each op
+is a Python call that sets up a kernel and records a backward step.
