@@ -121,6 +121,23 @@ over the batch.
 - The backward pass sorts the graph iteratively, so deep graphs no longer
   hit Python's recursion limit.
 
+## Using Every Core: Data Parallelism
+
+Python runs one thread of bytecode at a time, so `parallel.py` uses worker
+processes instead. Each worker holds a model copy; every step the main
+process sends the current weights and a slice of the batch to each worker,
+and averages the returned gradients weighted by each slice's target count.
+That is exactly the whole-batch gradient (tests compare it to a single
+process to 1e-12), so training runs are the same, only faster:
+
+| Run | 1 process | 4 workers | Speedup |
+| --- | --- | --- | --- |
+| one fwd+bwd, 88k-param transformer, batch 32 x 32 tokens | 6.9 s | 2.1 s | 3.3x |
+| `char_demo.py --preset small-gpt --batch-size 32`, 2 epochs | 1152 tok/s | 2809 tok/s | 2.4x |
+
+The small preset gains less because copying weights and gradients is a
+bigger share of a cheap step. Use `--workers 4` with `char_demo.py`.
+
 ## Where The Time Goes Now
 
 Profiling `small-gpt` fwd+bwd shows about two thirds of the time inside

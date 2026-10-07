@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from time import perf_counter
 
@@ -20,6 +20,7 @@ from metrics import (
 )
 from nn import Module
 from optim import SGD, TensorAdam, TensorSGD
+from parallel import DataParallel, sequence_loss
 from tensor import Tensor, no_grad
 from datasets import TinyDataset
 
@@ -424,9 +425,15 @@ def train_tensor_sequence_multiclass_dataset(
     weight_decay_min_ndim: int | None = None,
     max_grad_norm: float | None = None,
     lr_schedule: Callable[[int], float] | None = None,
+    workers: int = 1,
     epoch_callback: Callable[[int, TrainingSummary], None] | None = None,
 ) -> TrainingSummary:
-    """Train a sequence multiclass model on batched token targets."""
+    """Train a sequence multiclass model on batched token targets.
+
+    With ``workers`` > 1, each batch's gradient is computed by that many
+    worker processes (see parallel.py); the result is the same gradient,
+    just computed on more CPU cores.
+    """
 
     if epochs <= 0:
         raise ValueError("epochs must be positive")
@@ -443,64 +450,73 @@ def train_tensor_sequence_multiclass_dataset(
     history = []
     start = perf_counter()
 
-    for epoch in range(epochs):
-        batch_seed = None if seed is None else seed + epoch
-        for xs, ys in dataset.batches(batch_size, shuffle=shuffle, seed=batch_seed):
-            inputs = Tensor.from_list(xs)
-            targets = Tensor.from_list(ys)
-            logits = _sequence_logits(model, inputs)
-            flat_logits = _flatten_sequence_logits(logits)
-            flat_targets = _flatten_sequence_targets(targets)
-            loss = softmax_cross_entropy(flat_logits, flat_targets)
+    parallel_context = (
+        DataParallel(model, sequence_loss, workers=workers)
+        if workers > 1
+        else nullcontext()
+    )
+    with parallel_context as parallel:
+        for epoch in range(epochs):
+            batch_seed = None if seed is None else seed + epoch
+            for xs, ys in dataset.batches(batch_size, shuffle=shuffle, seed=batch_seed):
+                if lr_schedule is not None:
+                    optimizer.lr = lr_schedule(len(history))
+                optimizer.zero_grad()
+                if parallel is not None:
+                    loss_value = parallel.loss_and_gradients(xs, ys)
+                else:
+                    inputs = Tensor.from_list(xs)
+                    targets = Tensor.from_list(ys)
+                    logits = _sequence_logits(model, inputs)
+                    flat_logits = _flatten_sequence_logits(logits)
+                    flat_targets = _flatten_sequence_targets(targets)
+                    loss = softmax_cross_entropy(flat_logits, flat_targets)
+                    loss.backward()
+                    loss_value = loss[0]
+                optimizer.step()
 
-            if lr_schedule is not None:
-                optimizer.lr = lr_schedule(len(history))
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                history.append(loss_value)
 
-            history.append(loss[0])
-
-        if epoch_callback is not None:
-            epoch_elapsed = perf_counter() - start
-            train_eval = evaluate_tensor_sequence_multiclass_dataset(
-                model,
-                dataset,
-                batch_size=batch_size,
-            )
-            validation_eval = (
-                None
-                if validation_dataset is None
-                else evaluate_tensor_sequence_multiclass_dataset(
+            if epoch_callback is not None:
+                epoch_elapsed = perf_counter() - start
+                train_eval = evaluate_tensor_sequence_multiclass_dataset(
                     model,
-                    validation_dataset,
+                    dataset,
                     batch_size=batch_size,
                 )
-            )
-            epoch_summary = TrainingSummary(
-                history=history[:],
-                elapsed_seconds=epoch_elapsed,
-                accuracy=train_eval.accuracy,
-                validation_accuracy=(
+                validation_eval = (
                     None
-                    if validation_eval is None
-                    else validation_eval.accuracy
-                ),
-                evaluation_loss=train_eval.loss,
-                validation_loss=(
-                    None
-                    if validation_eval is None
-                    else validation_eval.loss
-                ),
-                examples_seen=train_eval.examples_seen * (epoch + 1),
-                confusion_matrix=train_eval.confusion_matrix,
-                validation_confusion_matrix=(
-                    None
-                    if validation_eval is None
-                    else validation_eval.confusion_matrix
-                ),
-            )
-            epoch_callback(epoch + 1, epoch_summary)
+                    if validation_dataset is None
+                    else evaluate_tensor_sequence_multiclass_dataset(
+                        model,
+                        validation_dataset,
+                        batch_size=batch_size,
+                    )
+                )
+                epoch_summary = TrainingSummary(
+                    history=history[:],
+                    elapsed_seconds=epoch_elapsed,
+                    accuracy=train_eval.accuracy,
+                    validation_accuracy=(
+                        None
+                        if validation_eval is None
+                        else validation_eval.accuracy
+                    ),
+                    evaluation_loss=train_eval.loss,
+                    validation_loss=(
+                        None
+                        if validation_eval is None
+                        else validation_eval.loss
+                    ),
+                    examples_seen=train_eval.examples_seen * (epoch + 1),
+                    confusion_matrix=train_eval.confusion_matrix,
+                    validation_confusion_matrix=(
+                        None
+                        if validation_eval is None
+                        else validation_eval.confusion_matrix
+                    ),
+                )
+                epoch_callback(epoch + 1, epoch_summary)
 
     elapsed_seconds = perf_counter() - start
     train_eval = evaluate_tensor_sequence_multiclass_dataset(

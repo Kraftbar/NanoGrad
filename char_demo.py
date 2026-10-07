@@ -56,6 +56,7 @@ DEFAULT_OPTIONS = {
     "batch_size": 8,
     "lr": 0.2,
     "warmup_steps": 0,
+    "workers": 1,
     "min_lr": None,
     "no_shuffle": False,
     "optimizer": "sgd",
@@ -208,6 +209,7 @@ def run(args: argparse.Namespace) -> None:
             batch_size=args.batch_size,
             lr=args.lr,
             lr_schedule=learning_rate_schedule(args, dataset),
+            **({"workers": args.workers} if args.model == "transformer" else {}),
             shuffle=not args.no_shuffle,
             seed=args.seed,
             optimizer_name=args.optimizer,
@@ -827,6 +829,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=DEFAULT_OPTIONS["epochs"])
     parser.add_argument("--batch-size", type=int, default=DEFAULT_OPTIONS["batch_size"])
     parser.add_argument("--lr", type=float, default=DEFAULT_OPTIONS["lr"])
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_OPTIONS["workers"],
+        help="worker processes for data-parallel transformer training",
+    )
     parser.add_argument(
         "--warmup-steps",
         type=int,

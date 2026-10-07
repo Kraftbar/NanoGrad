@@ -62,6 +62,9 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Keep implementations readable rather than over-compressed
 - [x] [Speed up the pure-Python core without hiding the math](./docs/performance.md)
 - [x] Check every tensor op's backward rule against finite differences
+- [x] GPT training building blocks: dropout, warmup + cosine learning rate,
+  prompts shorter than the context, data-parallel training on all CPU cores
+- [ ] Train a larger character GPT on full Tiny Shakespeare
 
 ### First Real Datasets
 
@@ -132,6 +135,8 @@ losses.py        # tensor loss functions
 metrics.py       # accuracy and related metrics
 nn.py            # scalar neural-network layers and activations
 optim.py         # SGD, Adam, etc.
+schedules.py     # learning-rate schedules (nanoGPT warmup + cosine)
+parallel.py      # data-parallel gradients across worker processes
 model.py         # scalar model definitions built from nn.py
 train.py         # scalar and tensor training loops
 demo.py          # scalar autograd training demo
