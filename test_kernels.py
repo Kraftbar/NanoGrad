@@ -134,6 +134,13 @@ class KernelBackendTests(unittest.TestCase):
         for p, q in zip(python, c):
             self.assertListsClose(p, q)
 
+    def test_sum_repeated_agrees(self) -> None:
+        x = values(2 * 3 * 4, 27)
+        for outer, size, inner in ((2, 3, 4), (6, 4, 1), (1, 24, 1), (24, 1, 1)):
+            python, c = self.run_both(lambda: kernels.sum_repeated(x, outer=outer, size=size, inner=inner))
+            self.assertListsClose(python, c)
+        self.assertAlmostEqual(python[0], sum(x))
+
     def test_relu_agrees(self) -> None:
         x, grad = values(40, 25), values(40, 26)
         python, c = self.run_both(lambda: kernels.relu(x))

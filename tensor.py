@@ -638,15 +638,8 @@ def _reduce_to_shape(
         return grad
     block = _repeated_block(out_shape, source_shape)
     if block is not None:
-        # Source value s received grad at positions (o * size + s) * inner + i.
         outer, inner = block
-        size = _numel(source_shape)
-        if inner == 1:
-            return [sum(grad[s::size]) for s in range(size)]
-        return [
-            sum(sum(grad[(o * size + s) * inner : (o * size + s + 1) * inner]) for o in range(outer))
-            for s in range(size)
-        ]
+        return kernels.sum_repeated(grad, outer=outer, size=_numel(source_shape), inner=inner)
     source_grad = [0.0] * _numel(source_shape)
     for index, value in zip(_broadcast_index_map(out_shape, source_shape), grad):
         source_grad[index] += value

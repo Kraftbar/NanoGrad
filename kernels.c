@@ -334,3 +334,21 @@ void relu_backward(const double *x, const double *grad, double *dx, long count)
 {
     for (long i = 0; i < count; i++) dx[i] = x[i] > 0.0 ? grad[i] : 0.0;
 }
+
+/*
+ * The backward pass of broadcasting a block: x holds `outer` copies of
+ * [each of `size` source values repeated `inner` times]; sum every copy of
+ * each source value back into out[s].
+ */
+void sum_repeated(const double *x, double *out, long outer, long size, long inner)
+{
+    for (long s = 0; s < size; s++) out[s] = 0.0;
+    for (long o = 0; o < outer; o++) {
+        for (long s = 0; s < size; s++) {
+            const double *run = x + (o * size + s) * inner;
+            double total = 0.0;
+            for (long i = 0; i < inner; i++) total += run[i];
+            out[s] += total;
+        }
+    }
+}

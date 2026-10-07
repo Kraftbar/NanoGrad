@@ -1279,7 +1279,7 @@ class BroadcastFastPathTests(unittest.TestCase):
                 expected = [0.0] * count
                 for i, value in zip(index_map, grad):
                     expected[i] += value
-                self.assertEqual(tensor_module._reduce_to_shape(grad, out_shape, source_shape), expected)
+                self.assertEqual(list(tensor_module._reduce_to_shape(grad, out_shape, source_shape)), expected)
 
 
 

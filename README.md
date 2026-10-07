@@ -16,10 +16,10 @@ and each can be read on its own:
 ```text
 +---------------------------------------------------------------------+
 | Recipes and benchmarks                                              |
-| gpt_train | mnist_compare | nanogpt_compare | benchmark | demos     |
+| gpt_train | mnist_compare | bert_compare | nanogpt_compare | bench  |
 +---------------------------------------------------------------------+
-| Models                                                              |
-| vision.py (LeNet-style CNNs) | language.py (char GPT) | geometry    |
+| Model families                                                      |
+| vision (LeNet) | resnet | vit | language (GPT) | bert | geometry    |
 +---------------------------------------------------------------------+
 | Layers, losses, optimizers, training                                |
 | tensor_nn | losses | optim | schedules | train | parallel           |
@@ -42,6 +42,13 @@ The bottom split keeps the code readable without giving up speed:
   `kernels.py` picks one, and `test_kernels.py` checks that they agree.
 - With the C kernels on, tensors keep their values in C arrays, so data
   goes from one kernel to the next without being copied through Python.
+
+The model families share everything below them. A ResNet, a vision
+transformer and a BERT-style encoder needed only a few new pieces in the
+lower layers (padded and strided convolution, batch norm, ReLU, a switch to
+turn off causal masking); the rest is reuse. Each family is checked against
+PyTorch running the same architecture from the same weights
+(`torch_twin.py`): see [docs/benchmarks.md](./docs/benchmarks.md).
 
 Measurements of where the time goes, and how far the stack is from PyTorch,
 are in [docs/benchmarks.md](./docs/benchmarks.md).
@@ -89,6 +96,8 @@ are in [docs/benchmarks.md](./docs/benchmarks.md).
 - [x] Move matrix products, im2col, pooling, LayerNorm, GELU, softmax and
   tanh into optional C kernels (pure Python stays the reference)
 - [x] [Benchmark against PyTorch: LeNet on MNIST and op by op](./docs/benchmarks.md)
+- [x] [ResNet and ViT on MNIST, and a BERT-style encoder on Tiny Shakespeare,
+  each trained identically to PyTorch](./docs/benchmarks.md#model-families)
 - [x] Keep tensors in C arrays between kernels, so data stops being copied
   to and from Python lists at every op
 
@@ -169,8 +178,13 @@ train.py         # scalar and tensor training loops
 demo.py          # scalar autograd training demo
 tensor_demo.py   # tensor math and tensor-autograd demos
 benchmark.py     # op-by-op timing against PyTorch (DeepBench-style)
-mnist_compare.py # LeNet on MNIST in NanoGrad and PyTorch, same weights and batches
+mnist_compare.py # LeNet / ResNet / ViT on MNIST in NanoGrad and PyTorch
+bert_compare.py  # the BERT-style encoder on Tiny Shakespeare in both
 vision.py        # reusable small CNN model implementations
+resnet.py        # a small residual network (ResNet) with batch norm
+vit.py           # a tiny vision transformer (ViT)
+bert.py          # a tiny BERT-style encoder and its masking recipe
+torch_twin.py    # runs a NanoGrad architecture in PyTorch with the same weights
 mnist_demo.py    # local-file MNIST MLP demo
 mnist_cnn_demo.py # local-file MNIST CNN demo
 mnist_smoke_demo.py # no-download MNIST-style CNN smoke demo
@@ -237,7 +251,8 @@ PyTorch need it:
 ```bash
 python3 -m venv .venv && .venv/bin/pip install torch
 .venv/bin/python nanogpt_compare.py --text-file data/tinyshakespeare/input.txt
-.venv/bin/python mnist_compare.py --epochs 1
+.venv/bin/python mnist_compare.py --epochs 1 --model resnet
+.venv/bin/python bert_compare.py --steps 500
 .venv/bin/python benchmark.py --torch
 ```
 

@@ -122,6 +122,7 @@ def _build_library() -> ctypes.CDLL | None:
     library.adam_update.argtypes = [pointer] * 5 + [count] + [ctypes.c_double] * 7
     library.tanh_forward.argtypes = [pointer, pointer, count]
     library.relu_forward.argtypes = [pointer, pointer, count]
+    library.sum_repeated.argtypes = [pointer, pointer, count, count, count]
     library.relu_backward.argtypes = [pointer, pointer, pointer, count]
     library.tanh_backward.argtypes = [pointer, pointer, pointer, count]
     for name in ("window_mean", "window_mean_backward"):
@@ -287,6 +288,14 @@ def adam_update(w, grad, m, v, *hyperparameters) -> tuple[array, array, array]:
     new_w = zeros(len(w))
     library.adam_update(*map(_buffer, buffers), _buffer(new_w), len(w), *hyperparameters)
     return new_w, buffers[2], buffers[3]
+
+
+def sum_repeated(x: list[float], outer: int, size: int, inner: int) -> array:
+    if len(x) != outer * size * inner:
+        raise ValueError("sum_repeated needs outer * size * inner values")
+    x_buffer, out = _doubles(x), zeros(size)
+    library.sum_repeated(_buffer(x_buffer), _buffer(out), outer, size, inner)
+    return out
 
 
 def relu(x: list[float]) -> array:

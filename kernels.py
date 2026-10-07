@@ -194,6 +194,14 @@ def adam_update(
     return kernel(w, grad, m, v, grad_scale, beta1, beta2, decay, step_size, sqrt_correction, eps)
 
 
+def sum_repeated(x: list[float], *, outer: int, size: int, inner: int) -> list[float]:
+    """Undo a block broadcast for gradients: ``x`` is ``outer`` copies of each
+    of ``size`` values repeated ``inner`` times; return the ``size`` sums."""
+
+    kernel = kernels_c.sum_repeated if BACKEND == "c" else reference.sum_repeated
+    return kernel(x, outer, size, inner)
+
+
 def relu(x: list[float]) -> list[float]:
     return (kernels_c.relu if BACKEND == "c" else reference.relu)(x)
 

@@ -192,6 +192,16 @@ def adam_update(
     return new_w, m, v
 
 
+def sum_repeated(x: list[float], outer: int, size: int, inner: int) -> list[float]:
+    # Source value s appears at positions (o * size + s) * inner + i.
+    if inner == 1:
+        return [sum(x[s::size]) for s in range(size)]
+    return [
+        sum(sum(x[(o * size + s) * inner : (o * size + s + 1) * inner]) for o in range(outer))
+        for s in range(size)
+    ]
+
+
 def relu(x: list[float]) -> list[float]:
     return [value if value > 0.0 else 0.0 for value in x]
 
