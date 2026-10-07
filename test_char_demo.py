@@ -7,8 +7,6 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from char_demo import (
-    _argmax,
-    _sample_from_logits,
     apply_checkpoint_config,
     apply_preset,
     build_dataset,
@@ -25,6 +23,7 @@ from char_demo import (
     split_train_validation_text,
     text_source,
 )
+from sampling import argmax as _argmax, sample_from_logits as _sample_from_logits
 from language import (
     CharBigramModel,
     CharEmbeddingModel,

@@ -5,13 +5,13 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import random
 import sys
 from pathlib import Path
 
 from language import CharBigramModel, CharEmbeddingModel, CharTransformerModel
 from metrics import perplexity
+from sampling import select_next_index
 from tensor import Tensor, no_grad
 from tensor_nn import TensorModule
 from text import (
@@ -677,7 +677,7 @@ def generate_text(
         context = vocab.encode(text[-context_size:])
         with no_grad():
             logits = model(_generation_inputs(context, vocab, input_mode=input_mode))
-        next_index = _select_next_index(
+        next_index = select_next_index(
             logits.data[: len(vocab)],
             sample_mode=sample_mode,
             temperature=temperature,
@@ -736,76 +736,6 @@ def print_generated_samples(samples: list[str]) -> None:
         return
     for index, sample in enumerate(samples, start=1):
         print(f"generated {index}:   {sample!r}")
-
-
-def _select_next_index(
-    values: list[float],
-    *,
-    sample_mode: str,
-    temperature: float,
-    top_k: int | None,
-    rng: random.Random | None,
-) -> int:
-    if sample_mode == "greedy":
-        return _argmax(values)
-    if sample_mode == "sample":
-        return _sample_from_logits(
-            values,
-            temperature=temperature,
-            top_k=top_k,
-            rng=rng,
-        )
-    raise ValueError(f"unknown sample mode: {sample_mode}")
-
-
-def _argmax(values: list[float]) -> int:
-    if not values:
-        raise ValueError("argmax values must not be empty")
-    best_index = 0
-    best_value = values[0]
-    for index, value in enumerate(values[1:], start=1):
-        if value > best_value:
-            best_index = index
-            best_value = value
-    return best_index
-
-
-def _sample_from_logits(
-    values: list[float],
-    *,
-    temperature: float = 1.0,
-    top_k: int | None = None,
-    rng: random.Random | None = None,
-) -> int:
-    if not values:
-        raise ValueError("sample values must not be empty")
-    if temperature <= 0.0:
-        raise ValueError("temperature must be positive")
-    if top_k is not None and top_k <= 0:
-        raise ValueError("top_k must be positive")
-
-    generator = rng or random.Random()
-    indexed_values = list(enumerate(values))
-    if top_k is not None:
-        indexed_values = sorted(
-            indexed_values,
-            key=lambda item: item[1],
-            reverse=True,
-        )[:top_k]
-
-    row_max = max(value for _index, value in indexed_values)
-    weights = [
-        math.exp((value - row_max) / temperature)
-        for _index, value in indexed_values
-    ]
-    total = sum(weights)
-    threshold = generator.random() * total
-    cumulative = 0.0
-    for (index, _value), weight in zip(indexed_values, weights):
-        cumulative += weight
-        if threshold <= cumulative:
-            return index
-    return indexed_values[-1][0]
 
 
 def build_dataset(
