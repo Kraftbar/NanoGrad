@@ -290,6 +290,7 @@ def train_tensor_multiclass_dataset(
     weight_decay: float = 0.0,
     weight_decay_min_ndim: int | None = None,
     max_grad_norm: float | None = None,
+    lr_schedule: Callable[[int], float] | None = None,
     epoch_callback: Callable[[int, TrainingSummary], None] | None = None,
 ) -> TrainingSummary:
     """Train a tensor multiclass model on TinyDataset batches."""
@@ -316,6 +317,8 @@ def train_tensor_multiclass_dataset(
             logits = model(inputs)
             loss = softmax_cross_entropy(logits, targets)
 
+            if lr_schedule is not None:
+                optimizer.lr = lr_schedule(len(history))
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -418,6 +421,7 @@ def train_tensor_sequence_multiclass_dataset(
     weight_decay: float = 0.0,
     weight_decay_min_ndim: int | None = None,
     max_grad_norm: float | None = None,
+    lr_schedule: Callable[[int], float] | None = None,
     epoch_callback: Callable[[int, TrainingSummary], None] | None = None,
 ) -> TrainingSummary:
     """Train a sequence multiclass model on batched token targets."""
@@ -446,6 +450,8 @@ def train_tensor_sequence_multiclass_dataset(
             flat_targets = _flatten_sequence_targets(targets)
             loss = softmax_cross_entropy(flat_logits, flat_targets)
 
+            if lr_schedule is not None:
+                optimizer.lr = lr_schedule(len(history))
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

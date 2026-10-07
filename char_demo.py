@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import random
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 from language import CharBigramModel, CharEmbeddingModel, CharTransformerModel
 from metrics import perplexity
 from sampling import select_next_index
+from schedules import warmup_cosine
 from tensor import Tensor, no_grad
 from tensor_nn import TensorModule
 from char_checkpoint import (
@@ -51,6 +53,8 @@ DEFAULT_OPTIONS = {
     "epochs": 200,
     "batch_size": 8,
     "lr": 0.2,
+    "warmup_steps": 0,
+    "min_lr": None,
     "no_shuffle": False,
     "optimizer": "sgd",
     "weight_decay": 0.0,
@@ -201,6 +205,7 @@ def run(args: argparse.Namespace) -> None:
             epochs=args.epochs,
             batch_size=args.batch_size,
             lr=args.lr,
+            lr_schedule=learning_rate_schedule(args, dataset),
             shuffle=not args.no_shuffle,
             seed=args.seed,
             optimizer_name=args.optimizer,
@@ -630,6 +635,25 @@ def print_generated_samples(samples: list[str]) -> None:
         print(f"generated {index}:   {sample!r}")
 
 
+def learning_rate_schedule(args: argparse.Namespace, dataset):
+    """nanoGPT-style warmup + cosine decay over the whole run, or None.
+
+    Off by default (constant --lr). Setting --warmup-steps or --min-lr turns
+    it on; the decay ends at the last training step.
+    """
+
+    if args.warmup_steps == 0 and args.min_lr is None:
+        return None
+    steps_per_epoch = math.ceil(len(dataset) / args.batch_size)
+    total_steps = args.epochs * steps_per_epoch
+    return warmup_cosine(
+        max_lr=args.lr,
+        min_lr=args.lr if args.min_lr is None else args.min_lr,
+        warmup_steps=args.warmup_steps,
+        decay_steps=max(total_steps - 1, args.warmup_steps + 1),
+    )
+
+
 def build_dataset(
     text: str,
     args: argparse.Namespace,
@@ -790,6 +814,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=DEFAULT_OPTIONS["epochs"])
     parser.add_argument("--batch-size", type=int, default=DEFAULT_OPTIONS["batch_size"])
     parser.add_argument("--lr", type=float, default=DEFAULT_OPTIONS["lr"])
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=DEFAULT_OPTIONS["warmup_steps"],
+        help="linear learning-rate warmup steps (enables the cosine schedule)",
+    )
+    parser.add_argument(
+        "--min-lr",
+        type=float,
+        default=DEFAULT_OPTIONS["min_lr"],
+        help="cosine-decay the learning rate from --lr to this over the run",
+    )
     parser.add_argument("--no-shuffle", action="store_true")
     parser.add_argument(
         "--optimizer",
