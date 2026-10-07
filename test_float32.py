@@ -2,7 +2,6 @@ import random
 import unittest
 
 import kernels
-from losses import softmax_cross_entropy
 from tensor import Tensor
 
 
