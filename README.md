@@ -19,7 +19,7 @@ and each can be read on its own:
 | gpt_train | mnist_compare | bert_compare | nanogpt_compare | bench  |
 +---------------------------------------------------------------------+
 | Model families                                                      |
-| vision (LeNet) | resnet | vit | language (GPT) | bert | geometry    |
+| vision (LeNet) | resnet | vit | language (GPT) | bert | rnn (LSTM)  |
 +---------------------------------------------------------------------+
 | Layers, losses, optimizers, training                                |
 | tensor_nn | losses | optim | schedules | train | parallel           |
@@ -44,9 +44,9 @@ The bottom split keeps the code readable without giving up speed:
   goes from one kernel to the next without being copied through Python.
 
 The model families share everything below them. A ResNet, a vision
-transformer and a BERT-style encoder needed only a few new pieces in the
-lower layers (padded and strided convolution, batch norm, ReLU, a switch to
-turn off causal masking); the rest is reuse. Each family is checked against
+transformer, a BERT-style encoder and an LSTM needed only a few new pieces
+in the lower layers (padded and strided convolution, batch norm, ReLU,
+sigmoid, split, a switch to turn off causal masking); the rest is reuse. Each family is checked against
 PyTorch running the same architecture from the same weights
 (`torch_twin.py`): see [docs/benchmarks.md](./docs/benchmarks.md).
 
@@ -100,6 +100,8 @@ are in [docs/benchmarks.md](./docs/benchmarks.md).
   each trained identically to PyTorch](./docs/benchmarks.md#model-families)
 - [x] [LLM gears: BPE tokenizer, KV cache, RMSNorm, rotary embeddings,
   SwiGLU](./docs/llm_gears.md)
+- [x] Recurrent family: an LSTM matching `torch.nn.LSTM`, and char-rnn in
+  the same training recipe as the GPT (`gpt_train.py --preset baby-lstm`)
 - [x] Keep tensors in C arrays between kernels, so data stops being copied
   to and from Python lists at every op
 
@@ -187,6 +189,7 @@ resnet.py        # a small residual network (ResNet) with batch norm
 vit.py           # a tiny vision transformer (ViT)
 bert.py          # a tiny BERT-style encoder and its masking recipe
 bpe.py           # byte-level byte-pair-encoding tokenizer (GPT-2 style)
+rnn.py           # LSTM and a char-rnn language model
 torch_twin.py    # runs a NanoGrad architecture in PyTorch with the same weights
 mnist_demo.py    # local-file MNIST MLP demo
 mnist_cnn_demo.py # local-file MNIST CNN demo
