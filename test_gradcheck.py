@@ -280,5 +280,21 @@ class GradientCheckTests(unittest.TestCase):
         self.assertEqual(value.grad, [1.0])
 
 
+    def test_backward_frees_the_graph_unless_retained(self) -> None:
+        weight = random_tensor((3,), seed=18)
+        out = (weight * weight).sum()
+
+        out.backward(retain_graph=True)
+        first = weight.grad[:]
+        out.backward()
+        self.assertEqual(weight.grad, first)
+
+        with self.assertRaises(RuntimeError):
+            out.backward()
+        # A new graph from the same leaves works as usual.
+        (weight * 3.0).sum().backward()
+        self.assertEqual(weight.grad, [3.0, 3.0, 3.0])
+
+
 if __name__ == "__main__":
     unittest.main()

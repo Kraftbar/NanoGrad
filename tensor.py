@@ -1,6 +1,6 @@
 """Small tensor container, shape-checked math helpers, and tensor autograd.
 
-Everything here is plain Python lists of floats in row-major order. The file
+Tensor data is plain Python lists of floats in row-major order. The file
 reads top to bottom as:
 
 1. ``Tensor``: the container and the backward pass
@@ -16,9 +16,10 @@ Performance notes, kept deliberately simple:
 
 - Broadcasting and permutes precompute one flat "index map" per shape pair
   (cached), so the per-element work is a single list lookup.
-- Every matrix product is a table of dot products computed by one helper,
-  ``_dot_table``. Backward passes reuse the same helper:
-  ``dA = dC @ B^T`` and ``dB = A^T @ dC``.
+- Every matrix product, forward and backward (``dA = dC @ B^T``,
+  ``dB = A^T @ dC``), is one call to ``kernels.gemm``. That runs compiled C
+  when a C compiler is available and plain-Python dot products otherwise
+  (see kernels.py); both give the same numbers.
 - Convolution is "im2col": gather every image patch into a row, then do one
   dot-product table against the flattened kernels.
 """
@@ -32,6 +33,8 @@ from contextlib import contextmanager
 from functools import lru_cache
 from operator import mul
 from typing import Callable, NamedTuple
+
+import kernels
 
 
 Number = int | float
@@ -234,11 +237,22 @@ class Tensor:
         if self.requires_grad:
             self.grad = [0.0] * len(self.data)
 
-    def backward(self, grad: Tensor | Sequence[Number] | None = None) -> None:
+    def backward(
+        self,
+        grad: Tensor | Sequence[Number] | None = None,
+        *,
+        retain_graph: bool = False,
+    ) -> None:
         """Fill ``.grad`` on every tensor this one was computed from.
 
-        Gradients are reset before the pass, so calling backward twice gives
-        the same result rather than accumulating.
+        Gradients are reset before the pass, so the leaves end up with this
+        output's gradient rather than an accumulation over calls.
+
+        Afterwards the graph is freed (as in PyTorch): each intermediate
+        result drops its backward function and its links to its inputs.
+        Those links form reference cycles, so without this every step's
+        graph would linger until Python's cycle collector ran. Pass
+        ``retain_graph=True`` to call backward on the same graph again.
         """
 
         topo = _topological_order(self)
@@ -260,9 +274,22 @@ class Tensor:
             if node.requires_grad:
                 node._backward()
 
+        if not retain_graph:
+            for node in topo:
+                if node._prev:
+                    node._prev = set()
+                    node._backward = _freed_backward
+
 
 def _no_backward() -> None:
     return None
+
+
+def _freed_backward() -> None:
+    raise RuntimeError(
+        "this graph was already freed by backward(); "
+        "pass retain_graph=True to the first backward() to reuse it"
+    )
 
 
 def _topological_order(root: Tensor) -> list[Tensor]:
@@ -374,7 +401,9 @@ def _add_grad(tensor: Tensor, grad: Sequence[Number]) -> None:
     if len(grad) != len(tensor.data):
         raise ValueError("gradient length does not match tensor data")
     if tensor.grad is None:
-        tensor.grad = [float(value) for value in grad]
+        # Gradient lists are never modified in place (accumulating builds a
+        # new list), so a list can be adopted as-is instead of copied.
+        tensor.grad = grad if type(grad) is list else [float(value) for value in grad]
         return
     tensor.grad = [
         current + value
@@ -753,47 +782,50 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
     """
 
     plan = _matmul_plan(left.shape, right.shape)
-    batches, rows, shared, cols = plan.batches, plan.rows, plan.shared, plan.cols
-    left_step, right_step = plan.left_step, plan.right_step
-    left_size = rows * shared
-    right_size = shared * cols
-    out_size = rows * cols
-    left_data = left.data
-    right_data = right.data
+    sizes = dict(batches=plan.batches, a_step=plan.left_step, b_step=plan.right_step)
+    out_step = plan.rows * plan.cols
 
-    data: list[float] = []
-    for batch in range(batches):
-        a = left_data[batch * left_step : batch * left_step + left_size]
-        b = right_data[batch * right_step : batch * right_step + right_size]
-        data.extend(_dot_table(_rows(a, shared), _columns(b, cols)))
-
+    data = kernels.gemm(
+        left.data,
+        right.data,
+        m=plan.rows,
+        k=plan.shared,
+        n=plan.cols,
+        c_step=out_step,
+        **sizes,
+    )
     out = _op_result(data, plan.out_shape, (left, right), "matmul")
 
     def _backward() -> None:
         grad = _grad_data(out)
-        left_grad = [0.0] * left.numel if left.requires_grad else None
-        right_grad = [0.0] * right.numel if right.requires_grad else None
-
-        for batch in range(batches):
-            a_start = batch * left_step
-            b_start = batch * right_step
-            a = left_data[a_start : a_start + left_size]
-            b = right_data[b_start : b_start + right_size]
-            d_c = grad[batch * out_size : (batch + 1) * out_size]
-
-            if left_grad is not None:
-                # dA = dC @ B^T: rows of dC dotted with rows of B.
-                d_a = _dot_table(_rows(d_c, cols), _rows(b, cols))
-                _accumulate(left_grad, a_start, d_a)
-            if right_grad is not None:
-                # dB = A^T @ dC: columns of A dotted with columns of dC.
-                d_b = _dot_table(_columns(a, shared), _columns(d_c, cols))
-                _accumulate(right_grad, b_start, d_b)
-
-        if left_grad is not None:
-            _add_grad(left, left_grad)
-        if right_grad is not None:
-            _add_grad(right, right_grad)
+        if left.requires_grad:
+            # dA = dC @ B^T. A shared left matrix (step 0) sums over batches.
+            _add_grad(left, kernels.gemm(
+                grad,
+                right.data,
+                batches=plan.batches,
+                m=plan.rows,
+                k=plan.cols,
+                n=plan.shared,
+                a_step=out_step,
+                b_step=plan.right_step,
+                c_step=plan.left_step,
+                trans_b=True,
+            ))
+        if right.requires_grad:
+            # dB = A^T @ dC. A shared right matrix (step 0) sums over batches.
+            _add_grad(right, kernels.gemm(
+                left.data,
+                grad,
+                batches=plan.batches,
+                m=plan.shared,
+                k=plan.rows,
+                n=plan.cols,
+                a_step=plan.left_step,
+                b_step=out_step,
+                c_step=plan.right_step,
+                trans_a=True,
+            ))
 
     out._backward = _backward
     return out
