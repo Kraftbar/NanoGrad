@@ -28,17 +28,20 @@ and each can be read on its own:
 | tensor.py: shapes, broadcasting, every op's forward + backward rule |
 +---------------------------------------------------------------------+
 | Kernels: the inner loops                                            |
-| kernels.py: pure-Python reference  <->  kernels.c: the same in C    |
+| kernels_reference.py (Python, to read) <-> kernels.c (C, to run)    |
 +---------------------------------------------------------------------+
 ```
 
 The bottom split keeps the code readable without giving up speed:
 
 - `tensor.py` says what an op computes and how its gradient flows.
-- `kernels.py` holds the loops that do the heavy work (matrix products,
-  im2col, pooling, softmax, LayerNorm, GELU, tanh). Each one is written
-  twice: a short Python version to read, and a C version to run.
-  `test_kernels.py` checks that they agree.
+- The kernels are the loops that do the heavy work (matrix products,
+  im2col, pooling, softmax, LayerNorm, GELU, tanh, elementwise math, the
+  Adam update). Each one is written twice: a short Python version to read
+  (`kernels_reference.py`) and a C version to run (`kernels.c`).
+  `kernels.py` picks one, and `test_kernels.py` checks that they agree.
+- With the C kernels on, tensors keep their values in C arrays, so data
+  goes from one kernel to the next without being copied through Python.
 
 Measurements of where the time goes, and how far the stack is from PyTorch,
 are in [docs/benchmarks.md](./docs/benchmarks.md).
@@ -86,7 +89,7 @@ are in [docs/benchmarks.md](./docs/benchmarks.md).
 - [x] Move matrix products, im2col, pooling, LayerNorm, GELU, softmax and
   tanh into optional C kernels (pure Python stays the reference)
 - [x] [Benchmark against PyTorch: LeNet on MNIST and op by op](./docs/benchmarks.md)
-- [ ] Keep tensors in C arrays between kernels, so data stops being copied
+- [x] Keep tensors in C arrays between kernels, so data stops being copied
   to and from Python lists at every op
 
 ### First Real Datasets
@@ -181,7 +184,10 @@ char_compare.py  # compare tiny character language-model configs
 char_sample_grid.py # sweep checkpoint sampling settings into CSVs
 nanogpt_compare.py # train NanoGrad and nanoGPT side by side (needs torch)
 gpt_train.py     # nanoGPT-style step-based character GPT training
-kernels.py       # compute kernels: compiled C (kernels.c) or pure Python
+kernels.py       # compute kernels: picks the C or pure-Python backend
+kernels_reference.py # the pure-Python kernels, written to be read
+kernels.c        # the same kernels in C
+kernels_c.py     # builds kernels.c and calls it through ctypes
 language_benchmark.py # tiny transformer timing check
 linalg.py        # small list-of-lists linear algebra (solve, eigen, SVD)
 geometry.py      # pinhole camera, rotations, triangulation, PnP, essential matrix
