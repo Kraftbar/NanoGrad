@@ -89,3 +89,51 @@ def speculative_generate(
         else:                                                 # all accepted: one more from the target
             tokens.append(_sample(targets[k], rng))
     return tokens[: len(prompt) + length], stats
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Compare plain sampling from the target with speculative decoding."""
+
+    import argparse
+    from time import perf_counter
+
+    from quantize import load_run
+    from text import CharVocab
+
+    parser = argparse.ArgumentParser(description="speculative decoding with two gpt_train.py runs")
+    parser.add_argument("target_run")
+    parser.add_argument("draft_run")
+    parser.add_argument("--length", type=int, default=300)
+    parser.add_argument("--lookahead", type=int, default=4)
+    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--seed", type=int, default=0)
+    args = parser.parse_args(argv)
+
+    target, _, config = load_run(args.target_run)
+    draft, _, _ = load_run(args.draft_run)
+    vocab = CharVocab.from_text(open(config.text_file, encoding="utf-8").read())
+    prompt = vocab.encode("\n")
+
+    start = perf_counter()
+    rng = random.Random(args.seed)
+    plain = list(prompt)
+    for _ in range(args.length):                     # the target alone, one pass per token
+        plain.append(_sample(_distributions(target, plain, 1, config.context_size, args.temperature)[0], rng))
+    plain_seconds = perf_counter() - start
+
+    start = perf_counter()
+    tokens, stats = speculative_generate(
+        target, draft, prompt, length=args.length, context_size=config.context_size,
+        lookahead=args.lookahead, temperature=args.temperature, rng=random.Random(args.seed),
+    )
+    seconds = perf_counter() - start
+    print(f"target alone: {args.length} target passes, {plain_seconds:.1f} s")
+    print(f"speculative:  {stats['target_passes']} target passes, {seconds:.1f} s; "
+          f"{stats['accepted']} of {stats['drafted']} drafted tokens accepted "
+          f"({100 * stats['accepted'] / stats['drafted']:.0f}%), lookahead {args.lookahead}")
+    print("-" * 60)
+    print(vocab.decode(tokens))
+
+
+if __name__ == "__main__":
+    main()
