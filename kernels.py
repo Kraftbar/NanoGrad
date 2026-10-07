@@ -151,6 +151,21 @@ def layer_norm_rows_backward(
     return kernel(grad, x_hat, inv_std, weight, width, need_dx)
 
 
+def rms_norm_rows(x: list[float], weight: list[float], width: int, eps: float) -> tuple[list[float], list[float]]:
+    """RMSNorm of every row: returns (y, 1 / rms per row)."""
+
+    return (kernels_c.rms_norm_rows if BACKEND == "c" else reference.rms_norm_rows)(x, weight, width, eps)
+
+
+def rms_norm_rows_backward(
+    grad: list[float], x: list[float], inv_rms: list[float], weight: list[float], width: int,
+) -> tuple[list[float], list[float]]:
+    """Returns (dx, dweight), dweight summed over rows."""
+
+    kernel = kernels_c.rms_norm_rows_backward if BACKEND == "c" else reference.rms_norm_rows_backward
+    return kernel(grad, x, inv_rms, weight, width)
+
+
 def gather_indexed(image: list[float], index: Sequence[int], *, batches: int, image_size: int) -> list[float]:
     """For every image in the batch, read the pixels at ``index`` (im2col)."""
 

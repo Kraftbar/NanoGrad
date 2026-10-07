@@ -352,3 +352,39 @@ void sum_repeated(const double *x, double *out, long outer, long size, long inne
         }
     }
 }
+
+/*
+ * RMSNorm over each contiguous row of `width` values (LLaMA's LayerNorm):
+ *     r = 1 / sqrt(mean(x^2) + eps),   y = x * r * weight
+ * Saves r per row. Backward, with g = dy * weight:
+ *     dx = r * (g - x * r^2 * mean(g * x)),   dweight += dy * x * r
+ */
+void rms_norm_rows(const double *x, const double *weight, double *y, double *inv_rms,
+                   long rows, long width, double eps)
+{
+    for (long r = 0; r < rows; r++) {
+        const double *in = x + r * width;
+        double squares = 0.0;
+        for (long i = 0; i < width; i++) squares += in[i] * in[i];
+        double scale = 1.0 / sqrt(squares / width + eps);
+        inv_rms[r] = scale;
+        for (long i = 0; i < width; i++) y[r * width + i] = in[i] * scale * weight[i];
+    }
+}
+
+void rms_norm_rows_backward(const double *grad, const double *x, const double *inv_rms,
+                            const double *weight, double *dx, double *dweight,
+                            long rows, long width)
+{
+    for (long r = 0; r < rows; r++) {
+        const double *dy = grad + r * width, *in = x + r * width;
+        double scale = inv_rms[r], mean_g_x = 0.0;
+        for (long i = 0; i < width; i++) {
+            dweight[i] += dy[i] * in[i] * scale;
+            mean_g_x += dy[i] * weight[i] * in[i];
+        }
+        mean_g_x /= width;
+        for (long i = 0; i < width; i++)
+            dx[r * width + i] = scale * (dy[i] * weight[i] - in[i] * scale * scale * mean_g_x);
+    }
+}

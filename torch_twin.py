@@ -21,9 +21,9 @@ import torch
 import torch.nn.functional as F
 
 from bert import TinyBERT
-from language import CausalSelfAttention, TokenPositionEmbedding, TransformerBlock
+from language import CausalSelfAttention, CharTransformerModel, TokenPositionEmbedding, TransformerBlock
 from resnet import ResidualBlock, SmallResNet
-from tensor_nn import TensorBatchNorm2d, TensorConv2D, TensorLayerNorm, TensorLinear, TensorModule
+from tensor_nn import TensorBatchNorm2d, TensorConv2D, TensorLayerNorm, TensorLinear, TensorModule, TensorRMSNorm
 from vision import TwoConvCNN
 from vit import TinyViT
 
@@ -65,6 +65,8 @@ class TorchTwin:
             (ResidualBlock, self._residual_block),
             (TinyViT, self._tiny_vit),
             (TinyBERT, self._tiny_bert),
+            (CharTransformerModel, self._char_transformer),
+            (TensorRMSNorm, self._rms_norm),
             (TokenPositionEmbedding, self._token_position),
             (TransformerBlock, self._transformer_block),
             (CausalSelfAttention, self._attention),
@@ -95,7 +97,26 @@ class TorchTwin:
 
     def _token_position(self, layer: TokenPositionEmbedding, indices):
         tokens = self._p(layer.token_embedding.weight)[indices]
+        if layer.position_embedding is None:
+            return tokens
         return tokens + self._p(layer.position_embedding.weight)[: indices.shape[-1]]
+
+    def _rms_norm(self, layer: TensorRMSNorm, x):
+        return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + layer.eps) * self._p(layer.weight)
+
+    def _norm(self, layer, x):
+        return self._rms_norm(layer, x) if isinstance(layer, TensorRMSNorm) else self._layer_norm(layer, x)
+
+    @staticmethod
+    def _rope(x, base: float = 10000.0):
+        """LLaMA's formulation: view each (even, odd) pair as a complex number
+        and multiply by e^(i * position * base^(-2k/D))."""
+
+        length, width = x.shape[-2:]
+        frequencies = base ** (-torch.arange(0, width, 2, dtype=x.dtype) / width)
+        angles = torch.outer(torch.arange(length, dtype=x.dtype), frequencies)
+        pairs = torch.view_as_complex(x.reshape(*x.shape[:-1], width // 2, 2).contiguous())
+        return torch.view_as_real(pairs * torch.polar(torch.ones_like(angles), angles)).reshape(x.shape)
 
     def _layer_norm(self, layer: TensorLayerNorm, x):
         return F.layer_norm(x, (layer.normalized_shape,), self._p(layer.weight), self._p(layer.bias), layer.eps)
@@ -105,6 +126,8 @@ class TorchTwin:
         heads = []
         for query, key, value in zip(layer.queries, layer.keys, layer.values):
             q, k, v = self._linear(query, x), self._linear(key, x), self._linear(value, x)
+            if layer.rotary:
+                q, k = self._rope(q), self._rope(k)
             scores = q @ k.transpose(1, 2) * (1 / math.sqrt(layer.head_dim))
             if layer.causal:
                 future = torch.ones(context, context, dtype=torch.bool).triu(1)
@@ -113,9 +136,13 @@ class TorchTwin:
         return self._linear(layer.projection, torch.cat(heads, dim=-1))
 
     def _transformer_block(self, block: TransformerBlock, x):
-        x = x + self._attention(block.attention, self._layer_norm(block.norm1, x))
-        hidden = self._linear(block.feed_forward_in, self._layer_norm(block.norm2, x))
-        hidden = F.gelu(hidden) if block.feed_forward_activation == "gelu" else F.relu(hidden)
+        x = x + self._attention(block.attention, self._norm(block.norm1, x))
+        normed = self._norm(block.norm2, x)
+        hidden = self._linear(block.feed_forward_in, normed)
+        if block.feed_forward_activation == "swiglu":
+            hidden = F.silu(hidden) * self._linear(block.feed_forward_up, normed)
+        else:
+            hidden = F.gelu(hidden) if block.feed_forward_activation == "gelu" else F.relu(hidden)
         return x + self._linear(block.feed_forward_out, hidden)
 
     # -- models ----------------------------------------------------------
@@ -160,3 +187,11 @@ class TorchTwin:
         for block in model.blocks:
             hidden = self._transformer_block(block, hidden)
         return self._linear(model.head, self._layer_norm(model.norm, hidden))
+
+    def _char_transformer(self, model: CharTransformerModel, indices):
+        """All positions' next-token logits, like ``sequence_logits``."""
+
+        hidden = self._token_position(model.embedding, indices)
+        for block in model.blocks:
+            hidden = self._transformer_block(block, hidden)
+        return self._linear(model.projection, self._norm(model.norm, hidden))

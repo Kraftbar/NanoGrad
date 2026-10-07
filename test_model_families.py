@@ -94,8 +94,65 @@ class BertTests(unittest.TestCase):
         self.assertTrue(any(value != 0.0 for value in model.head.weight.grad))
 
 
+class LlamaPartsTests(unittest.TestCase):
+    def test_kv_cache_matches_full_forward_with_rope_rmsnorm_swiglu(self) -> None:
+        from language import CharTransformerModel
+
+        model = CharTransformerModel(11, context_size=8, embedding_dim=16, num_heads=2, num_layers=2,
+                                     feed_forward_activation="swiglu", norm="rms", positions="rope")
+        rng = random.Random(11)
+        tokens = [rng.randrange(11) for _ in range(8)]
+        with no_grad():
+            cache = model.new_cache()
+            for position, token in enumerate(tokens):
+                step = list(model.step_logits(token, position, cache).data)
+                full = list(model(Tensor.from_list([tokens[: position + 1]])).data)
+                for a, b in zip(step, full):
+                    self.assertAlmostEqual(a, b, places=12)
+
+    def test_llama_style_state_round_trip(self) -> None:
+        from language import CharTransformerModel
+
+        settings = dict(context_size=8, embedding_dim=16, num_heads=2, num_layers=1,
+                        feed_forward_activation="swiglu", norm="rms", positions="rope")
+        model, copy = CharTransformerModel(9, seed=1, **settings), CharTransformerModel(9, seed=2, **settings)
+        copy.load_state_dict(model.state_dict())
+        inputs = Tensor.from_list([[1, 2, 3, 4]])
+        self.assertEqual(list(model(inputs).data), list(copy(inputs).data))
+        gpt2_style = CharTransformerModel(9, context_size=8, embedding_dim=16, num_heads=2, num_layers=1)
+        with self.assertRaises(ValueError):
+            gpt2_style.load_state_dict(model.state_dict())
+
+
 @unittest.skipUnless(importlib.util.find_spec("torch"), "PyTorch is not installed")
 class TorchAgreementTests(unittest.TestCase):
+    def test_gpt2_and_llama_parts_match_pytorch(self) -> None:
+        import torch
+
+        from language import CharTransformerModel
+        from torch_twin import TorchTwin
+
+        for norm, positions, activation in (("layer", "learned", "gelu"), ("rms", "rope", "swiglu")):
+            with self.subTest(norm=norm, positions=positions, activation=activation):
+                model = CharTransformerModel(
+                    13, context_size=10, embedding_dim=16, num_heads=2, num_layers=2,
+                    feed_forward_activation=activation, tie_embeddings=True, init="gpt2",
+                    norm=norm, positions=positions, seed=1,
+                )
+                twin = TorchTwin(model)
+                rng = random.Random(2)
+                indices = [[rng.randrange(13) for _ in range(10)] for _ in range(3)]
+                ours = model.sequence_logits(Tensor.from_list(indices))
+                theirs = twin(torch.tensor(indices))
+                weights = [rng.uniform(-1.0, 1.0) for _ in range(ours.numel)]
+                (ours * Tensor(weights, ours.shape)).sum().backward()
+                (theirs * torch.tensor(weights, dtype=torch.float64).reshape(theirs.shape)).sum().backward()
+                for a, b in zip(ours.data, theirs.detach().reshape(-1).tolist()):
+                    self.assertAlmostEqual(a, b, places=12)
+                for parameter, tensor in zip(model.parameters(), twin.parameters):
+                    for a, b in zip(parameter.grad, tensor.grad.reshape(-1).tolist()):
+                        self.assertAlmostEqual(a, b, places=11)
+
     def test_bert_trains_like_pytorch(self) -> None:
         from bert_compare import NanoGradRunner as BertRunner
         from bert_compare import TorchRunner as BertTorchRunner

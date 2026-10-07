@@ -122,6 +122,8 @@ def _build_library() -> ctypes.CDLL | None:
     library.adam_update.argtypes = [pointer] * 5 + [count] + [ctypes.c_double] * 7
     library.tanh_forward.argtypes = [pointer, pointer, count]
     library.relu_forward.argtypes = [pointer, pointer, count]
+    library.rms_norm_rows.argtypes = [pointer] * 4 + [count, count, ctypes.c_double]
+    library.rms_norm_rows_backward.argtypes = [pointer] * 6 + [count, count]
     library.sum_repeated.argtypes = [pointer, pointer, count, count, count]
     library.relu_backward.argtypes = [pointer, pointer, pointer, count]
     library.tanh_backward.argtypes = [pointer, pointer, pointer, count]
@@ -225,6 +227,21 @@ def layer_norm_rows_backward(
         len(inv_std), width, int(need_dx),
     )
     return (dx if need_dx else None), dweight, dbias
+
+
+def rms_norm_rows(x, weight, width: int, eps: float) -> tuple[array, array]:
+    rows = len(x) // width
+    x_buffer, weight_buffer = _doubles(x), _doubles(weight)
+    y, inv_rms = zeros(len(x)), zeros(rows)
+    library.rms_norm_rows(_buffer(x_buffer), _buffer(weight_buffer), _buffer(y), _buffer(inv_rms), rows, width, eps)
+    return y, inv_rms
+
+
+def rms_norm_rows_backward(grad, x, inv_rms, weight, width: int) -> tuple[array, array]:
+    buffers = [_doubles(values) for values in (grad, x, inv_rms, weight)]
+    dx, dweight = zeros(len(x)), zeros(width)
+    library.rms_norm_rows_backward(*map(_buffer, buffers), _buffer(dx), _buffer(dweight), len(inv_rms), width)
+    return dx, dweight
 
 
 def _index_buffer(index: Sequence[int]):

@@ -5,13 +5,14 @@ from __future__ import annotations
 import math
 import random
 
-from tensor import Tensor, _add_grad, _grad_data, _op_result, _set_backward, concat, matmul
+from tensor import Tensor, _add_grad, _grad_data, _op_result, _set_backward, concat, matmul, rotary_embedding
 from tensor_nn import (
     TensorDropout,
     TensorEmbedding,
     TensorLayerNorm,
     TensorLinear,
     TensorModule,
+    TensorRMSNorm,
 )
 
 
@@ -27,6 +28,7 @@ class TokenPositionEmbedding(TensorModule):
         context_size: int,
         embedding_dim: int,
         *,
+        learned_positions: bool = True,
         seed: int = 0,
     ) -> None:
         if vocab_size <= 0:
@@ -40,10 +42,9 @@ class TokenPositionEmbedding(TensorModule):
         self.context_size = context_size
         self.embedding_dim = embedding_dim
         self.token_embedding = TensorEmbedding(vocab_size, embedding_dim, seed=seed)
-        self.position_embedding = TensorEmbedding(
-            context_size,
-            embedding_dim,
-            seed=seed + 1,
+        # With rotary embeddings (RoPE) positions enter inside attention instead.
+        self.position_embedding = (
+            TensorEmbedding(context_size, embedding_dim, seed=seed + 1) if learned_positions else None
         )
 
     def __call__(self, indices) -> Tensor:
@@ -57,24 +58,26 @@ class TokenPositionEmbedding(TensorModule):
         length = token_vectors.shape[-2]
         if length > self.context_size:
             raise ValueError("input is longer than context_size")
+        if self.position_embedding is None:
+            return token_vectors
 
         position_vectors = self.position_embedding(list(range(length)))
         return token_vectors + position_vectors
 
     def parameters(self) -> list[Tensor]:
-        return [
-            *self.token_embedding.parameters(),
-            *self.position_embedding.parameters(),
-        ]
+        positions = [] if self.position_embedding is None else self.position_embedding.parameters()
+        return [*self.token_embedding.parameters(), *positions]
 
     def state_dict(self) -> dict:
-        return {
+        state = {
             "vocab_size": self.vocab_size,
             "context_size": self.context_size,
             "embedding_dim": self.embedding_dim,
             "token_embedding": self.token_embedding.state_dict(),
-            "position_embedding": self.position_embedding.state_dict(),
         }
+        if self.position_embedding is not None:
+            state["position_embedding"] = self.position_embedding.state_dict()
+        return state
 
     def load_state_dict(self, state: dict) -> None:
         if state.get("vocab_size") != self.vocab_size:
@@ -84,7 +87,8 @@ class TokenPositionEmbedding(TensorModule):
         if state.get("embedding_dim") != self.embedding_dim:
             raise ValueError("state embedding_dim does not match TokenPositionEmbedding")
         self.token_embedding.load_state_dict(state["token_embedding"])
-        self.position_embedding.load_state_dict(state["position_embedding"])
+        if self.position_embedding is not None:
+            self.position_embedding.load_state_dict(state["position_embedding"])
 
 
 class CharBigramModel(TensorModule):
@@ -213,6 +217,7 @@ class CausalSelfAttention(TensorModule):
         num_heads: int = 1,
         dropout: float = 0.0,
         causal: bool = True,
+        rotary: bool = False,
         seed: int = 0,
     ) -> None:
         if embedding_dim <= 0:
@@ -228,6 +233,7 @@ class CausalSelfAttention(TensorModule):
         self.context_size = context_size
         self.num_heads = num_heads
         self.causal = causal
+        self.rotary = rotary          # rotate queries and keys by position (RoPE)
         self.head_dim = embedding_dim // num_heads
         self._mask_cache: dict[int, Tensor] = {}
         self.queries = [
@@ -275,6 +281,8 @@ class CausalSelfAttention(TensorModule):
             query = query_layer(inputs)                      # (B, T, D)
             key = key_layer(inputs)                          # (B, T, D)
             value = value_layer(inputs)                      # (B, T, D)
+            if self.rotary:
+                query, key = rotary_embedding(query), rotary_embedding(key)
             key_t = key.permute((0, 2, 1))                   # (B, D, T)
             scores = matmul(query, key_t) * scale            # (B, T, T)
             if mask is not None:
@@ -286,7 +294,7 @@ class CausalSelfAttention(TensorModule):
         attended = concat(head_outputs, axis=-1)             # (B, T, C)
         return self.output_dropout(self.projection(attended))
 
-    def step(self, inputs: Tensor, cache: dict) -> Tensor:
+    def step(self, inputs: Tensor, cache: dict, position: int = 0) -> Tensor:
         """Attention for one new token, reusing earlier tokens' keys and values.
 
         ``inputs`` is the new token's (1, 1, C) vector. Its key and value rows
@@ -301,12 +309,15 @@ class CausalSelfAttention(TensorModule):
         for head, (query_layer, key_layer, value_layer) in enumerate(
             zip(self.queries, self.keys, self.values)
         ):
-            key, value = key_layer(inputs), value_layer(inputs)          # (1, 1, D)
+            query, key, value = query_layer(inputs), key_layer(inputs), value_layer(inputs)  # (1, 1, D)
+            if self.rotary:
+                query = rotary_embedding(query, start=position)
+                key = rotary_embedding(key, start=position)
             if cache["keys"][head] is not None:
                 key = concat([cache["keys"][head], key], axis=1)         # (1, t, D)
                 value = concat([cache["values"][head], value], axis=1)
             cache["keys"][head], cache["values"][head] = key, value
-            scores = matmul(query_layer(inputs), key.permute((0, 2, 1))) * scale   # (1, 1, t)
+            scores = matmul(query, key.permute((0, 2, 1))) * scale       # (1, 1, t)
             head_outputs.append(matmul(scores.softmax(axis=-1), value))           # (1, 1, D)
         return self.projection(concat(head_outputs, axis=-1))
 
@@ -406,6 +417,8 @@ class TransformerBlock(TensorModule):
         feed_forward_activation: str = "relu",
         dropout: float = 0.0,
         causal: bool = True,
+        norm: str = "layer",
+        rotary: bool = False,
         seed: int = 0,
     ) -> None:
         if embedding_dim <= 0:
@@ -416,24 +429,28 @@ class TransformerBlock(TensorModule):
             hidden_dim = embedding_dim * 4
         if hidden_dim <= 0:
             raise ValueError("hidden_dim must be positive")
-        if feed_forward_activation not in ("relu", "gelu"):
-            raise ValueError("feed_forward_activation must be 'relu' or 'gelu'")
+        if feed_forward_activation not in FEED_FORWARD_ACTIVATIONS:
+            raise ValueError(f"feed_forward_activation must be one of {FEED_FORWARD_ACTIVATIONS}")
+        if norm not in NORMS:
+            raise ValueError(f"norm must be one of {NORMS}")
 
         self.embedding_dim = embedding_dim
         self.context_size = context_size
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         self.feed_forward_activation = feed_forward_activation
-        self.norm1 = TensorLayerNorm(embedding_dim)
+        self.norm_type = norm
+        self.norm1 = _norm_layer(norm, embedding_dim)
         self.attention = CausalSelfAttention(
             embedding_dim,
             context_size,
             num_heads=num_heads,
             dropout=dropout,
             causal=causal,
+            rotary=rotary,
             seed=seed,
         )
-        self.norm2 = TensorLayerNorm(embedding_dim)
+        self.norm2 = _norm_layer(norm, embedding_dim)
         self.feed_forward_in = TensorLinear(
             embedding_dim,
             hidden_dim,
@@ -444,7 +461,19 @@ class TransformerBlock(TensorModule):
             embedding_dim,
             seed=seed + 5,
         )
+        # SwiGLU (LLaMA) multiplies the activated projection by a second,
+        # "up" projection: silu(x W_in) * (x W_up).
+        self.feed_forward_up = (
+            TensorLinear(embedding_dim, hidden_dim, seed=seed + 6)
+            if feed_forward_activation == "swiglu" else None
+        )
         self.feed_forward_dropout = TensorDropout(dropout, seed=seed + 103)
+
+    def _feed_forward_hidden(self, normed: Tensor) -> Tensor:
+        hidden = _feed_forward_activation(self.feed_forward_in(normed), self.feed_forward_activation)
+        if self.feed_forward_up is not None:
+            hidden = hidden * self.feed_forward_up(normed)
+        return hidden
 
     def __call__(self, inputs: Tensor) -> Tensor:
         if inputs.ndim != 3:
@@ -460,22 +489,15 @@ class TransformerBlock(TensorModule):
         # x = x + feed_forward(norm2(x))
         attended = self.attention(self.norm1(inputs))
         residual = inputs + attended
-        hidden = _feed_forward_activation(
-            self.feed_forward_in(self.norm2(residual)),
-            self.feed_forward_activation,
-        )
+        hidden = self._feed_forward_hidden(self.norm2(residual))
         update = self.feed_forward_dropout(self.feed_forward_out(hidden))
         return residual + update
 
-    def step(self, inputs: Tensor, cache: dict) -> Tensor:
+    def step(self, inputs: Tensor, cache: dict, position: int = 0) -> Tensor:
         """``__call__`` for one new token, with the attention KV cache."""
 
-        residual = inputs + self.attention.step(self.norm1(inputs), cache)
-        hidden = _feed_forward_activation(
-            self.feed_forward_in(self.norm2(residual)),
-            self.feed_forward_activation,
-        )
-        return residual + self.feed_forward_out(hidden)
+        residual = inputs + self.attention.step(self.norm1(inputs), cache, position)
+        return residual + self.feed_forward_out(self._feed_forward_hidden(self.norm2(residual)))
 
     def parameters(self) -> list[Tensor]:
         return [
@@ -483,6 +505,7 @@ class TransformerBlock(TensorModule):
             *self.attention.parameters(),
             *self.norm2.parameters(),
             *self.feed_forward_in.parameters(),
+            *([] if self.feed_forward_up is None else self.feed_forward_up.parameters()),
             *self.feed_forward_out.parameters(),
         ]
 
@@ -498,6 +521,7 @@ class TransformerBlock(TensorModule):
             "norm2": self.norm2.state_dict(),
             "feed_forward_in": self.feed_forward_in.state_dict(),
             "feed_forward_out": self.feed_forward_out.state_dict(),
+            **({} if self.feed_forward_up is None else {"feed_forward_up": self.feed_forward_up.state_dict()}),
         }
 
     def load_state_dict(self, state: dict) -> None:
@@ -518,6 +542,8 @@ class TransformerBlock(TensorModule):
         self.norm2.load_state_dict(state["norm2"])
         self.feed_forward_in.load_state_dict(state["feed_forward_in"])
         self.feed_forward_out.load_state_dict(state["feed_forward_out"])
+        if self.feed_forward_up is not None:
+            self.feed_forward_up.load_state_dict(state["feed_forward_up"])
 
 
 class CharTransformerModel(TensorModule):
@@ -536,6 +562,8 @@ class CharTransformerModel(TensorModule):
         tie_embeddings: bool = False,
         init: str = "xavier",
         dropout: float = 0.0,
+        norm: str = "layer",
+        positions: str = "learned",
         seed: int = 0,
     ) -> None:
         if vocab_size <= 0:
@@ -552,8 +580,10 @@ class CharTransformerModel(TensorModule):
             raise ValueError("num_layers must be positive")
         if init not in TRANSFORMER_INITS:
             raise ValueError(f"init must be one of {TRANSFORMER_INITS}")
-        if feed_forward_activation not in ("relu", "gelu"):
-            raise ValueError("feed_forward_activation must be 'relu' or 'gelu'")
+        if feed_forward_activation not in FEED_FORWARD_ACTIVATIONS:
+            raise ValueError(f"feed_forward_activation must be one of {FEED_FORWARD_ACTIVATIONS}")
+        if positions not in ("learned", "rope"):
+            raise ValueError("positions must be 'learned' or 'rope'")
 
         self.vocab_size = vocab_size
         self.context_size = context_size
@@ -563,10 +593,13 @@ class CharTransformerModel(TensorModule):
         self.num_layers = num_layers
         self.feed_forward_activation = feed_forward_activation
         self.tie_embeddings = tie_embeddings
+        self.norm_type = norm
+        self.positions = positions
         self.embedding = TokenPositionEmbedding(
             vocab_size,
             context_size,
             embedding_dim,
+            learned_positions=positions == "learned",
             seed=seed,
         )
         self.blocks = [
@@ -577,12 +610,14 @@ class CharTransformerModel(TensorModule):
                 num_heads=num_heads,
                 feed_forward_activation=feed_forward_activation,
                 dropout=dropout,
+                norm=norm,
+                rotary=positions == "rope",
                 seed=seed + 2 + layer_index * 8,
             )
             for layer_index in range(num_layers)
         ]
         self.embedding_dropout = TensorDropout(dropout, seed=seed + 104)
-        self.norm = TensorLayerNorm(embedding_dim)
+        self.norm = _norm_layer(norm, embedding_dim)
         self.projection = TensorLinear(
             embedding_dim,
             vocab_size,
@@ -645,10 +680,11 @@ class CharTransformerModel(TensorModule):
         the new token's row (``position`` must stay below context_size).
         """
 
-        token_vector = self.embedding.token_embedding([[token]])               # (1, 1, C)
-        hidden = token_vector + self.embedding.position_embedding([position])   # + (1, C)
+        hidden = self.embedding.token_embedding([[token]])                     # (1, 1, C)
+        if self.embedding.position_embedding is not None:
+            hidden = hidden + self.embedding.position_embedding([position])     # + (1, C)
         for block, block_cache in zip(self.blocks, cache):
-            hidden = block.step(hidden, block_cache)
+            hidden = block.step(hidden, block_cache, position)
         return self.projection(self.norm(hidden)).reshape((self.vocab_size,))
 
     def parameters(self) -> list[Tensor]:
@@ -679,6 +715,8 @@ class CharTransformerModel(TensorModule):
             "num_layers": self.num_layers,
             "feed_forward_activation": self.feed_forward_activation,
             "tie_embeddings": self.tie_embeddings,
+            "norm_type": self.norm_type,
+            "positions": self.positions,
             "embedding": self.embedding.state_dict(),
             "blocks": [
                 block.state_dict()
@@ -707,6 +745,8 @@ class CharTransformerModel(TensorModule):
             )
         if state.get("tie_embeddings", False) != self.tie_embeddings:
             raise ValueError("state tie_embeddings does not match CharTransformerModel")
+        if state.get("norm_type", "layer") != self.norm_type or state.get("positions", "learned") != self.positions:
+            raise ValueError("state norm or positions do not match CharTransformerModel")
         blocks = state.get("blocks")
         if not isinstance(blocks, list) or len(blocks) != len(self.blocks):
             raise ValueError("state blocks do not match CharTransformerModel")
@@ -744,9 +784,21 @@ def _last_time_step(sequence: Tensor) -> Tensor:
     return out
 
 
+FEED_FORWARD_ACTIVATIONS = ("relu", "gelu", "swiglu")
+NORMS = ("layer", "rms")
+
+
+def _norm_layer(norm: str, width: int) -> TensorModule:
+    """GPT-2 uses LayerNorm; LLaMA uses RMSNorm."""
+
+    return TensorRMSNorm(width) if norm == "rms" else TensorLayerNorm(width)
+
+
 def _feed_forward_activation(tensor: Tensor, activation: str) -> Tensor:
     if activation == "relu":
         return tensor.relu()
     if activation == "gelu":
         return tensor.gelu()
+    if activation == "swiglu":
+        return tensor * tensor.sigmoid()          # SiLU; the "GLU" gate is in the block
     raise ValueError(f"unknown feed-forward activation: {activation}")

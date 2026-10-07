@@ -54,6 +54,14 @@ PRESETS = {
         layers=4, heads=4, embedding_dim=128, context_size=64, batch_size=12,
         steps=2000, lr=1e-3, min_lr=1e-4, warmup_steps=100, dropout=0.0,
     ),
+    # The same size and recipe with LLaMA's parts: RMSNorm, rotary position
+    # embeddings and a SwiGLU feed-forward (hidden width 8/3 * embedding, as
+    # LLaMA does, so the parameter count stays about the same).
+    "baby-llama": dict(
+        layers=4, heads=4, embedding_dim=128, context_size=64, batch_size=12,
+        steps=2000, lr=1e-3, min_lr=1e-4, warmup_steps=100, dropout=0.0,
+        norm="rms", positions="rope", activation="swiglu",
+    ),
     # A smaller rung that trains in minutes, for trying things out.
     "mini": dict(
         layers=2, heads=2, embedding_dim=32, context_size=32, batch_size=16,
@@ -95,14 +103,19 @@ def random_batch(
 
 
 def build_model(vocab_size: int, config: argparse.Namespace) -> CharTransformerModel:
+    hidden_dim = 4 * config.embedding_dim
+    if config.activation == "swiglu":
+        hidden_dim = -(-8 * config.embedding_dim // 3 // 8) * 8   # 8/3 * C, rounded up to 8
     return CharTransformerModel(
         vocab_size,
         context_size=config.context_size,
         embedding_dim=config.embedding_dim,
-        hidden_dim=4 * config.embedding_dim,
+        hidden_dim=hidden_dim,
         num_heads=config.heads,
         num_layers=config.layers,
-        feed_forward_activation="gelu",
+        feed_forward_activation=config.activation,
+        norm=config.norm,
+        positions=config.positions,
         tie_embeddings=True,
         init="gpt2",
         dropout=config.dropout,
@@ -328,6 +341,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.add_argument("--" + name.replace("_", "-"), type=int)
     for name in ("lr", "min_lr", "dropout"):
         parser.add_argument("--" + name.replace("_", "-"), type=float)
+    parser.add_argument("--norm", choices=("layer", "rms"))
+    parser.add_argument("--positions", choices=("learned", "rope"))
+    parser.add_argument("--activation", choices=("gelu", "relu", "swiglu"))
     parser.add_argument("--weight-decay", type=float, default=0.1)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--eval-every", type=int, default=250)
@@ -342,7 +358,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=20)
     args = parser.parse_args(argv)
-    for name, value in PRESETS[args.preset].items():
+    defaults = {"norm": "layer", "positions": "learned", "activation": "gelu"}   # GPT-2's parts
+    for name, value in {**defaults, **PRESETS[args.preset]}.items():
         if getattr(args, name) is None:
             setattr(args, name, value)
     return args

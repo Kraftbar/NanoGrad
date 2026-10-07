@@ -141,6 +141,15 @@ class KernelBackendTests(unittest.TestCase):
             self.assertListsClose(python, c)
         self.assertAlmostEqual(python[0], sum(x))
 
+    def test_rms_norm_agrees(self) -> None:
+        x, weight, grad = values(4 * 6, 28), values(6, 29), values(4 * 6, 30)
+        (y_python, r_python), (y_c, r_c) = self.run_both(lambda: kernels.rms_norm_rows(x, weight, 6, 1e-6))
+        self.assertListsClose(y_python, y_c)
+        self.assertListsClose(r_python, r_c)
+        python, c = self.run_both(lambda: kernels.rms_norm_rows_backward(grad, x, r_python, weight, 6))
+        for p, q in zip(python, c):
+            self.assertListsClose(p, q)
+
     def test_relu_agrees(self) -> None:
         x, grad = values(40, 25), values(40, 26)
         python, c = self.run_both(lambda: kernels.relu(x))

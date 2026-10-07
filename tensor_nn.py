@@ -616,6 +616,63 @@ def layer_norm(
     return out
 
 
+def rms_norm(inputs: Tensor, weight: Tensor, *, eps: float = 1e-5) -> Tensor:
+    """RMSNorm (LLaMA's replacement for LayerNorm) over the last axis.
+
+    Per row x of width n, no mean subtraction and no bias:
+
+        r = 1 / sqrt(sum(x^2) / n + eps),    y = x * r * weight
+
+    Backward, with g = dy * weight for the row:
+
+        dx      = r * (g - x * r^2 * mean(g * x))
+        dweight = sum over rows of dy * x * r
+    """
+
+    width = inputs.shape[-1]
+    if weight.shape != (width,):
+        raise ValueError("rms_norm weight must match the last axis")
+    data, inv_rms = kernels.rms_norm_rows(inputs.data, weight.data, width, eps)
+    out = _op_result(data, inputs.shape, (inputs, weight), "rms_norm")
+
+    def _backward() -> None:
+        input_grad, weight_grad = kernels.rms_norm_rows_backward(
+            _grad_data(out), inputs.data, inv_rms, weight.data, width,
+        )
+        if inputs.requires_grad:
+            _add_grad(inputs, input_grad)
+        if weight.requires_grad:
+            _add_grad(weight, weight_grad)
+
+    _set_backward(out, _backward)
+    return out
+
+
+class TensorRMSNorm(TensorModule):
+    """RMSNorm over the last dimension, with a learned per-feature weight."""
+
+    def __init__(self, normalized_shape: int, *, eps: float = 1e-5) -> None:
+        if normalized_shape <= 0:
+            raise ValueError("TensorRMSNorm normalized_shape must be positive")
+        self.normalized_shape = normalized_shape
+        self.eps = eps
+        self.weight = Tensor([1.0] * normalized_shape, (normalized_shape,), requires_grad=True)
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        return rms_norm(inputs, self.weight, eps=self.eps)
+
+    def parameters(self) -> list[Tensor]:
+        return [self.weight]
+
+    def state_dict(self) -> dict:
+        return {"normalized_shape": self.normalized_shape, "eps": self.eps, "weight": _tensor_state(self.weight)}
+
+    def load_state_dict(self, state: dict) -> None:
+        if state.get("normalized_shape") != self.normalized_shape:
+            raise ValueError("state normalized_shape does not match TensorRMSNorm")
+        self.weight.data = _state_data(state, "weight", self.weight.shape)
+
+
 def _index_shape_and_flat(indices) -> tuple[tuple[int, ...], list[int]]:
     if isinstance(indices, Tensor):
         return indices.shape, _integer_indices(indices.data)

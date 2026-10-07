@@ -911,6 +911,67 @@ def _accumulate(target: list[float], start: int, values: list[float]) -> None:
     ]
 
 
+def rotary_embedding(tensor: Tensor, *, start: int = 0, base: float = 10000.0) -> Tensor:
+    """Rotary position embedding (RoPE, used by LLaMA) for (..., T, D) tensors.
+
+    Instead of adding a learned position vector to each token, RoPE rotates
+    every (even, odd) pair of a query or key by an angle that grows with the
+    token's position p (starting at ``start``):
+
+        angle = p * base^(-2i / D)          for pair i
+        out[2i]   = x[2i] cos - x[2i+1] sin
+        out[2i+1] = x[2i] sin + x[2i+1] cos
+
+    A query-key dot product then depends only on how far apart the two
+    tokens are. Written with whole arrays: out = x * C + swap(x) * S, where
+    swap exchanges the two values of each pair and S holds (-sin, +sin).
+    A rotation's gradient is the opposite rotation:
+
+        dx = g * C + swap(g * S)
+    """
+
+    length, width = tensor.shape[-2:]
+    if width % 2:
+        raise ValueError("rotary_embedding needs an even last axis")
+    cos_table, sin_table = _rotary_tables(length, width, start, base)
+    repeats = tensor.numel // (length * width)
+    cos_full, sin_full = cos_table * repeats, sin_table * repeats
+    swap = _pair_swap_index(width)
+    sizes = dict(batches=tensor.numel // width, image_size=width)
+
+    swapped = kernels.gather_indexed(tensor.data, swap, **sizes)
+    data = kernels.add(kernels.multiply(tensor.data, cos_full), kernels.multiply(swapped, sin_full))
+    out = _op_result(data, tensor.shape, (tensor,), "rotary_embedding")
+
+    def _backward() -> None:
+        grad = _grad_data(out)
+        rotated_back = kernels.gather_indexed(kernels.multiply(grad, sin_full), swap, **sizes)
+        _add_grad(tensor, kernels.add(kernels.multiply(grad, cos_full), rotated_back))
+
+    _set_backward(out, _backward)
+    return out
+
+
+@lru_cache(maxsize=64)
+def _rotary_tables(length: int, width: int, start: int, base: float):
+    """Flat (T x D) tables of cos and signed sin (-sin at even, +sin at odd)."""
+
+    cos_values, sin_values = [], []
+    for position in range(start, start + length):
+        for pair in range(width // 2):
+            angle = position * base ** (-2 * pair / width)
+            cos_values += [math.cos(angle), math.cos(angle)]
+            sin_values += [-math.sin(angle), math.sin(angle)]
+    return kernels.storage(cos_values), kernels.storage(sin_values)
+
+
+@lru_cache(maxsize=64)
+def _pair_swap_index(width: int):
+    """0, 1, 2, 3, ... -> 1, 0, 3, 2, ...: each value's partner in its pair."""
+
+    return kernels.index_table(index ^ 1 for index in range(width))
+
+
 # ---------------------------------------------------------------------------
 # Shape ops
 # ---------------------------------------------------------------------------

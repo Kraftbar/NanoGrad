@@ -204,6 +204,16 @@ class GradientCheckTests(unittest.TestCase):
         norm.bias = random_tensor((2,), seed=44)
         self.assertGradientsMatch(lambda: norm(image), [image, norm.weight, norm.bias])
 
+    def test_rotary_embedding_and_rms_norm(self) -> None:
+        from tensor import rotary_embedding
+        from tensor_nn import rms_norm
+
+        values = random_tensor((2, 3, 4, 6), seed=45)
+        self.assertGradientsMatch(lambda: rotary_embedding(values, start=3), [values])
+        rows = random_tensor((3, 5), seed=46)
+        weight = random_tensor((5,), seed=47)
+        self.assertGradientsMatch(lambda: rms_norm(rows, weight), [rows, weight])
+
     def test_pooling(self) -> None:
         image = random_tensor((2, 2, 5, 6), seed=12)
 

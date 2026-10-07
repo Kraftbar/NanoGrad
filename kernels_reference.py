@@ -141,6 +141,33 @@ def layer_norm_rows_backward(
     return (dx if need_dx else None), dweight, dbias
 
 
+def rms_norm_rows(
+    x: list[float], weight: list[float], width: int, eps: float,
+) -> tuple[list[float], list[float]]:
+    y: list[float] = []
+    inv_rms: list[float] = []
+    for start in range(0, len(x), width):
+        row = x[start : start + width]
+        scale = 1.0 / math.sqrt(sum(value * value for value in row) / width + eps)
+        inv_rms.append(scale)
+        y.extend([value * scale * w for value, w in zip(row, weight)])
+    return y, inv_rms
+
+
+def rms_norm_rows_backward(
+    grad: list[float], x: list[float], inv_rms: list[float], weight: list[float], width: int,
+) -> tuple[list[float], list[float]]:
+    dx: list[float] = []
+    dweight = [0.0] * width
+    for row, scale in enumerate(inv_rms):
+        dy = grad[row * width : (row + 1) * width]
+        values = x[row * width : (row + 1) * width]
+        dweight = [total + g * v * scale for total, g, v in zip(dweight, dy, values)]
+        mean_g_x = sum(g * w * v for g, w, v in zip(dy, weight, values)) / width
+        dx.extend([scale * (g * w - v * scale * scale * mean_g_x) for g, w, v in zip(dy, weight, values)])
+    return dx, dweight
+
+
 def gather_indexed(
     image: list[float], index: Sequence[int], batches: int, image_size: int,
 ) -> list[float]:
