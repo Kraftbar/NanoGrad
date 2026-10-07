@@ -1,0 +1,61 @@
+import random
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+
+from char_checkpoint import load_checkpoint
+from gpt_train import build_model, parse_args, random_batch, split_text, train
+from text import CharVocab
+
+
+TEXT = "First Citizen:\nBefore we proceed any further, hear me speak.\n" * 20
+
+
+class GptTrainTests(unittest.TestCase):
+    def test_split_and_random_batch(self) -> None:
+        train_text, validation_text = split_text("abcdefghij", 0.2)
+        self.assertEqual((train_text, validation_text), ("abcdefgh", "ij"))
+
+        encoded = list(range(50))
+        xs, ys = random_batch(encoded, batch_size=4, context_size=5, rng=random.Random(0))
+
+        self.assertEqual(len(xs), 4)
+        for x, y in zip(xs, ys):
+            self.assertEqual(len(x), 5)
+            self.assertEqual(y, [value + 1 for value in x])
+
+    def test_presets_fill_unset_options(self) -> None:
+        args = parse_args(["--text-file", "t.txt", "--preset", "baby", "--steps", "10"])
+
+        self.assertEqual((args.layers, args.heads, args.embedding_dim), (4, 4, 128))
+        self.assertEqual(args.steps, 10)
+
+    def test_tiny_run_learns_and_writes_a_loadable_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            text_path = Path(directory) / "text.txt"
+            text_path.write_text(TEXT)
+            out_dir = Path(directory) / "run"
+            args = parse_args([
+                "--text-file", str(text_path), "--preset", "mini",
+                "--layers", "1", "--embedding-dim", "16", "--context-size", "8",
+                "--steps", "30", "--eval-every", "15", "--eval-batches", "2",
+                "--generate", "20", "--num-samples", "1", "--out-dir", str(out_dir),
+            ])
+            with redirect_stdout(StringIO()):
+                result = train(args)
+
+            log = result["log"]
+            self.assertEqual([row["step"] for row in log], [0, 15, 30])
+            self.assertLess(log[-1]["train_loss"], log[0]["train_loss"])
+            self.assertTrue((out_dir / "log.csv").exists())
+            self.assertTrue((out_dir / "samples.txt").exists())
+
+            vocab = CharVocab.from_text(TEXT)
+            model = build_model(len(vocab), args)
+            load_checkpoint(out_dir / "model.json", model, vocab, model_name="transformer")
+
+
+if __name__ == "__main__":
+    unittest.main()
