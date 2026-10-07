@@ -171,6 +171,8 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.conv_input_grad.argtypes = [pointer, pointer, index_pointer, pointer] + [count, count] + [ctypes.c_int] * 3
     for name in ("gather_indexed", "scatter_add_indexed"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer, count, count, count]
+    for name in ("gather_rows", "scatter_add_rows"):
+        getattr(library, name).argtypes = [pointer, index_pointer, pointer, count, count]
     library.add_vectors.argtypes = [pointer, pointer, pointer, count]
     library.multiply_vectors.argtypes = [pointer, pointer, pointer, count]
     library.scale_vector.argtypes = [pointer, ctypes.c_double, pointer, count]
@@ -385,6 +387,22 @@ def scatter_add_indexed(
         _buffer(grad_buffer), index_buffer, _buffer(image_grad), batches, image_size, len(index),
     )
     return image_grad
+
+
+def gather_rows(table: list[float], ids: Sequence[int], width: int) -> array:
+    table_buffer = _reals(table)
+    keep, id_buffer = _index_buffer(ids)
+    out = zeros(len(ids) * width)
+    library.gather_rows(_buffer(table_buffer), id_buffer, _buffer(out), len(ids), width)
+    return out
+
+
+def scatter_add_rows(grad: list[float], ids: Sequence[int], width: int, rows: int) -> array:
+    grad_buffer = _reals(grad)
+    keep, id_buffer = _index_buffer(ids)
+    table_grad = zeros(rows * width)
+    library.scatter_add_rows(_buffer(grad_buffer), id_buffer, _buffer(table_grad), len(ids), width)
+    return table_grad
 
 
 def _elementwise(function, x: list[float], y: list[float]) -> array:

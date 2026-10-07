@@ -225,6 +225,16 @@ class KernelBackendTests(unittest.TestCase):
         python, c = self.run_both(lambda: kernels.bce_with_logits_sum(x, t))
         self.assertAlmostEqual(python, c, places=9)
 
+    def test_gather_and_scatter_rows_agree(self) -> None:
+        table, ids = values(5 * 4, 43), [3, 0, 3, 4]
+        python, c = self.run_both(lambda: kernels.gather_rows(table, kernels.index_table(ids), width=4))
+        self.assertListsClose(python, c)
+        self.assertListsClose(python[:4], table[12:16])
+        grad = values(4 * 4, 44)
+        python, c = self.run_both(lambda: kernels.scatter_add_rows(grad, kernels.index_table(ids), width=4, rows=5))
+        self.assertListsClose(python, c)
+        self.assertAlmostEqual(python[12], grad[0] + grad[8])          # id 3 used twice
+
     def test_add_scaled_and_sum_of_squares_agree(self) -> None:
         x, y = values(50, 41), values(50, 42)
         python, c = self.run_both(lambda: kernels.add_scaled(x, y, -0.3))

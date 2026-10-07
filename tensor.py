@@ -907,14 +907,6 @@ def _matmul_plan(
     )
 
 
-def _accumulate(target: list[float], start: int, values: list[float]) -> None:
-    stop = start + len(values)
-    target[start:stop] = [
-        current + value
-        for current, value in zip(target[start:stop], values)
-    ]
-
-
 def rotary_embedding(tensor: Tensor, *, start: int = 0, base: float = 10000.0) -> Tensor:
     """Rotary position embedding (RoPE, used by LLaMA) for (..., T, D) tensors.
 
@@ -1278,16 +1270,11 @@ def dropout(tensor: Tensor, p: float, rng: random.Random) -> Tensor:
         return tensor
 
     keep = 1.0 / (1.0 - p)
-    mask = [0.0 if rng.random() < p else keep for _ in tensor.data]
-    out = _op_result(
-        [value * scale for value, scale in zip(tensor.data, mask)],
-        tensor.shape,
-        (tensor,),
-        "dropout",
-    )
+    mask = kernels.storage([0.0 if rng.random() < p else keep for _ in range(tensor.numel)])
+    out = _op_result(kernels.multiply(tensor.data, mask), tensor.shape, (tensor,), "dropout")
 
     def _backward() -> None:
-        _add_grad(tensor, [g * scale for g, scale in zip(_grad_data(out), mask)])
+        _add_grad(tensor, kernels.multiply(_grad_data(out), mask))
 
     _set_backward(out, _backward)
     return out
@@ -1306,27 +1293,15 @@ def gather_rows(table: Tensor, indices: Sequence[int]) -> Tensor:
         raise ValueError("gather_rows needs at least one index")
 
     rows, width = table.shape
-    for index in indices:
-        if index < 0 or index >= rows:
-            raise ValueError("embedding index out of range")
+    if min(indices) < 0 or max(indices) >= rows:
+        raise ValueError("embedding index out of range")
 
-    table_rows = _rows(table.data, width)
-    data: list[float] = []
-    for index in indices:
-        data.extend(table_rows[index])
-
+    ids = kernels.index_table(indices)
+    data = kernels.gather_rows(table.data, ids, width=width)
     out = _op_result(data, (len(indices), width), (table,), "gather_rows")
 
     def _backward() -> None:
-        grad = _grad_data(out)
-        table_grad = [0.0] * table.numel
-        for position, index in enumerate(indices):
-            _accumulate(
-                table_grad,
-                index * width,
-                grad[position * width : (position + 1) * width],
-            )
-        _add_grad(table, table_grad)
+        _add_grad(table, kernels.scatter_add_rows(_grad_data(out), ids, width=width, rows=rows))
 
     _set_backward(out, _backward)
     return out

@@ -524,6 +524,26 @@ void scatter_add_indexed(const real *grad, const long *index, real *image_grad,
 }
 
 /*
+ * Embedding lookup: whole rows of a (rows x width) table.
+ *     gather:  out[i, :] = table[ids[i], :]
+ *     scatter: table_grad[ids[i], :] += grad[i, :]   (repeated ids add up)
+ */
+void gather_rows(const real *table, const long *ids, real *out, long count, long width)
+{
+    for (long i = 0; i < count; i++)
+        memcpy(out + i * width, table + ids[i] * width, width * sizeof(real));
+}
+
+void scatter_add_rows(const real *grad, const long *ids, real *table_grad, long count, long width)
+{
+    for (long i = 0; i < count; i++) {
+        const real *g = grad + i * width;
+        real *o = table_grad + ids[i] * width;
+        for (long j = 0; j < width; j++) o[j] += g[j];
+    }
+}
+
+/*
  * tanh, elementwise:  y = tanh(x),  dx = dy * (1 - y^2)
  */
 void tanh_forward(const real *x, real *y, long count)

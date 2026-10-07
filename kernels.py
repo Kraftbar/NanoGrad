@@ -252,6 +252,19 @@ def gather_indexed(image: list[float], index: Sequence[int], *, batches: int, im
     return kernel(image, index, batches, image_size)
 
 
+def gather_rows(table: list[float], ids: Sequence[int], *, width: int) -> list[float]:
+    """Rows ``ids`` of a (rows x width) table, one after another (an embedding lookup)."""
+
+    return (kernels_c.gather_rows if BACKEND == "c" else reference.gather_rows)(table, ids, width)
+
+
+def scatter_add_rows(grad: list[float], ids: Sequence[int], *, width: int, rows: int) -> list[float]:
+    """Inverse of ``gather_rows`` for gradients: a zero table with each
+    gradient row added into row ``ids[i]`` (repeated ids add up)."""
+
+    return (kernels_c.scatter_add_rows if BACKEND == "c" else reference.scatter_add_rows)(grad, ids, width, rows)
+
+
 def scatter_add_indexed(
     grad: list[float], index: Sequence[int], *, batches: int, image_size: int, into=None,
 ) -> list[float]:

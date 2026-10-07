@@ -281,6 +281,23 @@ def gather_indexed(
     return out
 
 
+def gather_rows(table: list[float], ids: Sequence[int], width: int) -> list[float]:
+    out: list[float] = []
+    for row in ids:
+        out.extend(table[row * width : (row + 1) * width])
+    return out
+
+
+def scatter_add_rows(grad: list[float], ids: Sequence[int], width: int, rows: int) -> list[float]:
+    table_grad = [0.0] * (rows * width)
+    for position, row in enumerate(ids):
+        start = row * width
+        table_grad[start : start + width] = [
+            total + g for total, g in zip(table_grad[start : start + width], grad[position * width : (position + 1) * width])
+        ]
+    return table_grad
+
+
 def scatter_add_indexed(
     grad: list[float], index: Sequence[int], batches: int, image_size: int, into: list[float] | None = None,
 ) -> list[float]:
