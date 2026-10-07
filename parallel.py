@@ -24,6 +24,7 @@ import multiprocessing
 import random
 from collections.abc import Callable, Sequence
 
+import kernels
 from losses import softmax_cross_entropy
 from tensor import Tensor, no_grad
 from tensor_nn import TensorDropout, TensorModule
@@ -85,17 +86,17 @@ class DataParallel:
 
         total_targets = 0
         total_loss = 0.0
-        summed = [[0.0] * parameter.numel for parameter in self.parameters]
+        summed: list = [None] * len(self.parameters)
         for connection in busy:
             loss, gradients, count = connection.recv()
             total_targets += count
             total_loss += loss * count
-            for target, gradient in zip(summed, gradients):
-                for index, value in enumerate(gradient):
-                    target[index] += value * count
+            for index, gradient in enumerate(gradients):
+                weighted = kernels.scale(gradient, count)
+                summed[index] = weighted if summed[index] is None else kernels.add(summed[index], weighted)
 
         for parameter, gradient in zip(self.parameters, summed):
-            parameter.grad = [value / total_targets for value in gradient]
+            parameter.grad = kernels.scale(gradient, 1.0 / total_targets)
         return total_loss / total_targets
 
     def evaluate(self, xs: Sequence, ys: Sequence) -> float:

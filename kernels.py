@@ -198,6 +198,21 @@ def _python_scale(x: list[float], factor: float) -> list[float]:
     return [value * factor for value in x]
 
 
+def _python_adam_update(
+    w: list[float], grad: list[float], m: list[float], v: list[float],
+    grad_scale: float, beta1: float, beta2: float, decay: float,
+    step_size: float, sqrt_correction: float, eps: float,
+) -> tuple[list[float], list[float], list[float]]:
+    g = [value * grad_scale for value in grad]
+    m = [beta1 * m_i + (1.0 - beta1) * g_i for m_i, g_i in zip(m, g)]
+    v = [beta2 * v_i + (1.0 - beta2) * g_i * g_i for v_i, g_i in zip(v, g)]
+    new_w = [
+        w_i * decay - step_size * m_i / (math.sqrt(v_i) / sqrt_correction + eps)
+        for w_i, m_i, v_i in zip(w, m, v)
+    ]
+    return new_w, m, v
+
+
 def _python_tanh(x: list[float]) -> list[float]:
     return [math.tanh(value) for value in x]
 
@@ -314,6 +329,7 @@ def _build_library() -> ctypes.CDLL | None:
     library.add_vectors.argtypes = [pointer, pointer, pointer, count]
     library.multiply_vectors.argtypes = [pointer, pointer, pointer, count]
     library.scale_vector.argtypes = [pointer, ctypes.c_double, pointer, count]
+    library.adam_update.argtypes = [pointer] * 5 + [count] + [ctypes.c_double] * 7
     library.tanh_forward.argtypes = [pointer, pointer, count]
     library.tanh_backward.argtypes = [pointer, pointer, pointer, count]
     for name in ("window_mean", "window_mean_backward"):
@@ -468,6 +484,15 @@ def _c_scale(x: list[float], factor: float) -> array:
     x_buffer, out = _doubles(x), _zeros(len(x))
     _library.scale_vector(_c_buffer(x_buffer), factor, _c_buffer(out), len(x))
     return out
+
+
+def _c_adam_update(w, grad, m, v, *hyperparameters) -> tuple[array, array, array]:
+    # m and v are the optimizer's own state: updated in place once they are
+    # C arrays (the first call converts them). The weights get a new array.
+    buffers = [_doubles(values) for values in (w, grad, m, v)]
+    new_w = _zeros(len(w))
+    _library.adam_update(*map(_c_buffer, buffers), _c_buffer(new_w), len(w), *hyperparameters)
+    return new_w, buffers[2], buffers[3]
 
 
 def _c_tanh(x: list[float]) -> list[float]:
@@ -669,6 +694,17 @@ def scale(x: list[float], factor: float) -> list[float]:
     """Every value times ``factor``."""
 
     return (_c_scale if BACKEND == "c" else _python_scale)(x, factor)
+
+
+def adam_update(
+    w: list[float], grad: list[float], m: list[float], v: list[float], *,
+    grad_scale: float, beta1: float, beta2: float, decay: float,
+    step_size: float, sqrt_correction: float, eps: float,
+) -> tuple[list[float], list[float], list[float]]:
+    """One Adam step for one parameter: returns (new weights, new m, new v)."""
+
+    kernel = _c_adam_update if BACKEND == "c" else _python_adam_update
+    return kernel(w, grad, m, v, grad_scale, beta1, beta2, decay, step_size, sqrt_correction, eps)
 
 
 def tanh(x: list[float]) -> list[float]:

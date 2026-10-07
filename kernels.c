@@ -301,3 +301,23 @@ void scale_vector(const double *x, double factor, double *out, long count)
 {
     for (long i = 0; i < count; i++) out[i] = x[i] * factor;
 }
+
+/*
+ * One Adam step for one parameter tensor, in the same arithmetic order as
+ * the Python reference in kernels.py:
+ *     g     = grad * grad_scale
+ *     m     = beta1 * m + (1 - beta1) * g          (updated in place)
+ *     v     = beta2 * v + (1 - beta2) * g * g      (updated in place)
+ *     new_w = w * decay - step_size * m / (sqrt(v) / sqrt_correction + eps)
+ */
+void adam_update(const double *w, const double *grad, double *m, double *v, double *new_w,
+                 long count, double grad_scale, double beta1, double beta2, double decay,
+                 double step_size, double sqrt_correction, double eps)
+{
+    for (long i = 0; i < count; i++) {
+        double g = grad[i] * grad_scale;
+        m[i] = beta1 * m[i] + (1.0 - beta1) * g;
+        v[i] = beta2 * v[i] + (1.0 - beta2) * g * g;
+        new_w[i] = w[i] * decay - step_size * m[i] / (sqrt(v[i]) / sqrt_correction + eps);
+    }
+}

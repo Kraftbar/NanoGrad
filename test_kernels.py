@@ -125,6 +125,15 @@ class KernelBackendTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             kernels.add(x, y[:-1])
 
+    def test_adam_update_agrees(self) -> None:
+        w, grad = values(30, 21), values(30, 22)
+        m, v = values(30, 23), [abs(x) for x in values(30, 24)]
+        settings = dict(grad_scale=0.5, beta1=0.9, beta2=0.99, decay=0.999,
+                        step_size=1e-3, sqrt_correction=0.3, eps=1e-8)
+        python, c = self.run_both(lambda: kernels.adam_update(w, grad, list(m), list(v), **settings))
+        for p, q in zip(python, c):
+            self.assertListsClose(p, q)
+
     def test_tanh_agrees(self) -> None:
         x = values(50, 15)
         grad = values(50, 16)
