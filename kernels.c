@@ -11,6 +11,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 /*
  * Batched matrix product, accumulated into c:
@@ -28,6 +29,96 @@
 /* Entry (i, p) of op(A): A itself is (m x k), or (k x m) when transposed. */
 #define A_AT(i, p) (trans_a ? A[(long)(p) * m + (i)] : A[(long)(i) * k + (p)])
 
+/*
+ * The fast path, used when the compiler may emit wide vector instructions
+ * (AVX: 4 doubles at once, AVX-512: 8; kernels.py builds with -march=native).
+ * It is the core idea of every fast BLAS, in three steps:
+ *
+ * 1. Register tile: compute an 8 x (2 vectors) block of C at a time, kept
+ *    in 16 vector registers for the whole sum over p. Each step loads one
+ *    row slice of B (2 vectors) and 8 numbers of A, and does 16 vector
+ *    multiply-adds, instead of loading and storing rows of C every step.
+ * 2. Packing: copy the B columns this tile needs into a small contiguous
+ *    "panel", so the inner loop reads memory in order.
+ * 3. k-blocking: do the sum over p in chunks of 256, so the panel stays in
+ *    the fastest cache while every row tile of A passes over it.
+ *
+ * Vector types are a GCC/Clang extension: `vec` is VECTOR_WIDTH doubles
+ * that + and * act on elementwise. Without AVX the plain loop below is
+ * used, since emulating wide vectors would only slow things down.
+ */
+#if defined(__AVX512F__)
+#define VECTOR_WIDTH 8
+#elif defined(__AVX__)
+#define VECTOR_WIDTH 4
+#endif
+
+#ifdef VECTOR_WIDTH
+typedef double vec __attribute__((vector_size(VECTOR_WIDTH * sizeof(double))));
+#define TILE_ROWS 8
+#define TILE_COLS (2 * VECTOR_WIDTH)
+#define K_BLOCK 256
+#define VEC_LOAD(v, p) memcpy(&(v), (p), sizeof(vec))
+#define VEC_STORE(p, v) memcpy((p), &(v), sizeof(vec))
+
+/* C (m x n) += op(A) (m x k) @ B (k x n, row-major). panel: K_BLOCK * TILE_COLS doubles. */
+static void gemm_tiled(const double *A, const double *B, double *C,
+                       int m, int k, int n, int trans_a, double *panel)
+{
+    int full_cols = n - n % TILE_COLS;
+    for (int j = 0; j < full_cols; j += TILE_COLS) {
+        for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
+            int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
+            for (int p = 0; p < kb; p++)                       /* 2. pack */
+                memcpy(panel + (long)p * TILE_COLS, B + (long)(p0 + p) * n + j, sizeof(double) * TILE_COLS);
+
+            int i = 0;
+            for (; i + TILE_ROWS <= m; i += TILE_ROWS) {       /* 1. register tile */
+                vec acc[TILE_ROWS][2];
+                memset(acc, 0, sizeof acc);
+                for (int p = 0; p < kb; p++) {
+                    vec b0, b1;
+                    VEC_LOAD(b0, panel + (long)p * TILE_COLS);
+                    VEC_LOAD(b1, panel + (long)p * TILE_COLS + VECTOR_WIDTH);
+                    for (int r = 0; r < TILE_ROWS; r++) {
+                        double a_rp = A_AT(i + r, p0 + p);
+                        acc[r][0] += a_rp * b0;
+                        acc[r][1] += a_rp * b1;
+                    }
+                }
+                for (int r = 0; r < TILE_ROWS; r++) {
+                    double *c_row = C + (long)(i + r) * n + j;
+                    vec c0, c1;
+                    VEC_LOAD(c0, c_row);
+                    VEC_LOAD(c1, c_row + VECTOR_WIDTH);
+                    c0 += acc[r][0];
+                    c1 += acc[r][1];
+                    VEC_STORE(c_row, c0);
+                    VEC_STORE(c_row + VECTOR_WIDTH, c1);
+                }
+            }
+            for (; i < m; i++) {                               /* leftover rows */
+                double *c_row = C + (long)i * n + j;
+                for (int p = 0; p < kb; p++) {
+                    double a_ip = A_AT(i, p0 + p);
+                    for (int jj = 0; jj < TILE_COLS; jj++) c_row[jj] += a_ip * panel[(long)p * TILE_COLS + jj];
+                }
+            }
+        }
+    }
+    if (full_cols < n) {                                       /* leftover columns */
+        for (int i = 0; i < m; i++) {
+            double *c_row = C + (long)i * n;
+            for (int p = 0; p < k; p++) {
+                double a_ip = A_AT(i, p);
+                const double *b_row = B + (long)p * n;
+                for (int jj = full_cols; jj < n; jj++) c_row[jj] += a_ip * b_row[jj];
+            }
+        }
+    }
+}
+#endif
+
 void gemm(
     const double *a, const double *b, double *c,
     int batches, int m, int k, int n,
@@ -42,6 +133,12 @@ void gemm(
     if (trans_b && scratch == NULL) {
         abort();  /* out of memory: fail loudly rather than return zeros */
     }
+#ifdef VECTOR_WIDTH
+    double *panel = malloc(sizeof(double) * K_BLOCK * TILE_COLS);
+    if (panel == NULL) {
+        abort();
+    }
+#endif
 
     for (int batch = 0; batch < batches; batch++) {
         const double *A = a + batch * a_step;
@@ -54,6 +151,13 @@ void gemm(
                     scratch[(long)p * n + j] = B[(long)j * k + p];
             B = scratch;
         }
+
+#ifdef VECTOR_WIDTH
+        if (m >= TILE_ROWS && n >= TILE_COLS) {
+            gemm_tiled(A, B, C, m, k, n, trans_a, panel);
+            continue;
+        }
+#endif
 
         /* Row i of C is a weighted sum of rows of op(B):
          * c_row += A'(i, p) * op(B)[p, :] for each p. The inner loop runs
@@ -88,6 +192,9 @@ void gemm(
         }
     }
     free(scratch);
+#ifdef VECTOR_WIDTH
+    free(panel);
+#endif
 }
 
 #undef A_AT

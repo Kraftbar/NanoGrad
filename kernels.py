@@ -10,8 +10,8 @@ the kernels. Each one exists twice:
 
 This module picks one. The C backend is used when it builds (it needs a C
 compiler); otherwise, or when ``NANOGRAD_PURE_PYTHON=1`` is set, everything
-runs in Python. ``NANOGRAD_CFLAGS="-march=native"`` builds the C kernels
-for this exact CPU. ``BACKEND`` says which backend is active, and
+runs in Python. The C kernels are built for this exact CPU
+(``-march=native``); ``NANOGRAD_CFLAGS=""`` asks for a portable build. ``BACKEND`` says which backend is active, and
 ``use_backend`` switches (``test_kernels.py`` uses it to check that both
 agree).
 """

@@ -16,6 +16,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import os
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -63,6 +64,47 @@ def _keep_freed_memory() -> None:
 
 
 
+def _compile(compiler: str, flags: list[str]) -> Path | None:
+    """Build kernels.c with ``flags`` into the cache (once), or None if that fails."""
+
+    source = SOURCE.read_bytes()
+    key = source + " ".join(flags).encode() + _cpu_signature().encode()
+    digest = hashlib.sha256(key).hexdigest()[:16]
+    cache = Path(os.environ.get("NANOGRAD_CACHE", Path.home() / ".cache" / "nanograd"))
+    library_path = cache / f"kernels-{digest}.so"
+    if library_path.exists():
+        return library_path
+    partial = None
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        # Build into a temporary name, then rename: two processes building
+        # at once never see a half-written library.
+        with tempfile.NamedTemporaryFile(dir=cache, suffix=".so", delete=False) as handle:
+            partial = Path(handle.name)
+        subprocess.run(
+            [compiler, *flags, "-shared", "-fPIC", str(SOURCE), "-o", str(partial), "-lm"],
+            check=True,
+            capture_output=True,
+        )
+        partial.replace(library_path)
+        return library_path
+    except (OSError, subprocess.CalledProcessError):
+        if partial is not None:
+            partial.unlink(missing_ok=True)
+        return None
+
+
+def _cpu_signature() -> str:
+    """The CPU model and instruction-set flags (Linux), else the platform name."""
+
+    try:
+        lines = Path("/proc/cpuinfo").read_text().splitlines()
+    except OSError:
+        return platform.machine() + platform.processor()
+    wanted = [line for line in lines if line.startswith(("model name", "flags", "Features"))]
+    return "\n".join(dict.fromkeys(wanted))
+
+
 def _build_library() -> ctypes.CDLL | None:
     """Compile kernels.c (once per source version) and load it, or None."""
 
@@ -70,29 +112,21 @@ def _build_library() -> ctypes.CDLL | None:
     if compiler is None or not SOURCE.exists():
         return None
 
-    # NANOGRAD_CFLAGS adds compiler flags, e.g. "-march=native" to use every
-    # vector instruction this CPU has (faster, but the library then only
-    # runs on CPUs like this one). The flags are part of the cache key.
-    flags = ["-O3", *os.environ.get("NANOGRAD_CFLAGS", "").split()]
-    source = SOURCE.read_bytes()
-    digest = hashlib.sha256(source + " ".join(flags).encode()).hexdigest()[:16]
-    cache = Path(os.environ.get("NANOGRAD_CACHE", Path.home() / ".cache" / "nanograd"))
-    library_path = cache / f"kernels-{digest}.so"
-    if not library_path.exists():
-        try:
-            cache.mkdir(parents=True, exist_ok=True)
-            # Build into a temporary name, then rename: two processes
-            # building at once never see a half-written library.
-            with tempfile.NamedTemporaryFile(dir=cache, suffix=".so", delete=False) as handle:
-                partial = Path(handle.name)
-            subprocess.run(
-                [compiler, *flags, "-shared", "-fPIC", str(SOURCE), "-o", str(partial), "-lm"],
-                check=True,
-                capture_output=True,
-            )
-            partial.replace(library_path)
-        except (OSError, subprocess.CalledProcessError):
-            return None
+    # By default the library is built for this exact CPU (-march=native), so
+    # the compiler may use its widest vector instructions; kernels.c has a
+    # fast matrix-product path for those. It is compiled on the machine that
+    # runs it, and the CPU's identity is part of the cache key, so a shared
+    # home directory never loads a library built for another CPU. If the
+    # compiler rejects the flag, a portable build is used instead.
+    # NANOGRAD_CFLAGS replaces "-march=native" (set it empty for a portable build).
+    extra = os.environ.get("NANOGRAD_CFLAGS")
+    attempts = [extra.split()] if extra is not None else [["-march=native"], []]
+    for flags in attempts:
+        library_path = _compile(compiler, ["-O3", *flags])
+        if library_path is not None:
+            break
+    else:
+        return None
 
     try:
         library = ctypes.CDLL(str(library_path))

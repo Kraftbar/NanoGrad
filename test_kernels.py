@@ -94,6 +94,22 @@ class KernelBackendTests(unittest.TestCase):
         no_dx = kernels.layer_norm_rows_backward(grad, *kernels.layer_norm_rows(x, weight, bias, 6, 1e-5)[1:], weight, 6, False)
         self.assertIsNone(no_dx[0])
 
+    def test_gemm_large_shapes_use_the_tiled_path_and_agree(self) -> None:
+        # Big enough for the register-tiled path (8+ rows, 16+ columns), with
+        # leftover rows and columns, a k longer than one block, and batches.
+        for m, k, n in ((19, 300, 37), (8, 16, 16), (33, 5, 70)):
+            for trans_a in (False, True):
+                for trans_b in (False, True):
+                    for steps in ((m * k, k * n, m * n), (m * k, k * n, 0)):
+                        with self.subTest(m=m, k=k, n=n, trans_a=trans_a, trans_b=trans_b, steps=steps):
+                            a, b = values(2 * m * k, m + k), values(2 * k * n, k + n)
+                            python, c = self.run_both(lambda: kernels.gemm(
+                                a, b, batches=2, m=m, k=k, n=n,
+                                a_step=steps[0], b_step=steps[1], c_step=steps[2],
+                                trans_a=trans_a, trans_b=trans_b,
+                            ))
+                            self.assertListsClose(python, c)
+
     def test_gather_and_scatter_agree(self) -> None:
         image = values(2 * 12, 12)
         index = [0, 5, 5, 11, 3]
