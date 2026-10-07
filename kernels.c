@@ -562,6 +562,52 @@ static double exp_shifted(const real *x, double shift, real *y, long count)
     return total;
 }
 
+/*
+ * tanh and sigmoid from the same exp, so their loops vectorize too:
+ *     tanh(a)    = 1 - 2 / (e^(2a) + 1)           for |a| >= 0.25
+ *     tanh(a)    = a - a^3/3 + 2a^5/15 - ...       its Taylor series up to a^19 below
+ *                                                  that (where the formula above
+ *                                                  would lose digits to cancellation)
+ *     sigmoid(x) = 1 / (1 + e^-x),  or  e^x / (1 + e^x) for x < 0
+ * Both are within 4 units in the last place of the C library's.
+ */
+static inline double fast_tanh(double x)
+{
+    double a = fabs(x), s = a * a;
+    double p = -443861162.0 / 1856156927625.0;                 /* Horner, from a^19 down */
+    p = p * s + 6404582.0 / 10854718875.0;
+    p = p * s - 929569.0 / 638512875.0;
+    p = p * s + 21844.0 / 6081075.0;
+    p = p * s - 1382.0 / 155925.0;
+    p = p * s + 62.0 / 2835.0;
+    p = p * s - 17.0 / 315.0;
+    p = p * s + 2.0 / 15.0;
+    p = p * s - 1.0 / 3.0;
+    double near_zero = a + a * s * p;
+    double elsewhere = 1.0 - 2.0 / (fast_exp(2.0 * a) + 1.0);
+    double t = a < 0.25 ? near_zero : elsewhere;
+    return x < 0.0 ? -t : t;
+}
+
+static inline double fast_sigmoid(double x)
+{
+    double e = fast_exp(-fabs(x));                              /* never overflows */
+    double s = 1.0 / (1.0 + e);
+    return x >= 0.0 ? s : e * s;
+}
+
+/* y[i] = FN(x[i]) through a double buffer in chunks (see exp_shifted). */
+#define MAP_CHUNKED(FN, x, y, count)                                              \
+    do {                                                                          \
+        double buffer_[256];                                                      \
+        for (long start_ = 0; start_ < (count); start_ += 256) {                  \
+            long size_ = (count) - start_ < 256 ? (count) - start_ : 256;         \
+            for (long i_ = 0; i_ < size_; i_++) buffer_[i_] = (double)(x)[start_ + i_]; \
+            for (long i_ = 0; i_ < size_; i_++) buffer_[i_] = FN(buffer_[i_]);   \
+            for (long i_ = 0; i_ < size_; i_++) (y)[start_ + i_] = (real)buffer_[i_]; \
+        }                                                                         \
+    } while (0)
+
 void exp_vector(const real *x, real *y, long count)
 {
     exp_shifted(x, 0.0, y, count);
@@ -694,7 +740,7 @@ void scatter_add_rows(const real *grad, const long *ids, real *table_grad, long 
  */
 void tanh_forward(const real *x, real *y, long count)
 {
-    for (long i = 0; i < count; i++) y[i] = tanh(x[i]);
+    MAP_CHUNKED(fast_tanh, x, y, count);
 }
 
 void tanh_backward(const real *y, const real *grad, real *dx, long count)
@@ -961,14 +1007,7 @@ void batch_norm_channels_backward(const real *grad, const real *x_hat, const rea
  */
 void sigmoid_forward(const real *x, real *y, long count)
 {
-    for (long i = 0; i < count; i++) {
-        if (x[i] >= 0.0) {
-            y[i] = 1.0 / (1.0 + exp(-x[i]));
-        } else {
-            double e = exp(x[i]);
-            y[i] = e / (1.0 + e);
-        }
-    }
+    MAP_CHUNKED(fast_sigmoid, x, y, count);
 }
 
 void sigmoid_backward(const real *y, const real *grad, real *dx, long count)
