@@ -5,7 +5,6 @@ import unittest
 from pathlib import Path
 
 from rnn import WordRNNModel, detach_state
-from tensor import Tensor
 from wikitext_lm import Corpus, NanoGradRunner, batchify, evaluate, parse_args, run, windows
 
 
