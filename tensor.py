@@ -256,22 +256,21 @@ class Tensor:
 
         topo = _topological_order(self)
 
-        if self.grad is None:
-            self.grad = [0.0] * len(self.data)
+        # Start every gradient empty; the first _add_grad adopts its list.
         for node in topo:
-            if not node.requires_grad:
-                continue
-            if node._prev:
-                # Intermediate results start empty; _add_grad fills them.
+            if node.requires_grad:
                 node.grad = None
-            else:
-                node.zero_grad()
 
         _add_grad(self, _seed_grad(self, grad))
 
         for node in reversed(topo):
             if node.requires_grad:
                 node._backward()
+
+        # Leaves the output does not depend on get zeros, not None.
+        for node in topo:
+            if node.requires_grad and node.grad is None and not node._prev:
+                node.zero_grad()
 
         if not retain_graph:
             for node in topo:
@@ -400,7 +399,7 @@ def _seed_grad(
 
     if len(grad) != len(tensor.data):
         raise ValueError("backward gradient length must match tensor data")
-    return [float(value) for value in grad]
+    return list(map(float, grad))
 
 
 def _grad_data(tensor: Tensor) -> list[float]:

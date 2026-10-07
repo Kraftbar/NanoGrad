@@ -25,6 +25,9 @@
  * means the batch results are summed, which is what a gradient needs when a
  * weight matrix is shared across the batch.
  */
+/* Entry (i, p) of op(A): A itself is (m x k), or (k x m) when transposed. */
+#define A_AT(i, p) (trans_a ? A[(long)(p) * m + (i)] : A[(long)(i) * k + (p)])
+
 void gemm(
     const double *a, const double *b, double *c,
     int batches, int m, int k, int n,
@@ -54,11 +57,29 @@ void gemm(
 
         /* Row i of C is a weighted sum of rows of op(B):
          * c_row += A'(i, p) * op(B)[p, :] for each p. The inner loop runs
-         * along contiguous memory, which compilers vectorize well. */
-        for (int i = 0; i < m; i++) {
+         * along contiguous memory, which compilers vectorize well.
+         *
+         * Rows of C are done four at a time, so every row of op(B) loaded
+         * from memory is used four times. (Any leftover rows, one by one.) */
+        int i = 0;
+        for (; i + 4 <= m; i += 4) {
+            double *c0 = C + (long)i * n, *c1 = c0 + n, *c2 = c1 + n, *c3 = c2 + n;
+            for (int p = 0; p < k; p++) {
+                double a0 = A_AT(i, p), a1 = A_AT(i + 1, p), a2 = A_AT(i + 2, p), a3 = A_AT(i + 3, p);
+                const double *b_row = B + (long)p * n;
+                for (int j = 0; j < n; j++) {
+                    double b = b_row[j];
+                    c0[j] += a0 * b;
+                    c1[j] += a1 * b;
+                    c2[j] += a2 * b;
+                    c3[j] += a3 * b;
+                }
+            }
+        }
+        for (; i < m; i++) {
             double *c_row = C + (long)i * n;
             for (int p = 0; p < k; p++) {
-                double a_ip = trans_a ? A[(long)p * m + i] : A[(long)i * k + p];
+                double a_ip = A_AT(i, p);
                 const double *b_row = B + (long)p * n;
                 for (int j = 0; j < n; j++) {
                     c_row[j] += a_ip * b_row[j];
@@ -68,6 +89,8 @@ void gemm(
     }
     free(scratch);
 }
+
+#undef A_AT
 
 
 /*

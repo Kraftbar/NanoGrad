@@ -11,6 +11,7 @@ about the math. Two backends compute the same thing:
 
 The C backend is used when it builds; otherwise, or when the environment
 variable ``NANOGRAD_PURE_PYTHON=1`` is set, everything runs in Python.
+``NANOGRAD_CFLAGS="-march=native"`` builds the C kernels for this exact CPU.
 ``BACKEND`` says which one is active, and ``use_backend`` switches (tests
 use it to check that both agree).
 """
@@ -252,8 +253,12 @@ def _build_library() -> ctypes.CDLL | None:
     if compiler is None or not SOURCE.exists():
         return None
 
+    # NANOGRAD_CFLAGS adds compiler flags, e.g. "-march=native" to use every
+    # vector instruction this CPU has (faster, but the library then only
+    # runs on CPUs like this one). The flags are part of the cache key.
+    flags = ["-O3", *os.environ.get("NANOGRAD_CFLAGS", "").split()]
     source = SOURCE.read_bytes()
-    digest = hashlib.sha256(source).hexdigest()[:16]
+    digest = hashlib.sha256(source + " ".join(flags).encode()).hexdigest()[:16]
     cache = Path(os.environ.get("NANOGRAD_CACHE", Path.home() / ".cache" / "nanograd"))
     library_path = cache / f"kernels-{digest}.so"
     if not library_path.exists():
@@ -264,7 +269,7 @@ def _build_library() -> ctypes.CDLL | None:
             with tempfile.NamedTemporaryFile(dir=cache, suffix=".so", delete=False) as handle:
                 partial = Path(handle.name)
             subprocess.run(
-                [compiler, "-O3", "-shared", "-fPIC", str(SOURCE), "-o", str(partial), "-lm"],
+                [compiler, *flags, "-shared", "-fPIC", str(SOURCE), "-o", str(partial), "-lm"],
                 check=True,
                 capture_output=True,
             )
