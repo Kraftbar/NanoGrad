@@ -36,6 +36,8 @@ def silu(x: Tensor) -> Tensor:
 def timestep_embedding(steps: list[int], width: int) -> Tensor:
     """Sinusoidal embedding of integer time steps: (batch, width)."""
 
+    if width % 2:
+        raise ValueError("timestep embedding width must be even (sines and cosines)")
     half = width // 2
     values = []
     for step in steps:
@@ -110,6 +112,8 @@ class Diffusion:
     """DDPM's noise schedule, training loss and sampler around a noise-predicting model."""
 
     def __init__(self, model: TinyUNet, *, steps: int = 200, beta_start: float = 1e-4, beta_end: float = 0.02) -> None:
+        if steps < 2:
+            raise ValueError("a diffusion schedule needs at least 2 steps")
         self.model = model
         self.steps = steps
         self.betas = [beta_start + (beta_end - beta_start) * i / (steps - 1) for i in range(steps)]

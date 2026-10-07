@@ -214,7 +214,8 @@ def generate_tokens(model, prompt: list[int], *, length: int, context_size: int,
 
 
 def train(args: argparse.Namespace) -> dict:
-    kernels.set_default_dtype(args.dtype)
+    if args.dtype is not None:
+        kernels.set_default_dtype(args.dtype)
     text = Path(args.text_file).read_text(encoding="utf-8")
     if args.max_chars is not None:
         text = text[: args.max_chars]
@@ -357,7 +358,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--preset", choices=tuple(PRESETS), default="mini")
     parser.add_argument("--max-chars", type=int)
     parser.add_argument("--tokenizer", choices=("char", "bpe"), default="char")
-    parser.add_argument("--dtype", choices=("float64", "float32"), default="float64")
+    parser.add_argument("--dtype", choices=("float64", "float32"),
+                        help="default: float64, or NANOGRAD_DTYPE")
     parser.add_argument("--bpe-vocab-size", type=int, default=512)
     parser.add_argument("--validation-fraction", type=float, default=0.1)
     for name in ("layers", "heads", "embedding_dim", "context_size", "batch_size", "steps", "warmup_steps"):

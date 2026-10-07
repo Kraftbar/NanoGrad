@@ -342,6 +342,8 @@ def scatter_add_indexed(
 ) -> array:
     grad_buffer = _reals(grad)
     keep, index_buffer = _index_buffer(index)
+    if into is not None and (type(into) is not array or into.typecode != typecode):
+        raise TypeError("scatter_add_indexed(into=...) needs a buffer from zeros() in the current precision")
     image_grad = zeros(batches * image_size) if into is None else into
     library.scatter_add_indexed(
         _buffer(grad_buffer), index_buffer, _buffer(image_grad), batches, image_size, len(index),

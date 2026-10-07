@@ -53,5 +53,25 @@ class Float32Tests(unittest.TestCase):
         self.assertLess(losses["float32"][-1], losses["float32"][0])
 
 
+    def test_cached_rotary_tables_follow_the_current_precision(self) -> None:
+        import math
+
+        from tensor import rotary_embedding
+
+        x = Tensor([1.0, 0.0] * 6, (1, 6, 2))
+        kernels.set_default_dtype("float32")
+        rotary_embedding(x)                          # fills the cache under float32
+        kernels.set_default_dtype("float64")
+        out = rotary_embedding(Tensor([1.0, 0.0] * 6, (1, 6, 2)))
+        for position in range(6):
+            self.assertEqual(out.data[2 * position], math.cos(position))   # exact in float64
+
+    def test_gpt_train_keeps_the_environment_dtype_unless_asked(self) -> None:
+        from gpt_train import parse_args
+
+        self.assertIsNone(parse_args(["--text-file", "t.txt"]).dtype)
+        self.assertEqual(parse_args(["--text-file", "t.txt", "--dtype", "float32"]).dtype, "float32")
+
+
 if __name__ == "__main__":
     unittest.main()

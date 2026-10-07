@@ -29,6 +29,7 @@ Performance notes, kept deliberately simple:
 from __future__ import annotations
 
 import math
+import operator
 import random
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -117,6 +118,7 @@ class Tensor:
         flow back through; see ``take_slices``.
         """
 
+        key = _integer_keys(key)
         if isinstance(key, int) and self.ndim == 1:
             return self.data[_normalize_index(key, self.shape[0])]
         if isinstance(key, tuple) and len(key) == self.ndim and all(isinstance(k, int) for k in key):
@@ -937,7 +939,8 @@ def rotary_embedding(tensor: Tensor, *, start: int = 0, base: float = 10000.0) -
         raise ValueError("rotary_embedding needs an even last axis")
     cos_table, sin_table = _rotary_tables(length, width, start, base)
     repeats = tensor.numel // (length * width)
-    cos_full, sin_full = cos_table * repeats, sin_table * repeats
+    cos_full = kernels.storage(cos_table * repeats)     # in the current precision
+    sin_full = kernels.storage(sin_table * repeats)
     swap = _pair_swap_index(width)
     sizes = dict(batches=tensor.numel // width, image_size=width)
 
@@ -964,7 +967,7 @@ def _rotary_tables(length: int, width: int, start: int, base: float):
             angle = position * base ** (-2 * pair / width)
             cos_values += [math.cos(angle), math.cos(angle)]
             sin_values += [-math.sin(angle), math.sin(angle)]
-    return kernels.storage(cos_values), kernels.storage(sin_values)
+    return tuple(cos_values), tuple(sin_values)    # plain floats: valid in any precision
 
 
 @lru_cache(maxsize=64)
@@ -1002,6 +1005,22 @@ def flatten(tensor: Tensor, start_axis: int = 0) -> Tensor:
     leading_shape = tensor.shape[:start_axis]
     flattened = _numel(tensor.shape[start_axis:])
     return reshape(tensor, (*leading_shape, flattened))
+
+
+def _integer_keys(key):
+    """Turn integer-like keys (e.g. NumPy integers) into ints; reject bools."""
+
+    def convert(item):
+        if isinstance(item, bool):
+            raise IndexError("tensor indices may not be booleans")
+        if isinstance(item, (slice, type(Ellipsis))):
+            return item
+        try:
+            return operator.index(item)
+        except TypeError:
+            raise IndexError("tensor indices must be integers, slices or ...") from None
+
+    return tuple(convert(item) for item in key) if isinstance(key, tuple) else convert(key)
 
 
 def take_slices(tensor: Tensor, key) -> Tensor:

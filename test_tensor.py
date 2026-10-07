@@ -1310,7 +1310,12 @@ class SlicingTests(unittest.TestCase):
         self.assertEqual(x[..., -1].tolist(), [[3.0, 7.0, 11.0], [15.0, 19.0, 23.0]])
         self.assertEqual(x[0, 1:3, ::2].tolist(), [[4.0, 6.0], [8.0, 10.0]])
         self.assertEqual(x[1, 2, 3], 23.0)
-        for bad in ((0, 0, 0, 0), (Ellipsis, Ellipsis), (slice(3, 3),), ("a",)):
+        class Index:                               # NumPy integers behave like this
+            def __index__(self):
+                return 1
+
+        self.assertEqual(x[Index(), 0, Index()], 13.0)
+        for bad in ((0, 0, 0, 0), (Ellipsis, Ellipsis), (slice(3, 3),), ("a",), (True,)):
             with self.subTest(key=bad), self.assertRaises(IndexError):
                 x[bad]
 

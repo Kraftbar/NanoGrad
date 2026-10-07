@@ -85,12 +85,14 @@ def set_default_dtype(name: str) -> None:
     codes = {"float64": "d", "float32": "f"}
     if name not in codes:
         raise ValueError("dtype must be 'float64' or 'float32'")
+    if BACKEND != "c":
+        return                       # the Python backend always uses float64
     if not kernels_c.set_precision(codes[name]) and name == "float32":
         raise RuntimeError("the float32 C kernels could not be built")
 
 
 def default_dtype() -> str:
-    return "float32" if kernels_c.typecode == "f" else "float64"
+    return "float32" if BACKEND == "c" and kernels_c.typecode == "f" else "float64"
 
 
 def index_table(indices: Sequence[int]) -> array | tuple[int, ...]:

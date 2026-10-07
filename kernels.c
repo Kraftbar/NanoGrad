@@ -9,7 +9,8 @@
  * Matrices are flat row-major arrays of `real` numbers, exactly like
  * Tensor.data: double by default. kernels_c.py also builds a float32 copy of
  * this file with -DREAL=float. Scalar settings (eps, learning rates) stay
- * double, and so do the running sums inside reductions.
+ * double, and so do the running sums within one row or channel; sums
+ * across rows (e.g. weight gradients) are stored as `real`.
  */
 
 #include <math.h>
