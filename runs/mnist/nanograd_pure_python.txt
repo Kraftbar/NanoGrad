@@ -1,0 +1,2 @@
+train 60000 images, test 10000 images, batch 32
+nanograd epoch 1: loss 0.3531, test acc 95.37%, 752.5 s (401.4 ms/step)

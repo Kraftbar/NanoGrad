@@ -10,21 +10,38 @@ and tiny language models.
 
 ## Architecture
 
-NanoGrad is organized in two layers: a reusable core, then model and experiment
-implementations built on top of that core.
+NanoGrad is a stack of small layers. Each one only uses the layers below it,
+and each can be read on its own:
 
 ```text
-+-------------------------------------------------------------+
-| Models / Experiments                                        |
-| logic gates | MLPs | CNNs | tiny LMs | vision / SLAM        |
-+-------------------------------------------------------------+
-| Core                                                        |
-| autograd | tensors | ops | losses | metrics | optimizers   |
-+-------------------------------------------------------------+
++---------------------------------------------------------------------+
+| Recipes and benchmarks                                              |
+| gpt_train | mnist_compare | nanogpt_compare | benchmark | demos     |
++---------------------------------------------------------------------+
+| Models                                                              |
+| vision.py (LeNet-style CNNs) | language.py (char GPT) | geometry    |
++---------------------------------------------------------------------+
+| Layers, losses, optimizers, training                                |
+| tensor_nn | losses | optim | schedules | train | parallel           |
++---------------------------------------------------------------------+
+| Tensor and autograd: the math                                       |
+| tensor.py: shapes, broadcasting, every op's forward + backward rule |
++---------------------------------------------------------------------+
+| Kernels: the inner loops                                            |
+| kernels.py: pure-Python reference  <->  kernels.c: the same in C    |
++---------------------------------------------------------------------+
 ```
 
-Core modules should make many experiments possible. Model and experiment
-modules should prove that the core works on increasingly realistic checks.
+The bottom split keeps the code readable without giving up speed:
+
+- `tensor.py` says what an op computes and how its gradient flows.
+- `kernels.py` holds the loops that do the heavy work (matrix products,
+  im2col, pooling, softmax, LayerNorm, GELU, tanh). Each one is written
+  twice: a short Python version to read, and a C version to run.
+  `test_kernels.py` checks that they agree.
+
+Measurements of where the time goes, and how far the stack is from PyTorch,
+are in [docs/benchmarks.md](./docs/benchmarks.md).
 
 ## Milestones
 
@@ -66,13 +83,18 @@ modules should prove that the core works on increasingly realistic checks.
   prompts shorter than the context, data-parallel training on all CPU cores
 - [x] [Train nanoGPT's baby GPT on full Tiny Shakespeare](./docs/shakespeare_gpt.md)
   (val loss 1.92 vs nanoGPT's 1.89 with the same recipe)
-- [ ] Move LayerNorm, GELU, softmax and elementwise ops into the C kernels
+- [x] Move matrix products, im2col, pooling, LayerNorm, GELU, softmax and
+  tanh into optional C kernels (pure Python stays the reference)
+- [x] [Benchmark against PyTorch: LeNet on MNIST and op by op](./docs/benchmarks.md)
+- [ ] Keep tensors in C arrays between kernels, so data stops being copied
+  to and from Python lists at every op
 
 ### First Real Datasets
 
 - [x] Run and tune MNIST MLP on local data
 - [x] Train a LeNet-style MNIST model
 - [x] Try a small CIFAR CNN after the MNIST path is stable
+- [ ] CIFAR-10 against PyTorch, like `mnist_compare.py` (needs the data files locally)
 
 ### Later Branches
 
@@ -143,7 +165,8 @@ model.py         # scalar model definitions built from nn.py
 train.py         # scalar and tensor training loops
 demo.py          # scalar autograd training demo
 tensor_demo.py   # tensor math and tensor-autograd demos
-benchmark.py     # small core operation timing checks
+benchmark.py     # op-by-op timing against PyTorch (DeepBench-style)
+mnist_compare.py # LeNet on MNIST in NanoGrad and PyTorch, same weights and batches
 vision.py        # reusable small CNN model implementations
 mnist_demo.py    # local-file MNIST MLP demo
 mnist_cnn_demo.py # local-file MNIST CNN demo
@@ -196,17 +219,20 @@ python3 mnist_smoke_demo.py
 python3 char_demo.py --preset tiny-transformer
 python3 char_compare.py
 python3 language_benchmark.py --repeat 1
+python3 benchmark.py --repeat 1
 python3 pose_demo.py --outliers 0.3
 python3 image_pair_demo.py
 python3 three_view_demo.py
 ```
 
-The core has no third-party dependencies. Only `nanogpt_compare.py` needs
-PyTorch, for the reference nanoGPT side:
+The core has no third-party dependencies. Only the comparisons against
+PyTorch need it:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install torch
 .venv/bin/python nanogpt_compare.py --text-file data/tinyshakespeare/input.txt
+.venv/bin/python mnist_compare.py --epochs 1
+.venv/bin/python benchmark.py --torch
 ```
 
 Use the test suite as the main correctness check; `test_gradcheck.py` compares

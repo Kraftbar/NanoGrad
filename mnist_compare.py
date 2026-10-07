@@ -30,6 +30,7 @@ from time import perf_counter
 from datasets import read_mnist_images, read_mnist_labels
 from losses import softmax_cross_entropy
 from optim import TensorAdam
+from parallel import DataParallel
 from tensor import Tensor, no_grad
 from train import evaluation_mode
 from vision import TwoConvCNN
@@ -72,18 +73,36 @@ def build_nanograd(seed: int) -> TwoConvCNN:
     return TwoConvCNN(image_shape=IMAGE_SHAPE, classes=10, pooling="avg", activation="tanh", seed=seed)
 
 
+def image_loss(model: TwoConvCNN, xs: list[list[float]], ys: list[int]):
+    """Mean cross entropy of a batch of flat images (also run by workers)."""
+
+    inputs = Tensor([value for image in xs for value in image], (len(xs), *IMAGE_SHAPE))
+    return softmax_cross_entropy(model(inputs), ys)
+
+
 class NanoGradRunner:
-    def __init__(self, model: TwoConvCNN, lr: float) -> None:
+    def __init__(self, model: TwoConvCNN, lr: float, workers: int = 1) -> None:
         self.model = model
         self.optimizer = TensorAdam(model.parameters(), lr=lr)
+        # With workers > 1 each batch is split across processes (parallel.py).
+        self.parallel = DataParallel(model, image_loss, workers=workers) if workers > 1 else None
 
     def train_step(self, pixels: list[float], labels: list[int]) -> float:
-        inputs = Tensor(pixels, (len(labels), *IMAGE_SHAPE))
         self.optimizer.zero_grad()
-        loss = softmax_cross_entropy(self.model(inputs), labels)
-        loss.backward()
+        if self.parallel is not None:
+            images = [pixels[i * IMAGE_SIZE : (i + 1) * IMAGE_SIZE] for i in range(len(labels))]
+            loss = self.parallel.loss_and_gradients(images, labels)
+        else:
+            inputs = Tensor(pixels, (len(labels), *IMAGE_SHAPE))
+            loss_tensor = softmax_cross_entropy(self.model(inputs), labels)
+            loss_tensor.backward()
+            loss = loss_tensor.item()
         self.optimizer.step()
-        return loss.item()
+        return loss
+
+    def close(self) -> None:
+        if self.parallel is not None:
+            self.parallel.close()
 
     def predict(self, pixels: list[float], count: int) -> list[int]:
         with no_grad(), evaluation_mode(self.model):
@@ -171,7 +190,7 @@ def run(args: argparse.Namespace) -> dict:
     runners = {}
     for name in args.frameworks:
         if name == "nanograd":
-            runners[name] = NanoGradRunner(model, args.lr)
+            runners[name] = NanoGradRunner(model, args.lr, workers=args.workers)
         else:
             if importlib.util.find_spec("torch") is None:
                 raise SystemExit("PyTorch is not installed; use --frameworks nanograd")
@@ -203,6 +222,8 @@ def run(args: argparse.Namespace) -> dict:
                   f"test acc {100 * test_accuracy:.2f}%, {train_seconds:.1f} s "
                   f"({row['ms_per_step']:.1f} ms/step)", flush=True)
 
+    if "nanograd" in runners:
+        runners["nanograd"].close()
     if len(runners) == 2:
         difference = max(
             abs(a - b)
@@ -224,6 +245,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--test-limit", type=int)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--workers", type=int, default=1, help="NanoGrad worker processes")
     parser.add_argument("--torch-dtype", choices=("float64", "float32"), default="float64")
     parser.add_argument("--torch-threads", type=int, default=1)
     return parser.parse_args(argv)

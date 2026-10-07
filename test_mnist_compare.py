@@ -12,6 +12,22 @@ class EpochBatchTests(unittest.TestCase):
         self.assertEqual(sorted(i for batch in batches for i in batch), list(range(10)))
 
 
+class WorkerTests(unittest.TestCase):
+    def test_workers_give_the_single_process_step(self) -> None:
+        rng = random.Random(5)
+        pixels = [rng.random() for _ in range(6 * IMAGE_SIZE)]
+        labels = [rng.randrange(10) for _ in range(6)]
+        single = NanoGradRunner(build_nanograd(seed=3), lr=1e-3)
+        split = NanoGradRunner(build_nanograd(seed=3), lr=1e-3, workers=2)
+        try:
+            self.assertAlmostEqual(single.train_step(pixels, labels), split.train_step(pixels, labels), places=12)
+        finally:
+            split.close()
+        for left, right in zip(single.weights(), split.weights()):
+            for a, b in zip(left, right):
+                self.assertAlmostEqual(a, b, places=12)
+
+
 @unittest.skipUnless(importlib.util.find_spec("torch"), "PyTorch is not installed")
 class TorchAgreementTests(unittest.TestCase):
     def test_same_losses_and_weights_after_a_few_steps(self) -> None:
