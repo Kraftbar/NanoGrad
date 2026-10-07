@@ -166,6 +166,27 @@ def rms_norm_rows_backward(
     return kernel(grad, x, inv_rms, weight, width)
 
 
+def batch_norm_channels(
+    x: list[float], weight: list[float], bias: list[float], *,
+    batch: int, channels: int, plane: int, eps: float,
+):
+    """Training-mode batch norm of (batch, channels, plane) data: returns
+    (y, x_hat, inv_std, mean, variance), the last three per channel."""
+
+    kernel = kernels_c.batch_norm_channels if BACKEND == "c" else reference.batch_norm_channels
+    return kernel(x, weight, bias, batch, channels, plane, eps)
+
+
+def batch_norm_channels_backward(
+    grad: list[float], x_hat: list[float], inv_std: list[float], weight: list[float], *,
+    batch: int, channels: int, plane: int,
+):
+    """Returns (dx, dweight, dbias)."""
+
+    kernel = kernels_c.batch_norm_channels_backward if BACKEND == "c" else reference.batch_norm_channels_backward
+    return kernel(grad, x_hat, inv_std, weight, batch, channels, plane)
+
+
 def gather_indexed(image: list[float], index: Sequence[int], *, batches: int, image_size: int) -> list[float]:
     """For every image in the batch, read the pixels at ``index`` (im2col)."""
 

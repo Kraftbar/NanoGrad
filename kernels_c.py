@@ -122,6 +122,8 @@ def _build_library() -> ctypes.CDLL | None:
     library.adam_update.argtypes = [pointer] * 5 + [count] + [ctypes.c_double] * 7
     library.tanh_forward.argtypes = [pointer, pointer, count]
     library.relu_forward.argtypes = [pointer, pointer, count]
+    library.batch_norm_channels.argtypes = [pointer] * 8 + [count] * 3 + [ctypes.c_double]
+    library.batch_norm_channels_backward.argtypes = [pointer] * 7 + [count] * 3
     library.rms_norm_rows.argtypes = [pointer] * 4 + [count, count, ctypes.c_double]
     library.rms_norm_rows_backward.argtypes = [pointer] * 6 + [count, count]
     library.sum_repeated.argtypes = [pointer, pointer, count, count, count]
@@ -242,6 +244,26 @@ def rms_norm_rows_backward(grad, x, inv_rms, weight, width: int) -> tuple[array,
     dx, dweight = zeros(len(x)), zeros(width)
     library.rms_norm_rows_backward(*map(_buffer, buffers), _buffer(dx), _buffer(dweight), len(inv_rms), width)
     return dx, dweight
+
+
+def batch_norm_channels(x, weight, bias, batch: int, channels: int, plane: int, eps: float):
+    inputs = [_doubles(values) for values in (x, weight, bias)]
+    y, x_hat = zeros(len(x)), zeros(len(x))
+    inv_std, mean, variance = zeros(channels), zeros(channels), zeros(channels)
+    library.batch_norm_channels(
+        *map(_buffer, inputs), _buffer(y), _buffer(x_hat), _buffer(inv_std), _buffer(mean), _buffer(variance),
+        batch, channels, plane, eps,
+    )
+    return y, x_hat, inv_std, mean, variance
+
+
+def batch_norm_channels_backward(grad, x_hat, inv_std, weight, batch: int, channels: int, plane: int):
+    inputs = [_doubles(values) for values in (grad, x_hat, inv_std, weight)]
+    dx, dweight, dbias = zeros(len(grad)), zeros(channels), zeros(channels)
+    library.batch_norm_channels_backward(
+        *map(_buffer, inputs), _buffer(dx), _buffer(dweight), _buffer(dbias), batch, channels, plane,
+    )
+    return dx, dweight, dbias
 
 
 def _index_buffer(index: Sequence[int]):

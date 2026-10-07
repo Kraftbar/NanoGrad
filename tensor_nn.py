@@ -9,7 +9,6 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import kernels
-from kernels import dot
 
 from tensor import (
     _set_backward,
@@ -185,9 +184,10 @@ class TensorBatchNorm2d(TensorModule):
 
         x_hat = (x - mean_c) / sqrt(var_c + eps),    y = x_hat * weight_c + bias_c
 
-    That is LayerNorm with the roles of the axes swapped: make each channel
-    one long row, and LayerNorm normalizes rows. It also keeps running
-    averages of the statistics for evaluation mode, as PyTorch does:
+    That is LayerNorm with the roles of the axes swapped (normalize each
+    channel instead of each row), and its gradient is LayerNorm's too; see
+    ``batch_norm``. It also keeps running averages of the statistics for
+    evaluation mode, as PyTorch does:
 
         running = (1 - momentum) * running + momentum * batch statistic
 
@@ -205,7 +205,6 @@ class TensorBatchNorm2d(TensorModule):
         self.bias = Tensor.zeros((channels,), requires_grad=True)
         self.running_mean = [0.0] * channels
         self.running_var = [1.0] * channels
-        self._unit_affine: dict[int, tuple[Tensor, Tensor]] = {}   # see __call__
 
     def __call__(self, inputs: Tensor) -> Tensor:
         if inputs.ndim != 4 or inputs.shape[1] != self.channels:
@@ -213,30 +212,19 @@ class TensorBatchNorm2d(TensorModule):
         batch, channels, rows, cols = inputs.shape
         per_channel = (channels, 1, 1)
         if self.training:
-            count = batch * rows * cols
-            channel_rows = inputs.permute((1, 0, 2, 3)).reshape((channels, count))
-            self._update_running_statistics(channel_rows.data, count)
-            # Plain normalization: LayerNorm with weight 1 and bias 0 (cached
-            # per row length); the per-channel weight and bias come after.
-            if count not in self._unit_affine:
-                self._unit_affine[count] = (Tensor([1.0] * count, (count,)), Tensor.zeros((count,)))
-            ones, zeros = self._unit_affine[count]
-            normalized = layer_norm(channel_rows, ones, zeros, eps=self.eps)
-            x_hat = normalized.reshape((channels, batch, rows, cols)).permute((1, 0, 2, 3))
-        else:
-            mean = Tensor(self.running_mean, per_channel)
-            inv_std = Tensor([1.0 / math.sqrt(v + self.eps) for v in self.running_var], per_channel)
-            x_hat = (inputs - mean) * inv_std
+            out, mean, variance = batch_norm(inputs, self.weight, self.bias, eps=self.eps)
+            self._update_running_statistics(mean, variance, batch * rows * cols)
+            return out
+        mean = Tensor(self.running_mean, per_channel)
+        inv_std = Tensor([1.0 / math.sqrt(v + self.eps) for v in self.running_var], per_channel)
+        x_hat = (inputs - mean) * inv_std
         return x_hat * self.weight.reshape(per_channel) + self.bias.reshape(per_channel)
 
-    def _update_running_statistics(self, channel_rows: Sequence[float], count: int) -> None:
+    def _update_running_statistics(self, mean: Sequence[float], variance: Sequence[float], count: int) -> None:
         momentum = self.momentum
         for channel in range(self.channels):
-            row = channel_rows[channel * count : (channel + 1) * count]
-            mean = sum(row) / count
-            variance = max(dot(row, row) / count - mean * mean, 0.0)
-            unbiased = variance * count / max(count - 1, 1)
-            self.running_mean[channel] = (1 - momentum) * self.running_mean[channel] + momentum * mean
+            unbiased = variance[channel] * count / max(count - 1, 1)
+            self.running_mean[channel] = (1 - momentum) * self.running_mean[channel] + momentum * mean[channel]
             self.running_var[channel] = (1 - momentum) * self.running_var[channel] + momentum * unbiased
 
     def parameters(self) -> list[Tensor]:
@@ -614,6 +602,43 @@ def layer_norm(
 
     _set_backward(out, _backward)
     return out
+
+
+def batch_norm(inputs: Tensor, weight: Tensor, bias: Tensor, *, eps: float = 1e-5):
+    """Training-mode batch norm of (batch, channels, rows, cols) images.
+
+    Per channel c, over all n = batch * rows * cols of its values:
+
+        x_hat = (x - mean_c) / sqrt(var_c + eps),    y = x_hat * weight_c + bias_c
+
+    Backward, with g = dy * weight_c (LayerNorm's formula, per channel):
+
+        dx        = inv_std_c * (g - mean(g) - x_hat * mean(g * x_hat))
+        dweight_c = sum of dy * x_hat,   dbias_c = sum of dy
+
+    Returns (output, per-channel means, per-channel biased variances).
+    """
+
+    batch, channels, rows, cols = inputs.shape
+    sizes = dict(batch=batch, channels=channels, plane=rows * cols)
+    data, x_hat, inv_std, mean, variance = kernels.batch_norm_channels(
+        inputs.data, weight.data, bias.data, eps=eps, **sizes,
+    )
+    out = _op_result(data, inputs.shape, (inputs, weight, bias), "batch_norm")
+
+    def _backward() -> None:
+        input_grad, weight_grad, bias_grad = kernels.batch_norm_channels_backward(
+            _grad_data(out), x_hat, inv_std, weight.data, **sizes,
+        )
+        if inputs.requires_grad:
+            _add_grad(inputs, input_grad)
+        if weight.requires_grad:
+            _add_grad(weight, weight_grad)
+        if bias.requires_grad:
+            _add_grad(bias, bias_grad)
+
+    _set_backward(out, _backward)
+    return out, mean, variance
 
 
 def rms_norm(inputs: Tensor, weight: Tensor, *, eps: float = 1e-5) -> Tensor:

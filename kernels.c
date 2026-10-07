@@ -388,3 +388,69 @@ void rms_norm_rows_backward(const double *grad, const double *x, const double *i
             dx[r * width + i] = scale * (dy[i] * weight[i] - in[i] * scale * scale * mean_g_x);
     }
 }
+
+/*
+ * Batch norm in training mode, for (batch, channels, plane) data: each
+ * channel is normalized over every image and pixel it has:
+ *     x_hat = (x - mean_c) * inv_std_c,   y = x_hat * weight_c + bias_c
+ * Also returns each channel's mean and (biased) variance. The backward
+ * pass is LayerNorm's, per channel instead of per row (n = batch * plane):
+ *     g = dy * weight_c
+ *     dx = inv_std_c * (g - mean(g) - x_hat * mean(g * x_hat))
+ *     dweight_c = sum dy * x_hat,   dbias_c = sum dy
+ */
+void batch_norm_channels(const double *x, const double *weight, const double *bias,
+                         double *y, double *x_hat, double *inv_std, double *mean, double *variance,
+                         long batch, long channels, long plane, double eps)
+{
+    double count = (double)(batch * plane);
+    for (long c = 0; c < channels; c++) {
+        double total = 0.0;
+        for (long b = 0; b < batch; b++) {
+            const double *in = x + (b * channels + c) * plane;
+            for (long i = 0; i < plane; i++) total += in[i];
+        }
+        double m = total / count, squares = 0.0;
+        for (long b = 0; b < batch; b++) {
+            const double *in = x + (b * channels + c) * plane;
+            for (long i = 0; i < plane; i++) squares += (in[i] - m) * (in[i] - m);
+        }
+        double v = squares / count, scale = 1.0 / sqrt(v + eps);
+        mean[c] = m;
+        variance[c] = v;
+        inv_std[c] = scale;
+        for (long b = 0; b < batch; b++) {
+            long offset = (b * channels + c) * plane;
+            for (long i = 0; i < plane; i++) {
+                double h = (x[offset + i] - m) * scale;
+                x_hat[offset + i] = h;
+                y[offset + i] = h * weight[c] + bias[c];
+            }
+        }
+    }
+}
+
+void batch_norm_channels_backward(const double *grad, const double *x_hat, const double *inv_std,
+                                  const double *weight, double *dx, double *dweight, double *dbias,
+                                  long batch, long channels, long plane)
+{
+    double count = (double)(batch * plane);
+    for (long c = 0; c < channels; c++) {
+        double sum_dy = 0.0, sum_dy_h = 0.0;
+        for (long b = 0; b < batch; b++) {
+            long offset = (b * channels + c) * plane;
+            for (long i = 0; i < plane; i++) {
+                sum_dy += grad[offset + i];
+                sum_dy_h += grad[offset + i] * x_hat[offset + i];
+            }
+        }
+        dweight[c] = sum_dy_h;
+        dbias[c] = sum_dy;
+        double mean_g = weight[c] * sum_dy / count, mean_g_h = weight[c] * sum_dy_h / count;
+        for (long b = 0; b < batch; b++) {
+            long offset = (b * channels + c) * plane;
+            for (long i = 0; i < plane; i++)
+                dx[offset + i] = inv_std[c] * (grad[offset + i] * weight[c] - mean_g - x_hat[offset + i] * mean_g_h);
+        }
+    }
+}

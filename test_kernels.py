@@ -150,6 +150,17 @@ class KernelBackendTests(unittest.TestCase):
         for p, q in zip(python, c):
             self.assertListsClose(p, q)
 
+    def test_batch_norm_agrees(self) -> None:
+        sizes = dict(batch=3, channels=2, plane=5)
+        x, weight, bias, grad = values(30, 31), values(2, 32), values(2, 33), values(30, 34)
+        python, c = self.run_both(lambda: kernels.batch_norm_channels(x, weight, bias, eps=1e-5, **sizes))
+        for p, q in zip(python, c):
+            self.assertListsClose(p, q)
+        x_hat, inv_std = python[1], python[2]
+        python, c = self.run_both(lambda: kernels.batch_norm_channels_backward(grad, x_hat, inv_std, weight, **sizes))
+        for p, q in zip(python, c):
+            self.assertListsClose(p, q)
+
     def test_relu_agrees(self) -> None:
         x, grad = values(40, 25), values(40, 26)
         python, c = self.run_both(lambda: kernels.relu(x))

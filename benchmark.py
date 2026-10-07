@@ -105,9 +105,12 @@ def nanograd_step(case: Case, inputs, targets, out_grad=None) -> Callable[[], tu
     tensors = [Tensor(list(values), shape, requires_grad=True) for values, shape in zip(inputs, case.shapes)]
     extra = (targets,) if targets is not None else ()
 
+    # Like PyTorch's side, the output gradient is built once, outside the timing.
+    seed = None if out_grad is None else Tensor(out_grad, (len(out_grad),))
+
     def step():
         out = case.nanograd(*tensors, *extra)
-        out.backward(out_grad if out_grad is not None else [1.0] * out.numel)
+        out.backward(seed.reshape(out.shape) if seed is not None else [1.0] * out.numel)
         return out.data, [tensor.grad for tensor in tensors]
 
     return step

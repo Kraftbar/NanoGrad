@@ -168,6 +168,52 @@ def rms_norm_rows_backward(
     return dx, dweight
 
 
+def batch_norm_channels(
+    x: list[float], weight: list[float], bias: list[float],
+    batch: int, channels: int, plane: int, eps: float,
+):
+    """Returns (y, x_hat, inv_std, mean, variance), the last three per channel."""
+
+    count = batch * plane
+    y, x_hat = [0.0] * len(x), [0.0] * len(x)
+    inv_std, mean, variance = [], [], []
+    for c in range(channels):
+        blocks = [range((b * channels + c) * plane, (b * channels + c + 1) * plane) for b in range(batch)]
+        values = [x[i] for block in blocks for i in block]
+        m = sum(values) / count
+        v = sum((value - m) ** 2 for value in values) / count
+        scale = 1.0 / math.sqrt(v + eps)
+        mean.append(m)
+        variance.append(v)
+        inv_std.append(scale)
+        for block in blocks:
+            for i in block:
+                x_hat[i] = (x[i] - m) * scale
+                y[i] = x_hat[i] * weight[c] + bias[c]
+    return y, x_hat, inv_std, mean, variance
+
+
+def batch_norm_channels_backward(
+    grad: list[float], x_hat: list[float], inv_std: list[float], weight: list[float],
+    batch: int, channels: int, plane: int,
+):
+    """Returns (dx, dweight, dbias)."""
+
+    count = batch * plane
+    dx = [0.0] * len(grad)
+    dweight, dbias = [], []
+    for c in range(channels):
+        indices = [i for b in range(batch) for i in range((b * channels + c) * plane, (b * channels + c + 1) * plane)]
+        sum_dy = sum(grad[i] for i in indices)
+        sum_dy_h = sum(grad[i] * x_hat[i] for i in indices)
+        dweight.append(sum_dy_h)
+        dbias.append(sum_dy)
+        mean_g, mean_g_h = weight[c] * sum_dy / count, weight[c] * sum_dy_h / count
+        for i in indices:
+            dx[i] = inv_std[c] * (grad[i] * weight[c] - mean_g - x_hat[i] * mean_g_h)
+    return dx, dweight, dbias
+
+
 def gather_indexed(
     image: list[float], index: Sequence[int], batches: int, image_size: int,
 ) -> list[float]:
