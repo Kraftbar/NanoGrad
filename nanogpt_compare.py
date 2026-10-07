@@ -260,6 +260,9 @@ class NanoGPTRunner:
 
         nanogpt = load_nanogpt_module()
         torch.set_default_dtype(torch.float64)
+        # Tiny models gain nothing from a thread pool, and its busy-waiting
+        # threads would steal CPU from NanoGrad's single Python thread.
+        torch.set_num_threads(1)
         torch.manual_seed(config.seed)
         if config.hidden_dim != 4 * config.embedding_dim:
             raise ValueError("nanoGPT's MLP is fixed at 4 * embedding_dim")

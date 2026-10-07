@@ -58,8 +58,10 @@ modules should prove that the core works on increasingly realistic checks.
   embedding, and tiny GPT presets
 - [x] Add a slightly larger `small-gpt` character-transformer preset
 - [x] Export top-k/temperature character sampling grids for saved checkpoints
-- [ ] Compare top-k sampled output against nanoGPT on the same capped text slice
-- [ ] Keep implementations readable rather than over-compressed
+- [x] [Compare top-k sampled output against nanoGPT on the same capped text slice](./docs/language_nanogpt_comparison.md#side-by-side-runs-against-nanogpt)
+- [x] Keep implementations readable rather than over-compressed
+- [x] [Speed up the pure-Python core without hiding the math](./docs/performance.md)
+- [x] Check every tensor op's backward rule against finite differences
 
 ### First Real Datasets
 
@@ -76,8 +78,11 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] [Compare tiny language-model structure and behavior against nanoGPT](./docs/language_nanogpt_comparison.md)
 - [x] [Document the character language-model experiment workflow](./docs/language_workflow.md)
 - [x] Add safe character-model checkpoint evaluation and generation workflows
-- [ ] Explore camera geometry and pose estimation
+- [x] [Explore camera geometry and pose estimation](./docs/camera_geometry.md)
 - [ ] Keep ORB-SLAM3 and DROID-SLAM as distant reference points
+  ([how today's pieces map onto them](./docs/camera_geometry.md#how-this-maps-to-the-reference-points))
+- [ ] Two-view bundle adjustment and RANSAC on the synthetic scene
+- [ ] Corner detection and matching on a real image pair
 
 NanoGrad does not aim to maximize benchmark scores by hiding complexity,
 over-tuning parameters, or making the code unreadable. Benchmarks should help
@@ -118,7 +123,8 @@ data/            # datasets and dataloaders
 datasets.py      # tiny synthetic datasets and batch helpers
 engine.py        # scalar autograd core
 tensor.py        # tensor container, tensor operations, and tensor autograd
-tensor_nn.py     # tensor neural-network helpers
+gradcheck.py     # finite-difference gradient checks for tensor ops
+tensor_nn.py     # tensor neural-network helpers (linear, layer norm, embeddings)
 losses.py        # tensor loss functions
 metrics.py       # accuracy and related metrics
 nn.py            # scalar neural-network layers and activations
@@ -135,10 +141,16 @@ mnist_smoke_demo.py # no-download MNIST-style CNN smoke demo
 cifar_cnn_demo.py # local-file CIFAR-10 CNN demo
 text.py          # character text encoding and dataset helpers
 language.py      # reusable small language model implementations
+sampling.py      # greedy and top-k/temperature next-token sampling
+char_checkpoint.py # character-model checkpoint save/load
 char_demo.py     # tiny character-level language model demo
 char_compare.py  # compare tiny character language-model configs
 char_sample_grid.py # sweep checkpoint sampling settings into CSVs
+nanogpt_compare.py # train NanoGrad and nanoGPT side by side (needs torch)
 language_benchmark.py # tiny transformer timing check
+linalg.py        # small list-of-lists linear algebra (solve, eigen, SVD)
+geometry.py      # pinhole camera, rotations, triangulation, PnP, essential matrix
+pose_demo.py     # synthetic-scene camera pose estimation demo
 ```
 
 ## Reference Implementations
@@ -167,9 +179,19 @@ python3 mnist_smoke_demo.py
 python3 char_demo.py --preset tiny-transformer
 python3 char_compare.py
 python3 language_benchmark.py --repeat 1
+python3 pose_demo.py
 ```
 
-Use the test suite as the main correctness check. The demos are small examples
+The core has no third-party dependencies. Only `nanogpt_compare.py` needs
+PyTorch, for the reference nanoGPT side:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install torch
+.venv/bin/python nanogpt_compare.py --text-file data/tinyshakespeare/input.txt
+```
+
+Use the test suite as the main correctness check; `test_gradcheck.py` compares
+every tensor op's backward rule against numerical gradients. The demos are small examples
 for inspecting the scalar-autograd and tensor paths by eye.
 
 For local MNIST and CIFAR-10 files, see [data/mnist](./data/mnist) and
