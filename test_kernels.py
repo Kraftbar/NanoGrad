@@ -258,6 +258,13 @@ class KernelBackendTests(unittest.TestCase):
             self.assertAlmostEqual(got, want / total, delta=1e-15 + 4e-16 * want / total)
         self.assertEqual(c[5], 0.0)                                  # e^-752 underflows to 0
 
+    def test_dropout_mask_agrees_and_drops_about_p(self) -> None:
+        python, c = self.run_both(lambda: kernels.dropout_mask(4000, 0.3, 123456789))
+        self.assertListsClose(python, c)
+        dropped = sum(value == 0.0 for value in c) / len(c)
+        self.assertAlmostEqual(dropped, 0.3, delta=0.03)
+        self.assertEqual({value for value in c if value}, {1 / 0.7})
+
     def test_add_scaled_and_sum_of_squares_agree(self) -> None:
         x, y = values(50, 41), values(50, 42)
         python, c = self.run_both(lambda: kernels.add_scaled(x, y, -0.3))

@@ -1269,8 +1269,7 @@ def dropout(tensor: Tensor, p: float, rng: random.Random) -> Tensor:
     if p == 0.0:
         return tensor
 
-    keep = 1.0 / (1.0 - p)
-    mask = kernels.storage([0.0 if rng.random() < p else keep for _ in range(tensor.numel)])
+    mask = kernels.dropout_mask(tensor.numel, p, rng.getrandbits(64))
     out = _op_result(kernels.multiply(tensor.data, mask), tensor.shape, (tensor,), "dropout")
 
     def _backward() -> None:

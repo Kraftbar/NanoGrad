@@ -747,6 +747,25 @@ void scale_vector(const real *x, double factor, real *out, long count)
     for (long i = 0; i < count; i++) out[i] = x[i] * factor;
 }
 
+/*
+ * Dropout mask: each entry is 0 with probability p, else 1 / (1 - p).
+ * The random numbers come from splitmix64 (a tiny, well-tested generator:
+ * entry i uses the i-th output after `seed`), turned into uniform doubles
+ * in [0, 1) from their top 53 bits.
+ */
+void dropout_mask(real *mask, long count, double p, unsigned long seed)
+{
+    double keep = 1.0 / (1.0 - p);
+    for (long i = 0; i < count; i++) {
+        unsigned long z = seed + (unsigned long)(i + 1) * 0x9E3779B97F4A7C15UL;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
+        z ^= z >> 31;
+        double u = (double)(z >> 11) * 0x1.0p-53;
+        mask[i] = u < p ? 0.0 : keep;
+    }
+}
+
 /* out = x + factor * y: an SGD step without a temporary for factor * y */
 void add_scaled(const real *x, const real *y, double factor, real *out, long count)
 {

@@ -177,6 +177,7 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.multiply_vectors.argtypes = [pointer, pointer, pointer, count]
     library.scale_vector.argtypes = [pointer, ctypes.c_double, pointer, count]
     library.exp_vector.argtypes = [pointer, pointer, count]
+    library.dropout_mask.argtypes = [pointer, count, ctypes.c_double, ctypes.c_ulong]
     library.add_scaled.argtypes = [pointer, pointer, ctypes.c_double, pointer, count]
     library.sum_of_squares.argtypes = [pointer, count]
     library.sum_of_squares.restype = ctypes.c_double
@@ -426,6 +427,12 @@ def scale(x: list[float], factor: float) -> array:
     x_buffer, out = _reals(x), zeros(len(x))
     library.scale_vector(_buffer(x_buffer), factor, _buffer(out), len(x))
     return out
+
+
+def dropout_mask(count: int, p: float, seed: int) -> array:
+    mask = zeros(count)
+    library.dropout_mask(_buffer(mask), count, p, seed)
+    return mask
 
 
 def add_scaled(x: list[float], y: list[float], factor: float) -> array:

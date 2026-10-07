@@ -296,6 +296,13 @@ def scale(x: list[float], factor: float) -> list[float]:
     return (kernels_c.scale if BACKEND == "c" else reference.scale)(x, factor)
 
 
+def dropout_mask(count: int, p: float, seed: int) -> list[float]:
+    """``count`` values, each 0 with probability ``p`` and 1 / (1 - p) otherwise,
+    drawn from a 64-bit ``seed`` (the same mask on either backend)."""
+
+    return (kernels_c.dropout_mask if BACKEND == "c" else reference.dropout_mask)(count, p, seed)
+
+
 def add_scaled(x: list[float], y: list[float], factor: float) -> list[float]:
     """``x + factor * y``, elementwise (one pass, no temporary)."""
 

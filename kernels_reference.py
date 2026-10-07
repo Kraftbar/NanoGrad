@@ -323,6 +323,17 @@ def scale(x: list[float], factor: float) -> list[float]:
     return [value * factor for value in x]
 
 
+def dropout_mask(count: int, p: float, seed: int) -> list[float]:
+    keep, mask, bits = 1.0 / (1.0 - p), [], (1 << 64) - 1
+    for i in range(count):                                    # splitmix64, as in kernels.c
+        z = (seed + (i + 1) * 0x9E3779B97F4A7C15) & bits
+        z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & bits
+        z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & bits
+        z ^= z >> 31
+        mask.append(0.0 if (z >> 11) * 2.0 ** -53 < p else keep)
+    return mask
+
+
 def add_scaled(x: list[float], y: list[float], factor: float) -> list[float]:
     return [a + factor * b for a, b in zip(x, y)]
 
