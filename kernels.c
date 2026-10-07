@@ -405,20 +405,29 @@ void conv_input_grad(const real *grad, const real *kernel, const long *index, re
 {
     const int trans_a = 1, m = positions, k = filters, n = patch_size;
     (void)trans_a;
+#ifdef VECTOR_WIDTH
+    /* The kernel is small and the same for every block of positions, so
+     * it is packed into column panels once: panel j/TILE_COLS holds its
+     * columns j.. j+TILE_COLS-1 (zero-padded), row p at [p * TILE_COLS]. */
+    const int block_rows = 4 * TILE_ROWS;
+    int panels = (n + TILE_COLS - 1) / TILE_COLS;
+    real *packed = calloc((size_t)panels * k * TILE_COLS, sizeof(real));
+    if (packed == NULL) {
+        abort();
+    }
+    for (int j = 0; j < n; j += TILE_COLS) {
+        int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
+        real *panel = packed + (long)(j / TILE_COLS) * k * TILE_COLS;
+        for (int p = 0; p < k; p++)
+            memcpy(panel + (long)p * TILE_COLS, kernel + (long)p * n + j, sizeof(real) * cols);
+    }
+#else
     const int block_rows = 8;
+#endif
     real *block = malloc(sizeof(real) * block_rows * n);
     if (block == NULL) {
         abort();
     }
-#ifdef VECTOR_WIDTH
-    real *panel = malloc(sizeof(real) * K_BLOCK * TILE_COLS);
-    if (panel == NULL) {
-        abort();
-    }
-    int full_cols = n;          /* every column, the last panel zero-padded */
-#else
-    int full_cols = 0;
-#endif
     for (long batch = 0; batch < batches; batch++) {
         const real *A = grad + batch * (long)k * m;           /* (filters x positions) */
         real *img_grad = image_grad + batch * image_size;
@@ -426,28 +435,25 @@ void conv_input_grad(const real *grad, const real *kernel, const long *index, re
             int rows = m - i < block_rows ? m - i : block_rows;
             memset(block, 0, sizeof(real) * rows * n);
 #ifdef VECTOR_WIDTH
-            for (int j = 0; j < full_cols; j += TILE_COLS) {
+            for (int j = 0; j < n; j += TILE_COLS) {
                 int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
+                const real *panel = packed + (long)(j / TILE_COLS) * k * TILE_COLS;
                 for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
                     int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
-                    if (cols < TILE_COLS) memset(panel, 0, sizeof(real) * K_BLOCK * TILE_COLS);
-                    for (int p = 0; p < kb; p++)
-                        memcpy(panel + (long)p * TILE_COLS, kernel + (long)(p0 + p) * n + j, sizeof(real) * cols);
-                    /* A + i: rows i.. of grad_b^T become the tile's rows 0.. */
-                    if (cols == TILE_COLS)
-                        tile(A + i + (long)p0 * m, 1, m, block + j, n, panel, TILE_COLS, kb, rows, TILE_COLS);
-                    else
-                        tile(A + i + (long)p0 * m, 1, m, block + j, n, panel, TILE_COLS, kb, rows, cols);
+                    /* A + i: positions i.. of grad_b^T become the block's rows 0.. */
+                    row_tiles(A + i + (long)p0 * m, 1, m, TILE_ROWS, block + j, n,
+                              panel + (long)p0 * TILE_COLS, TILE_COLS, kb, rows, cols);
                 }
             }
-#endif
-            for (int r = 0; r < rows; r++) {                   /* without the vector path: every column */
-                for (int q = full_cols; q < n; q++) {
+#else
+            for (int r = 0; r < rows; r++) {                   /* without the vector path */
+                for (int q = 0; q < n; q++) {
                     double total = 0.0;
                     for (int p = 0; p < k; p++) total += A[(long)p * m + i + r] * kernel[(long)p * n + q];
                     block[(long)r * n + q] += total;
                 }
             }
+#endif
             for (int r = 0; r < rows; r++) {                   /* col2im */
                 const long *cells = index + (long)(i + r) * n;
                 const real *values = block + (long)r * n;
@@ -457,7 +463,7 @@ void conv_input_grad(const real *grad, const real *kernel, const long *index, re
     }
     free(block);
 #ifdef VECTOR_WIDTH
-    free(panel);
+    free(packed);
 #endif
 }
 
