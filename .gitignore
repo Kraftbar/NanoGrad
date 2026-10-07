@@ -36,4 +36,4 @@ data/tinyshakespeare/input.txt
 runs/
 
 # WikiText-2 (pytorch/examples word_language_model data)
-data/wikitext-2/
+data/wikitext-2/*.txt
