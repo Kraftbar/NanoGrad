@@ -667,5 +667,26 @@ class LanguageModuleTests(unittest.TestCase):
             model.sequence_logits(Tensor.zeros((1, 5)))
 
 
+
+class KVCacheTests(unittest.TestCase):
+    def test_step_logits_match_the_full_forward_pass(self) -> None:
+        import random
+
+        from language import CharTransformerModel
+        from tensor import Tensor, no_grad
+
+        model = CharTransformerModel(11, context_size=8, embedding_dim=16, num_heads=2, num_layers=2,
+                                     feed_forward_activation="gelu", tie_embeddings=True)
+        rng = random.Random(5)
+        tokens = [rng.randrange(11) for _ in range(8)]
+        with no_grad():
+            cache = model.new_cache()
+            for position, token in enumerate(tokens):
+                step = list(model.step_logits(token, position, cache).data)
+                full = list(model(Tensor.from_list([tokens[: position + 1]])).data)
+                for a, b in zip(step, full):
+                    self.assertAlmostEqual(a, b, places=12)
+
+
 if __name__ == "__main__":
     unittest.main()

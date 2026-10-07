@@ -286,6 +286,30 @@ class CausalSelfAttention(TensorModule):
         attended = concat(head_outputs, axis=-1)             # (B, T, C)
         return self.output_dropout(self.projection(attended))
 
+    def step(self, inputs: Tensor, cache: dict) -> Tensor:
+        """Attention for one new token, reusing earlier tokens' keys and values.
+
+        ``inputs`` is the new token's (1, 1, C) vector. Its key and value rows
+        are appended to ``cache`` (the KV cache), and its query attends over
+        every cached row. No mask is needed: only earlier tokens are cached.
+        Generating T tokens this way costs one row of work per token, not a
+        whole (T x T) attention pass per token.
+        """
+
+        scale = 1 / math.sqrt(self.head_dim)
+        head_outputs = []
+        for head, (query_layer, key_layer, value_layer) in enumerate(
+            zip(self.queries, self.keys, self.values)
+        ):
+            key, value = key_layer(inputs), value_layer(inputs)          # (1, 1, D)
+            if cache["keys"][head] is not None:
+                key = concat([cache["keys"][head], key], axis=1)         # (1, t, D)
+                value = concat([cache["values"][head], value], axis=1)
+            cache["keys"][head], cache["values"][head] = key, value
+            scores = matmul(query_layer(inputs), key.permute((0, 2, 1))) * scale   # (1, 1, t)
+            head_outputs.append(matmul(scores.softmax(axis=-1), value))           # (1, 1, D)
+        return self.projection(concat(head_outputs, axis=-1))
+
     def _causal_mask(self, context_size: int) -> Tensor:
         if context_size not in self._mask_cache:
             self._mask_cache[context_size] = _causal_attention_mask(context_size)
@@ -443,6 +467,16 @@ class TransformerBlock(TensorModule):
         update = self.feed_forward_dropout(self.feed_forward_out(hidden))
         return residual + update
 
+    def step(self, inputs: Tensor, cache: dict) -> Tensor:
+        """``__call__`` for one new token, with the attention KV cache."""
+
+        residual = inputs + self.attention.step(self.norm1(inputs), cache)
+        hidden = _feed_forward_activation(
+            self.feed_forward_in(self.norm2(residual)),
+            self.feed_forward_activation,
+        )
+        return residual + self.feed_forward_out(hidden)
+
     def parameters(self) -> list[Tensor]:
         return [
             *self.norm1.parameters(),
@@ -592,6 +626,30 @@ class CharTransformerModel(TensorModule):
         for block in self.blocks:
             hidden = block(hidden)
         return self.projection(self.norm(hidden))
+
+    # -- generation with a KV cache (inference only: no dropout) ----------
+
+    def new_cache(self) -> list[dict]:
+        """An empty KV cache: per block, per head, the keys and values so far."""
+
+        return [
+            {"keys": [None] * self.num_heads, "values": [None] * self.num_heads}
+            for _ in self.blocks
+        ]
+
+    def step_logits(self, token: int, position: int, cache: list[dict]) -> Tensor:
+        """Next-token logits after feeding one more token at ``position``.
+
+        Feeding tokens 0..t one at a time gives the same logits as running
+        ``sequence_logits`` on the whole prefix, but each step only computes
+        the new token's row (``position`` must stay below context_size).
+        """
+
+        token_vector = self.embedding.token_embedding([[token]])               # (1, 1, C)
+        hidden = token_vector + self.embedding.position_embedding([position])   # + (1, C)
+        for block, block_cache in zip(self.blocks, cache):
+            hidden = block.step(hidden, block_cache)
+        return self.projection(self.norm(hidden)).reshape((self.vocab_size,))
 
     def parameters(self) -> list[Tensor]:
         block_parameters = [

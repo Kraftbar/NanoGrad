@@ -147,16 +147,43 @@ def build_tokenizer(train_text: str, text: str, args: argparse.Namespace):
 
 
 def generate_tokens(model, prompt: list[int], *, length: int, context_size: int,
-                    temperature: float, top_k: int | None, rng: random.Random) -> list[int]:
-    """Sample ``length`` tokens after ``prompt``, one at a time."""
+                    temperature: float, top_k: int | None, rng: random.Random,
+                    kv_cache: bool = True) -> list[int]:
+    """Sample ``length`` tokens after ``prompt``, one at a time.
 
+    Without the KV cache, every new token runs the model on the last
+    ``context_size`` tokens (as nanoGPT's generate does). With it, each
+    token only adds one row of work (see ``CharTransformerModel.step_logits``).
+    Learned positions cannot slide, so when the window fills up the cache
+    restarts from the most recent half window: the model then sees between
+    half and all of a window of history, instead of always a full one.
+    """
+
+    def choose(logits) -> int:
+        return select_next_index(list(logits.data), sample_mode="sample",
+                                 temperature=temperature, top_k=top_k, rng=rng)
+
+    if not prompt:
+        raise ValueError("generation needs at least one prompt token")
     tokens = list(prompt)
-    for _ in range(length):
-        with no_grad(), evaluation_mode(model):
-            logits = model([tokens[-context_size:]])
-        tokens.append(select_next_index(
-            list(logits.data), sample_mode="sample", temperature=temperature, top_k=top_k, rng=rng,
-        ))
+    if not kv_cache:
+        for _ in range(length):
+            with no_grad(), evaluation_mode(model):
+                logits = model([tokens[-context_size:]])
+            tokens.append(choose(logits))
+        return tokens
+
+    with no_grad(), evaluation_mode(model):
+        cache, fed = model.new_cache(), 0
+        window_start = max(0, len(tokens) - context_size)
+        for _ in range(length):
+            if len(tokens) - window_start > context_size:
+                window_start = len(tokens) - context_size // 2
+                cache, fed = model.new_cache(), 0
+            while window_start + fed < len(tokens):        # feed what the cache lacks
+                logits = model.step_logits(tokens[window_start + fed], fed, cache)
+                fed += 1
+            tokens.append(choose(logits))
     return tokens
 
 

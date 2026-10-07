@@ -84,5 +84,24 @@ class GptTrainTests(unittest.TestCase):
             model.load(out_dir / "model.json")
 
 
+    def test_kv_cache_matches_full_recompute_within_one_window(self) -> None:
+        import random
+
+        from gpt_train import generate_tokens
+
+        args = parse_args(["--text-file", "t.txt", "--preset", "mini", "--layers", "2",
+                           "--embedding-dim", "16", "--context-size", "12"])
+        model = build_model(9, args)
+        settings = dict(length=10, context_size=12, temperature=1.0, top_k=None)
+        full = generate_tokens(model, [1, 2], rng=random.Random(3), kv_cache=False, **settings)
+        cached = generate_tokens(model, [1, 2], rng=random.Random(3), kv_cache=True, **settings)
+        self.assertEqual(full, cached)
+        # Past the window the cache restarts from half a window; still valid tokens.
+        longer = generate_tokens(model, [1], rng=random.Random(4), length=40, context_size=12,
+                                 temperature=1.0, top_k=None)
+        self.assertEqual(len(longer), 41)
+        self.assertTrue(all(0 <= token < 9 for token in longer))
+
+
 if __name__ == "__main__":
     unittest.main()
