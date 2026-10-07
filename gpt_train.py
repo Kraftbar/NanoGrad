@@ -101,22 +101,31 @@ def build_model(vocab_size: int, config: argparse.Namespace) -> CharTransformerM
     )
 
 
-def estimate_loss(model, splits: dict[str, list[int]], args, rng: random.Random) -> dict[str, float]:
+def estimate_loss(
+    model,
+    splits: dict[str, list[int]],
+    args,
+    rng: random.Random,
+    parallel: DataParallel | None = None,
+) -> dict[str, float]:
     """Mean loss over ``eval_batches`` random batches per split (eval mode)."""
 
     losses = {}
-    with no_grad(), evaluation_mode(model):
-        for name, encoded in splits.items():
-            total = 0.0
-            for _ in range(args.eval_batches):
-                xs, ys = random_batch(
-                    encoded,
-                    batch_size=args.batch_size,
-                    context_size=args.context_size,
-                    rng=rng,
-                )
-                total += sequence_loss(model, xs, ys).item()
-            losses[name] = total / args.eval_batches
+    for name, encoded in splits.items():
+        total = 0.0
+        for _ in range(args.eval_batches):
+            xs, ys = random_batch(
+                encoded,
+                batch_size=args.batch_size,
+                context_size=args.context_size,
+                rng=rng,
+            )
+            if parallel is not None:
+                total += parallel.evaluate(xs, ys)
+            else:
+                with no_grad(), evaluation_mode(model):
+                    total += sequence_loss(model, xs, ys).item()
+        losses[name] = total / args.eval_batches
     return losses
 
 
@@ -166,7 +175,7 @@ def train(args: argparse.Namespace) -> dict:
     with parallel_context as parallel:
         for step in range(args.steps + 1):
             if step % args.eval_every == 0 or step == args.steps:
-                losses = estimate_loss(model, splits, args, eval_rng)
+                losses = estimate_loss(model, splits, args, eval_rng, parallel)
                 elapsed = perf_counter() - start
                 row = {"step": step, "train_loss": losses["train"], "val_loss": losses["val"],
                        "lr": schedule(step), "seconds": elapsed}

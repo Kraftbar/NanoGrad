@@ -25,7 +25,7 @@ import random
 from collections.abc import Callable, Sequence
 
 from losses import softmax_cross_entropy
-from tensor import Tensor
+from tensor import Tensor, no_grad
 from tensor_nn import TensorDropout, TensorModule
 
 
@@ -81,14 +81,7 @@ class DataParallel:
     def loss_and_gradients(self, xs: Sequence, ys: Sequence) -> float:
         """Mean loss over the batch; also sets every parameter's ``.grad``."""
 
-        weights = [parameter.data for parameter in self.parameters]
-        training = self.model.training
-        shards = _split(list(xs), list(ys), len(self._connections))
-        busy = []
-        for connection, (shard_xs, shard_ys) in zip(self._connections, shards):
-            if shard_xs:
-                connection.send((weights, training, shard_xs, shard_ys))
-                busy.append(connection)
+        busy = self._scatter(xs, ys, self.model.training, need_gradients=True)
 
         total_targets = 0
         total_loss = 0.0
@@ -104,6 +97,30 @@ class DataParallel:
         for parameter, gradient in zip(self.parameters, summed):
             parameter.grad = [value / total_targets for value in gradient]
         return total_loss / total_targets
+
+    def evaluate(self, xs: Sequence, ys: Sequence) -> float:
+        """Mean loss in eval mode, forward pass only (no gradients)."""
+
+        busy = self._scatter(xs, ys, False, need_gradients=False)
+        total_targets = 0
+        total_loss = 0.0
+        for connection in busy:
+            loss, _, count = connection.recv()
+            total_targets += count
+            total_loss += loss * count
+        return total_loss / total_targets
+
+    def _scatter(self, xs: Sequence, ys: Sequence, training: bool, *, need_gradients: bool) -> list:
+        """Send the weights and one slice of the batch to each worker."""
+
+        weights = [parameter.data for parameter in self.parameters]
+        shards = _split(list(xs), list(ys), len(self._connections))
+        busy = []
+        for connection, (shard_xs, shard_ys) in zip(self._connections, shards):
+            if shard_xs:
+                connection.send((weights, training, need_gradients, shard_xs, shard_ys))
+                busy.append(connection)
+        return busy
 
     def close(self) -> None:
         for connection in self._connections:
@@ -152,10 +169,15 @@ def _worker(connection, model: TensorModule, loss_fn: LossFunction, index: int) 
         message = connection.recv()
         if message is None:
             return
-        weights, training, xs, ys = message
+        weights, training, need_gradients, xs, ys = message
         for parameter, data in zip(parameters, weights):
             parameter.data = data
         model.train(training)
+        if not need_gradients:
+            with no_grad():
+                loss = loss_fn(model, xs, ys)
+            connection.send((loss.item(), None, target_count(ys)))
+            continue
         loss = loss_fn(model, xs, ys)
         loss.backward()
         connection.send((loss.item(), [parameter.grad for parameter in parameters], target_count(ys)))
