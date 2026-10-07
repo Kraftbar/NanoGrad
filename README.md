@@ -64,7 +64,9 @@ modules should prove that the core works on increasingly realistic checks.
 - [x] Check every tensor op's backward rule against finite differences
 - [x] GPT training building blocks: dropout, warmup + cosine learning rate,
   prompts shorter than the context, data-parallel training on all CPU cores
-- [ ] Train a larger character GPT on full Tiny Shakespeare
+- [x] [Train nanoGPT's baby GPT on full Tiny Shakespeare](./docs/shakespeare_gpt.md)
+  (val loss 1.92 vs nanoGPT's 1.89 with the same recipe)
+- [ ] Move LayerNorm, GELU, softmax and elementwise ops into the C kernels
 
 ### First Real Datasets
 
@@ -155,6 +157,8 @@ char_demo.py     # tiny character-level language model demo
 char_compare.py  # compare tiny character language-model configs
 char_sample_grid.py # sweep checkpoint sampling settings into CSVs
 nanogpt_compare.py # train NanoGrad and nanoGPT side by side (needs torch)
+gpt_train.py     # nanoGPT-style step-based character GPT training
+kernels.py       # compute kernels: compiled C (kernels.c) or pure Python
 language_benchmark.py # tiny transformer timing check
 linalg.py        # small list-of-lists linear algebra (solve, eigen, SVD)
 geometry.py      # pinhole camera, rotations, triangulation, PnP, essential matrix
