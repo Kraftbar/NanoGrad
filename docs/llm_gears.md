@@ -14,6 +14,7 @@ checked against PyTorch where PyTorch has an equivalent.
 | mixture of experts | `moe.py`, `--preset baby-moe` / `--experts 4` | each token uses 2 of 4 feed-forward experts, chosen by a router (Mixtral) |
 | weight quantization | `quantize.py` | int8 / int4 weights with one scale per 32 numbers: 4-6x smaller |
 | LoRA | `lora.py`, `bert_finetune.py --lora 4` | fine-tune through small low-rank updates to frozen attention weights |
+| sliding-window attention | `attention_window` / `--window` | each token attends to the last W tokens; the KV cache is a rolling buffer (Mistral) |
 | grouped-query attention | `num_kv_heads` / `--kv-heads` | query heads share key/value heads: a smaller KV cache (LLaMA 3, Mistral) |
 | bidirectional attention | `causal=False` | for encoders: ViT (`vit.py`) and BERT (`bert.py`) |
 | masked language modeling | `bert.py` | BERT's training task |

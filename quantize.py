@@ -90,6 +90,7 @@ def load_run(run_dir: str | Path):
     config.kv_heads = getattr(config, "kv_heads", None)
     config.experts = getattr(config, "experts", 0)
     config.expert_top_k = getattr(config, "expert_top_k", 2)
+    config.window = getattr(config, "window", None)
     text = Path(config.text_file).read_text(encoding="utf-8")
     vocab = CharVocab.from_text(text)
     model = build_model(len(vocab), config)

@@ -145,6 +145,33 @@ class LlamaPartsTests(unittest.TestCase):
             self.assertAlmostEqual(a, b, places=12)
         self.assertEqual(grouped.num_parameters(), full.num_parameters() - 2 * 2 * (8 * 2 + 2))
 
+    def test_sliding_window_attention(self) -> None:
+        from language import CharTransformerModel, _causal_attention_mask
+
+        self.assertEqual(list(_causal_attention_mask(4, window=2).data), [
+            0.0, -1e9, -1e9, -1e9,
+            0.0, 0.0, -1e9, -1e9,
+            -1e9, 0.0, 0.0, -1e9,
+            -1e9, -1e9, 0.0, 0.0,
+        ])
+        settings = dict(context_size=8, embedding_dim=8, num_heads=2, num_layers=2,
+                        norm="rms", positions="rope", feed_forward_activation="swiglu")
+        tokens = [random.Random(13).randrange(11) for _ in range(8)]
+        full = CharTransformerModel(11, seed=4, **settings).sequence_logits(Tensor.from_list([tokens])).data
+        wide = CharTransformerModel(11, seed=4, attention_window=8, **settings)
+        self.assertEqual(list(wide.sequence_logits(Tensor.from_list([tokens])).data), list(full))
+        model = CharTransformerModel(11, seed=4, attention_window=3, **settings)
+        windowed = model.sequence_logits(Tensor.from_list([tokens])).data
+        self.assertEqual(list(windowed[: 3 * 11]), list(full[: 3 * 11]))     # the first 3 tokens see everything
+        self.assertNotEqual(list(windowed[3 * 11 :]), list(full[3 * 11 :]))
+        with no_grad():
+            cache = model.new_cache()
+            for position, token in enumerate(tokens):
+                step = list(model.step_logits(token, position, cache).data)
+                for a, b in zip(step, windowed[position * 11 : (position + 1) * 11]):
+                    self.assertAlmostEqual(a, b, places=12)
+            self.assertEqual(cache[0]["keys"][0].shape[1], 3)                 # the cache is a rolling buffer
+
     def test_grouped_query_attention_rejects_uneven_groups(self) -> None:
         from language import CausalSelfAttention
 
@@ -173,13 +200,14 @@ class TorchAgreementTests(unittest.TestCase):
         from language import CharTransformerModel
         from torch_twin import TorchTwin
 
-        for norm, positions, activation, kv_heads in (
-            ("layer", "learned", "gelu", 4), ("rms", "rope", "swiglu", 4), ("rms", "rope", "swiglu", 2),
-            ("layer", "learned", "gelu", 1),
+        for norm, positions, activation, kv_heads, window in (
+            ("layer", "learned", "gelu", 4, None), ("rms", "rope", "swiglu", 4, None),
+            ("rms", "rope", "swiglu", 2, 4), ("layer", "learned", "gelu", 1, None),
         ):
-            with self.subTest(norm=norm, positions=positions, activation=activation, kv_heads=kv_heads):
+            with self.subTest(norm=norm, positions=positions, activation=activation, kv_heads=kv_heads, window=window):
                 model = CharTransformerModel(
                     13, context_size=10, embedding_dim=16, num_heads=4, num_kv_heads=kv_heads, num_layers=2,
+                    attention_window=window,
                     feed_forward_activation=activation, tie_embeddings=True, init="gpt2",
                     norm=norm, positions=positions, seed=1,
                 )

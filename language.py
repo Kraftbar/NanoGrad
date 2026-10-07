@@ -213,6 +213,11 @@ class CausalSelfAttention(TensorModule):
     70B, LLaMA 3, Mistral): each key/value head is shared by a group of
     ``num_heads / num_kv_heads`` query heads, so the KV cache shrinks by that
     factor. ``num_kv_heads=1`` is multi-query attention.
+
+    ``window`` (Mistral's sliding-window attention) lets each token see only
+    itself and the ``window - 1`` tokens before it; the KV cache then never
+    holds more than ``window`` rows. Stacked layers still pass information
+    further back, one window per layer.
     """
 
     def __init__(
@@ -225,8 +230,11 @@ class CausalSelfAttention(TensorModule):
         dropout: float = 0.0,
         causal: bool = True,
         rotary: bool = False,
+        window: int | None = None,
         seed: int = 0,
     ) -> None:
+        if window is not None and (window <= 0 or not causal):
+            raise ValueError("window must be positive, and needs causal attention")
         if embedding_dim <= 0:
             raise ValueError("embedding_dim must be positive")
         if context_size <= 0:
@@ -247,6 +255,7 @@ class CausalSelfAttention(TensorModule):
         self.group_size = num_heads // num_kv_heads   # query heads per key/value head
         self.causal = causal
         self.rotary = rotary          # rotate queries and keys by position (RoPE)
+        self.window = window          # sliding-window attention: how far back a token sees
         self.head_dim = embedding_dim // num_heads
         self._mask_cache: dict[int, Tensor] = {}
         self.queries = [
@@ -339,6 +348,8 @@ class CausalSelfAttention(TensorModule):
             if cache["keys"][kv_head] is not None:
                 key = concat([cache["keys"][kv_head], key], axis=1)      # (1, t, D)
                 value = concat([cache["values"][kv_head], value], axis=1)
+            if self.window is not None and key.shape[1] > self.window:   # a rolling buffer
+                key, value = key[:, -self.window :], value[:, -self.window :]
             cache["keys"][kv_head], cache["values"][kv_head] = key, value
             group = self.queries[kv_head * self.group_size : (kv_head + 1) * self.group_size]
             for query_layer in group:                                    # the heads sharing this key/value
@@ -351,7 +362,9 @@ class CausalSelfAttention(TensorModule):
 
     def _causal_mask(self, context_size: int) -> Tensor:
         if context_size not in self._mask_cache:
-            self._mask_cache[context_size] = _causal_attention_mask(context_size, repeats=self.group_size)
+            self._mask_cache[context_size] = _causal_attention_mask(
+                context_size, repeats=self.group_size, window=self.window,
+            )
         return self._mask_cache[context_size]
 
     def parameters(self) -> list[Tensor]:
@@ -410,7 +423,7 @@ class CausalSelfAttention(TensorModule):
         self.projection.load_state_dict(state["projection"])
 
 
-def _causal_attention_mask(context_size: int, *, repeats: int = 1) -> Tensor:
+def _causal_attention_mask(context_size: int, *, repeats: int = 1, window: int | None = None) -> Tensor:
     """(T, T) additive mask: 0 where a query may look, -1e9 at future keys.
 
     Example for T = 3 (rows are queries, columns are keys):
@@ -421,10 +434,12 @@ def _causal_attention_mask(context_size: int, *, repeats: int = 1) -> Tensor:
 
     ``repeats`` stacks the rows that many times, (repeats * T, T), for
     query heads stacked along the time axis (grouped-query attention).
+    ``window`` also hides keys ``window`` or more positions back.
     """
 
+    reach = context_size if window is None else window
     data = [
-        0.0 if key_position <= query_position else -1e9
+        0.0 if query_position - reach < key_position <= query_position else -1e9
         for _ in range(repeats)
         for query_position in range(context_size)
         for key_position in range(context_size)
@@ -457,6 +472,7 @@ class TransformerBlock(TensorModule):
         rotary: bool = False,
         num_experts: int = 0,
         expert_top_k: int = 2,
+        window: int | None = None,
         seed: int = 0,
     ) -> None:
         if embedding_dim <= 0:
@@ -487,6 +503,7 @@ class TransformerBlock(TensorModule):
             dropout=dropout,
             causal=causal,
             rotary=rotary,
+            window=window,
             seed=seed,
         )
         self.norm2 = _norm_layer(norm, embedding_dim)
@@ -628,6 +645,7 @@ class CharTransformerModel(TensorModule):
         num_kv_heads: int | None = None,
         num_experts: int = 0,
         expert_top_k: int = 2,
+        attention_window: int | None = None,
         num_layers: int = 1,
         feed_forward_activation: str = "relu",
         tie_embeddings: bool = False,
@@ -664,6 +682,7 @@ class CharTransformerModel(TensorModule):
         self.num_kv_heads = num_heads if num_kv_heads is None else num_kv_heads
         self.num_experts = num_experts
         self.expert_top_k = expert_top_k
+        self.attention_window = attention_window
         self.num_layers = num_layers
         self.feed_forward_activation = feed_forward_activation
         self.tie_embeddings = tie_embeddings
@@ -689,6 +708,7 @@ class CharTransformerModel(TensorModule):
                 rotary=positions == "rope",
                 num_experts=num_experts,
                 expert_top_k=expert_top_k,
+                window=attention_window,
                 seed=seed + 2 + layer_index * 8,
             )
             for layer_index in range(num_layers)
@@ -809,6 +829,7 @@ class CharTransformerModel(TensorModule):
             "num_kv_heads": self.num_kv_heads,
             "num_experts": self.num_experts,
             "expert_top_k": self.expert_top_k,
+            "attention_window": self.attention_window,
             "num_layers": self.num_layers,
             "feed_forward_activation": self.feed_forward_activation,
             "tie_embeddings": self.tie_embeddings,
@@ -838,6 +859,8 @@ class CharTransformerModel(TensorModule):
             raise ValueError("state num_kv_heads does not match CharTransformerModel")
         if (state.get("num_experts", 0), state.get("expert_top_k", 2)) != (self.num_experts, self.expert_top_k):
             raise ValueError("state experts do not match CharTransformerModel")
+        if state.get("attention_window") != self.attention_window:
+            raise ValueError("state attention_window does not match CharTransformerModel")
         if state.get("num_layers") != self.num_layers:
             raise ValueError("state num_layers does not match CharTransformerModel")
         if state.get("feed_forward_activation", "relu") != self.feed_forward_activation:

@@ -138,6 +138,8 @@ class TorchTwin:
             scores = q @ k.transpose(1, 2) * (1 / math.sqrt(layer.head_dim))
             if layer.causal:
                 future = torch.ones(context, context, dtype=torch.bool).triu(1)
+                if layer.window is not None:                         # sliding window: hide the far past too
+                    future |= torch.ones(context, context, dtype=torch.bool).tril(-layer.window)
                 scores = scores + torch.zeros(context, context, dtype=x.dtype).masked_fill(future, -1e9)
             heads.append(self._dropout(layer.attention_dropout, scores.softmax(dim=-1)) @ v)
         return self._dropout(layer.output_dropout, self._linear(layer.projection, torch.cat(heads, dim=-1)))
