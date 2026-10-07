@@ -106,7 +106,7 @@ are in [docs/benchmarks.md](./docs/benchmarks.md).
 - [x] Run and tune MNIST MLP on local data
 - [x] Train a LeNet-style MNIST model
 - [x] Try a small CIFAR CNN after the MNIST path is stable
-- [ ] CIFAR-10 against PyTorch, like `mnist_compare.py` (needs the data files locally)
+- [x] Fashion-MNIST and CIFAR-10 against PyTorch (`mnist_compare.py --dataset`)
 
 ### Later Branches
 
@@ -178,7 +178,7 @@ train.py         # scalar and tensor training loops
 demo.py          # scalar autograd training demo
 tensor_demo.py   # tensor math and tensor-autograd demos
 benchmark.py     # op-by-op timing against PyTorch (DeepBench-style)
-mnist_compare.py # LeNet / ResNet / ViT on MNIST in NanoGrad and PyTorch
+mnist_compare.py # LeNet / ResNet / ViT on MNIST, Fashion-MNIST or CIFAR-10, NanoGrad vs PyTorch
 bert_compare.py  # the BERT-style encoder on Tiny Shakespeare in both
 vision.py        # reusable small CNN model implementations
 resnet.py        # a small residual network (ResNet) with batch norm
