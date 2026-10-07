@@ -1582,21 +1582,21 @@ def conv2d_valid(image: Tensor, kernel: Tensor, *, stride: int = 1) -> Tensor:
     positions = len(patch_index) // patch_size             # P
     image_size = channels * image_rows * image_cols
 
-    # im2col: every image becomes a (P x K) matrix of patches.
-    patches = kernels.gather_indexed(image.data, patch_index, batches=batches, image_size=image_size)
-    sizes = dict(batches=batches, m=filters, k=patch_size, n=positions)
-
-    # out_b = kernels (O x K) @ patches_b^T  ->  (O x P) per image
-    data = kernels.gemm(
-        kernel.data, patches, a_step=0, b_step=positions * patch_size,
-        c_step=filters * positions, trans_b=True, **sizes,
+    # out_b = kernels (O x K) @ patches_b^T  ->  (O x P) per image. The C
+    # kernel reads every patch straight from the image through the index
+    # table (no patch matrix is built for the forward pass).
+    data = kernels.conv_forward(
+        image.data, patch_index, kernel.data, batches=batches, image_size=image_size,
+        filters=filters, patch_size=patch_size, positions=positions,
     )
     out = _op_result(data, out_shape, (image, kernel), "conv2d_valid")
 
     def _backward() -> None:
         grad = _grad_data(out)
         if kernel.requires_grad:
-            # dK = sum over images of dOut_b (O x P) @ patches_b (P x K)
+            # dK = sum over images of dOut_b (O x P) @ patches_b (P x K),
+            # with the patches gathered now (im2col).
+            patches = kernels.gather_indexed(image.data, patch_index, batches=batches, image_size=image_size)
             _add_grad(kernel, kernels.gemm(
                 grad, patches, batches=batches, m=filters, k=positions, n=patch_size,
                 a_step=filters * positions, b_step=positions * patch_size, c_step=0,

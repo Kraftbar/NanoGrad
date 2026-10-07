@@ -212,6 +212,17 @@ def batch_norm_channels_backward(
     return kernel(grad, x_hat, inv_std, weight, batch, channels, plane)
 
 
+def conv_forward(
+    image: list[float], index: Sequence[int], kernel: list[float], *,
+    batches: int, image_size: int, filters: int, patch_size: int, positions: int,
+) -> list[float]:
+    """Convolution as kernel @ patches^T, reading patches through ``index``
+    (see conv2d_valid) without building the patch matrix."""
+
+    kernel_fn = kernels_c.conv_forward if BACKEND == "c" else reference.conv_forward
+    return kernel_fn(image, index, kernel, batches, image_size, filters, patch_size, positions)
+
+
 def gather_indexed(image: list[float], index: Sequence[int], *, batches: int, image_size: int) -> list[float]:
     """For every image in the batch, read the pixels at ``index`` (im2col)."""
 

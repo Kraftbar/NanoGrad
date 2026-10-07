@@ -214,6 +214,26 @@ def batch_norm_channels_backward(
     return dx, dweight, dbias
 
 
+def conv_forward(
+    image: list[float], index: Sequence[int], kernel: list[float],
+    batches: int, image_size: int, filters: int, patch_size: int, positions: int,
+) -> list[float]:
+    """out_b (filters x positions) = kernel @ patches_b^T, reading each patch
+    straight from the image: patch j is image_b[index[j * K : (j + 1) * K]]."""
+
+    out: list[float] = []
+    rows = [kernel[f * patch_size : (f + 1) * patch_size] for f in range(filters)]
+    for batch in range(batches):
+        image_b = image[batch * image_size : (batch + 1) * image_size]
+        patches = [
+            [image_b[i] for i in index[j * patch_size : (j + 1) * patch_size]]
+            for j in range(positions)
+        ]
+        for row in rows:
+            out.extend([dot(row, patch) for patch in patches])
+    return out
+
+
 def gather_indexed(
     image: list[float], index: Sequence[int], batches: int, image_size: int,
 ) -> list[float]:

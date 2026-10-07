@@ -110,6 +110,26 @@ class KernelBackendTests(unittest.TestCase):
                             ))
                             self.assertListsClose(python, c)
 
+    def test_conv_forward_agrees_with_gather_then_gemm(self) -> None:
+        from tensor import _conv2d_patch_index
+
+        for channels, size, kernel_size, filters, stride in ((1, 9, 3, 17, 1), (3, 12, 3, 20, 2), (2, 7, 5, 4, 1)):
+            with self.subTest(channels=channels, filters=filters, stride=stride):
+                index = _conv2d_patch_index(channels, size, size, kernel_size, kernel_size, stride)
+                patch_size = channels * kernel_size * kernel_size
+                positions = len(index) // patch_size
+                image = values(2 * channels * size * size, 40)
+                kernel = values(filters * patch_size, 41)
+                sizes = dict(batches=2, image_size=channels * size * size, filters=filters,
+                             patch_size=patch_size, positions=positions)
+                python, c = self.run_both(lambda: kernels.conv_forward(image, index, kernel, **sizes))
+                self.assertListsClose(python, c)
+                patches = kernels.gather_indexed(image, index, batches=2, image_size=sizes["image_size"])
+                expected = kernels.gemm(kernel, patches, batches=2, m=filters, k=patch_size, n=positions,
+                                        a_step=0, b_step=positions * patch_size, c_step=filters * positions,
+                                        trans_b=True)
+                self.assertListsClose(c, expected)
+
     def test_gather_and_scatter_agree(self) -> None:
         image = values(2 * 12, 12)
         index = [0, 5, 5, 11, 3]

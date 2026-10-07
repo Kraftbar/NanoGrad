@@ -213,6 +213,63 @@ void gemm(
 #endif
 }
 
+/*
+ * Convolution forward without building the patch matrix ("implicit GEMM").
+ *
+ *     out_b (filters x positions) = kernel (filters x K) @ patches_b^T
+ *     patches_b[j][q] = image_b[index[j * K + q]]        (K = patch_size)
+ *
+ * The tiled product reads its B panel straight from the image through the
+ * index table, instead of first gathering every patch into a (positions x
+ * K) matrix and transposing it: same arithmetic, two fewer large copies.
+ */
+void conv_forward(const real *image, const long *index, const real *kernel, real *out,
+                  long batches, long image_size, int filters, int patch_size, int positions)
+{
+    const int trans_a = 0, m = filters, k = patch_size, n = positions;
+    const real *A = kernel;
+    (void)trans_a;
+#ifdef VECTOR_WIDTH
+    real *panel = malloc(sizeof(real) * K_BLOCK * TILE_COLS);
+    if (panel == NULL) {
+        abort();
+    }
+    int full_cols = n >= TILE_COLS ? n - n % TILE_COLS : 0;
+#else
+    int full_cols = 0;
+#endif
+    for (long batch = 0; batch < batches; batch++) {
+        const real *img = image + batch * image_size;
+        real *C = out + batch * (long)m * n;
+#ifdef VECTOR_WIDTH
+        for (int j = 0; j < full_cols; j += TILE_COLS) {
+            for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
+                int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
+                for (int p = 0; p < kb; p++)                   /* pack through the index */
+                    for (int jj = 0; jj < TILE_COLS; jj++)
+                        panel[(long)p * TILE_COLS + jj] = img[index[(long)(j + jj) * k + p0 + p]];
+                int i = 0;
+                for (; i + TILE_ROWS <= m; i += TILE_ROWS)
+                    tile(A, C, m, k, n, 0, panel, i, j, p0, kb, TILE_ROWS);
+                if (i < m)
+                    tile(A, C, m, k, n, 0, panel, i, j, p0, kb, m - i);
+            }
+        }
+#endif
+        for (int i = 0; i < m; i++) {                          /* leftover (or all) columns */
+            for (int j = full_cols; j < n; j++) {
+                double total = 0.0;
+                const long *cells = index + (long)j * k;
+                for (int q = 0; q < k; q++) total += A_AT(i, q) * img[cells[q]];
+                C[(long)i * n + j] += total;
+            }
+        }
+    }
+#ifdef VECTOR_WIDTH
+    free(panel);
+#endif
+}
+
 #undef A_AT
 
 
