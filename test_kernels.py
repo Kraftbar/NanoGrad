@@ -247,6 +247,17 @@ class KernelBackendTests(unittest.TestCase):
         self.assertListsClose(python, c)
         self.assertAlmostEqual(python[12], grad[0] + grad[8])          # id 3 used twice
 
+    def test_softmax_exp_is_accurate_over_the_whole_range(self) -> None:
+        import math
+
+        row = [0.0, -0.5, -3.0, -40.0, -700.0, -750.0, 1e-9, 2.5]
+        expected = [math.exp(x - 2.5) for x in row]
+        total = sum(expected)
+        c = kernels.softmax_rows(row, len(row))
+        for got, want in zip(c, expected):
+            self.assertAlmostEqual(got, want / total, delta=1e-15 + 4e-16 * want / total)
+        self.assertEqual(c[5], 0.0)                                  # e^-752 underflows to 0
+
     def test_add_scaled_and_sum_of_squares_agree(self) -> None:
         x, y = values(50, 41), values(50, 42)
         python, c = self.run_both(lambda: kernels.add_scaled(x, y, -0.3))

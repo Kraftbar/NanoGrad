@@ -474,6 +474,77 @@ void gelu_backward(const real *x, const real *cdf, const real *grad, real *dx, l
  *     y_i = e^(x_i - max) / sum_j e^(x_j - max)
  *     dx_i = y_i * (dy_i - sum_j dy_j y_j)
  */
+/*
+ * e^x the way math libraries compute it, written so a loop of them
+ * vectorizes (libm's exp is a function call, one number at a time):
+ *
+ *     x = k ln 2 + r,  k an integer, |r| <= ln(2) / 2
+ *     e^x = 2^k * e^r
+ *
+ * e^r is its Taylor series up to r^13 (the next term is below 1e-17 of the
+ * result), and 2^k is built directly as the bits of a double (as 2 * 2^(k-1),
+ * so k = 1024 still fits). Accurate to a few units in the last place.
+ * Results below e^-708 (about 1e-308) are returned as 0, above the largest
+ * double as infinity.
+ */
+static inline double fast_exp(double x)
+{
+    const double log2e = 1.4426950408889634, ln2_hi = 0.6931471803691238, ln2_lo = 1.9082149292705877e-10;
+    const double round_magic = 6755399441055744.0;            /* 1.5 * 2^52: adding it rounds to an integer */
+    const double largest = 709.782712893384;                   /* ln(largest double) */
+    double clamped = x < -708.0 ? -708.0 : (x > largest ? largest : x);
+    double k = (clamped * log2e + round_magic) - round_magic;
+    double r = (clamped - k * ln2_hi) - k * ln2_lo;            /* ln 2 in two parts keeps r exact */
+    double p = 1.0 / 6227020800.0;                             /* 1/13!, then Horner down to 1 */
+    p = p * r + 1.0 / 479001600.0;
+    p = p * r + 1.0 / 39916800.0;
+    p = p * r + 1.0 / 3628800.0;
+    p = p * r + 1.0 / 362880.0;
+    p = p * r + 1.0 / 40320.0;
+    p = p * r + 1.0 / 5040.0;
+    p = p * r + 1.0 / 720.0;
+    p = p * r + 1.0 / 120.0;
+    p = p * r + 1.0 / 24.0;
+    p = p * r + 1.0 / 6.0;
+    p = p * r + 0.5;
+    p = p * r + 1.0;
+    p = p * r + 1.0;
+    long bits = ((long)k - 1 + 1023) << 52;                     /* the double 2^(k-1) */
+    double half_two_k;
+    memcpy(&half_two_k, &bits, sizeof half_two_k);
+    double result = 2.0 * (p * half_two_k);
+    result = x < -708.0 ? 0.0 : result;
+    return x > largest ? HUGE_VAL : result;
+}
+
+/* y[i] = e^(x[i] - shift), returning the sum of the y[i]. The work goes
+ * through a small double buffer in chunks: the loop over doubles
+ * vectorizes for both precisions (GCC will not vectorize the one that mixes
+ * floats into it), and the sum uses 8 running totals so it vectorizes too. */
+static double exp_shifted(const real *x, double shift, real *y, long count)
+{
+    enum { CHUNK = 256, LANES = 8 };
+    double buffer[CHUNK], lanes[LANES] = {0};
+    for (long start = 0; start < count; start += CHUNK) {
+        long size = count - start < CHUNK ? count - start : CHUNK;
+        for (long i = 0; i < size; i++) buffer[i] = (double) x[start + i] - shift;
+        for (long i = 0; i < size; i++) buffer[i] = fast_exp(buffer[i]);
+        long i = 0;
+        for (; i + LANES <= size; i += LANES)
+            for (int l = 0; l < LANES; l++) lanes[l] += buffer[i + l];
+        for (; i < size; i++) lanes[0] += buffer[i];
+        for (i = 0; i < size; i++) y[start + i] = (real) buffer[i];
+    }
+    double total = 0.0;
+    for (int l = 0; l < LANES; l++) total += lanes[l];
+    return total;
+}
+
+void exp_vector(const real *x, real *y, long count)
+{
+    exp_shifted(x, 0.0, y, count);
+}
+
 void softmax_rows(const real *x, real *y, long rows, long width)
 {
     for (long r = 0; r < rows; r++) {
@@ -481,9 +552,8 @@ void softmax_rows(const real *x, real *y, long rows, long width)
         real *out = y + r * width;
         double row_max = in[0];
         for (long i = 1; i < width; i++) if (in[i] > row_max) row_max = in[i];
-        double total = 0.0;
-        for (long i = 0; i < width; i++) { out[i] = exp(in[i] - row_max); total += out[i]; }
-        for (long i = 0; i < width; i++) out[i] /= total;
+        double inverse = 1.0 / exp_shifted(in, row_max, out, width);
+        for (long i = 0; i < width; i++) out[i] *= inverse;
     }
 }
 

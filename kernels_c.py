@@ -176,6 +176,7 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.add_vectors.argtypes = [pointer, pointer, pointer, count]
     library.multiply_vectors.argtypes = [pointer, pointer, pointer, count]
     library.scale_vector.argtypes = [pointer, ctypes.c_double, pointer, count]
+    library.exp_vector.argtypes = [pointer, pointer, count]
     library.add_scaled.argtypes = [pointer, pointer, ctypes.c_double, pointer, count]
     library.sum_of_squares.argtypes = [pointer, count]
     library.sum_of_squares.restype = ctypes.c_double
