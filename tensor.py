@@ -949,9 +949,9 @@ def permute(tensor: Tensor, axes: tuple[int, ...]) -> Tensor:
     axes = _normalize_axes(tuple(axes), tensor.ndim)
     out_shape = tuple(tensor.shape[axis] for axis in axes)
     source_indices = _permute_index_map(tensor.shape, axes)
-    data = tensor.data
+    sizes = dict(batches=1, image_size=tensor.numel)
     out = _op_result(
-        [data[index] for index in source_indices],
+        kernels.gather_indexed(tensor.data, source_indices, **sizes),
         out_shape,
         (tensor,),
         "permute",
@@ -959,10 +959,7 @@ def permute(tensor: Tensor, axes: tuple[int, ...]) -> Tensor:
 
     def _backward() -> None:
         # A permutation moves every value exactly once, so just move back.
-        tensor_grad = [0.0] * tensor.numel
-        for index, value in zip(source_indices, _grad_data(out)):
-            tensor_grad[index] = value
-        _add_grad(tensor, tensor_grad)
+        _add_grad(tensor, kernels.scatter_add_indexed(_grad_data(out), source_indices, **sizes))
 
     _set_backward(out, _backward)
     return out
@@ -976,10 +973,10 @@ def _permute_index_map(
     """For each flat output position, the flat input position it reads."""
 
     strides = _strides(shape)
-    return _strided_indices(
+    return kernels.index_table(_strided_indices(
         tuple(shape[axis] for axis in axes),
         tuple(strides[axis] for axis in axes),
-    )
+    ))
 
 
 def transpose(tensor: Tensor) -> Tensor:
@@ -1411,7 +1408,7 @@ def _conv2d_patch_index(
         for row in range(kernel_rows)
         for col in range(kernel_cols)
     ]
-    return tuple(
+    return kernels.index_table(
         out_row * image_cols + out_col + offset
         for out_row in range(image_rows - kernel_rows + 1)
         for out_col in range(image_cols - kernel_cols + 1)
@@ -1529,7 +1526,7 @@ def _pool2d_window_index(
     image_rows, image_cols = image_shape
     window_rows, window_cols = window
     stride_rows, stride_cols = stride
-    return tuple(
+    return kernels.index_table(
         (out_row * stride_rows + row) * image_cols + out_col * stride_cols + col
         for out_row in range((image_rows - window_rows) // stride_rows + 1)
         for out_col in range((image_cols - window_cols) // stride_cols + 1)

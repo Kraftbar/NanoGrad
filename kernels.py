@@ -419,7 +419,8 @@ def _c_layer_norm_rows_backward(
 
 
 def _c_index_buffer(index: Sequence[int]):
-    values = array("l", index)
+    is_table = type(index) is array and index.typecode == "l"   # see index_table
+    values = index if is_table else array("l", index)
     return values, (ctypes.c_long * len(values)).from_buffer(values)
 
 
@@ -560,6 +561,15 @@ def storage(values: Sequence[float]) -> array | list[float]:
     if BACKEND == "c":
         return values if type(values) is array else array("d", values)
     return values if type(values) is list else list(values)
+
+
+def index_table(indices: Sequence[int]) -> array | tuple[int, ...]:
+    """A fixed table of flat offsets (im2col patches, pooling windows,
+    permutations) in the form the active backend reads fastest: C longs for
+    the C kernels, a tuple for Python. Callers build each table once and
+    cache it."""
+
+    return array("l", indices) if BACKEND == "c" else tuple(indices)
 
 
 def zeros(count: int) -> array | list[float]:
