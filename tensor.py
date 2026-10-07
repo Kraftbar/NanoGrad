@@ -1595,11 +1595,10 @@ def conv2d_valid(image: Tensor, kernel: Tensor, *, stride: int = 1) -> Tensor:
         grad = _grad_data(out)
         if kernel.requires_grad:
             # dK = sum over images of dOut_b (O x P) @ patches_b (P x K),
-            # with the patches gathered now (im2col).
-            patches = kernels.gather_indexed(image.data, patch_index, batches=batches, image_size=image_size)
-            _add_grad(kernel, kernels.gemm(
-                grad, patches, batches=batches, m=filters, k=positions, n=patch_size,
-                a_step=filters * positions, b_step=positions * patch_size, c_step=0,
+            # patches again read through the index table.
+            _add_grad(kernel, kernels.conv_kernel_grad(
+                image.data, patch_index, grad, batches=batches, image_size=image_size,
+                filters=filters, patch_size=patch_size, positions=positions,
             ))
         if image.requires_grad:
             # dPatches_b = dOut_b^T (P x O) @ K (O x K), then col2im: add each

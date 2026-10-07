@@ -270,6 +270,61 @@ void conv_forward(const real *image, const long *index, const real *kernel, real
 #endif
 }
 
+/*
+ * The kernel gradient of conv_forward, also without a patch matrix:
+ *
+ *     dkernel (filters x K) += sum over images of grad_b (filters x positions) @ patches_b
+ *
+ * Here the product's inner dimension is the positions, and row p of B is
+ * patch p, read through the index table while packing the panel.
+ */
+void conv_kernel_grad(const real *image, const long *index, const real *grad, real *dkernel,
+                      long batches, long image_size, int filters, int patch_size, int positions)
+{
+    const int trans_a = 0, m = filters, k = positions, n = patch_size;
+    (void)trans_a;
+#ifdef VECTOR_WIDTH
+    real *panel = malloc(sizeof(real) * K_BLOCK * TILE_COLS);
+    if (panel == NULL) {
+        abort();
+    }
+    int full_cols = n >= TILE_COLS ? n - n % TILE_COLS : 0;
+#else
+    int full_cols = 0;
+#endif
+    for (long batch = 0; batch < batches; batch++) {
+        const real *img = image + batch * image_size;
+        const real *A = grad + batch * (long)m * k;
+#ifdef VECTOR_WIDTH
+        for (int j = 0; j < full_cols; j += TILE_COLS) {
+            for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
+                int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
+                for (int p = 0; p < kb; p++) {                 /* pack patch rows */
+                    const long *cells = index + (long)(p0 + p) * n + j;
+                    for (int jj = 0; jj < TILE_COLS; jj++)
+                        panel[(long)p * TILE_COLS + jj] = img[cells[jj]];
+                }
+                int i = 0;
+                for (; i + TILE_ROWS <= m; i += TILE_ROWS)
+                    tile(A, dkernel, m, k, n, 0, panel, i, j, p0, kb, TILE_ROWS);
+                if (i < m)
+                    tile(A, dkernel, m, k, n, 0, panel, i, j, p0, kb, m - i);
+            }
+        }
+#endif
+        for (int i = 0; i < m; i++) {                          /* leftover (or all) columns */
+            for (int q = full_cols; q < n; q++) {
+                double total = 0.0;
+                for (int p = 0; p < k; p++) total += A_AT(i, p) * img[index[(long)p * n + q]];
+                dkernel[(long)i * n + q] += total;
+            }
+        }
+    }
+#ifdef VECTOR_WIDTH
+    free(panel);
+#endif
+}
+
 #undef A_AT
 
 

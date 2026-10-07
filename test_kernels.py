@@ -129,6 +129,12 @@ class KernelBackendTests(unittest.TestCase):
                                         a_step=0, b_step=positions * patch_size, c_step=filters * positions,
                                         trans_b=True)
                 self.assertListsClose(c, expected)
+                grad = values(2 * filters * positions, 42)
+                python, c = self.run_both(lambda: kernels.conv_kernel_grad(image, index, grad, **sizes))
+                self.assertListsClose(python, c)
+                expected = kernels.gemm(grad, patches, batches=2, m=filters, k=positions, n=patch_size,
+                                        a_step=filters * positions, b_step=positions * patch_size, c_step=0)
+                self.assertListsClose(c, expected)
 
     def test_gather_and_scatter_agree(self) -> None:
         image = values(2 * 12, 12)

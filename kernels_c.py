@@ -167,6 +167,7 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.layer_norm_rows_backward.argtypes = [pointer] * 7 + [count, count, ctypes.c_int]
     index_pointer = ctypes.POINTER(ctypes.c_long)
     library.conv_forward.argtypes = [pointer, index_pointer, pointer, pointer] + [count, count] + [ctypes.c_int] * 3
+    library.conv_kernel_grad.argtypes = [pointer, index_pointer, pointer, pointer] + [count, count] + [ctypes.c_int] * 3
     for name in ("gather_indexed", "scatter_add_indexed"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer, count, count, count]
     library.add_vectors.argtypes = [pointer, pointer, pointer, count]
@@ -334,6 +335,16 @@ def conv_forward(image, index, kernel, batches: int, image_size: int,
     library.conv_forward(_buffer(image_buffer), index_buffer, _buffer(kernel_buffer), _buffer(out),
                          batches, image_size, filters, patch_size, positions)
     return out
+
+
+def conv_kernel_grad(image, index, grad, batches: int, image_size: int,
+                     filters: int, patch_size: int, positions: int) -> array:
+    image_buffer, grad_buffer = _reals(image), _reals(grad)
+    keep, index_buffer = _index_buffer(index)
+    dkernel = zeros(filters * patch_size)
+    library.conv_kernel_grad(_buffer(image_buffer), index_buffer, _buffer(grad_buffer), _buffer(dkernel),
+                             batches, image_size, filters, patch_size, positions)
+    return dkernel
 
 
 def gather_indexed(

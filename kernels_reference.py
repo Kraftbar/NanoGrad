@@ -234,6 +234,23 @@ def conv_forward(
     return out
 
 
+def conv_kernel_grad(
+    image: list[float], index: Sequence[int], grad: list[float],
+    batches: int, image_size: int, filters: int, patch_size: int, positions: int,
+) -> list[float]:
+    """dkernel = sum over images of grad_b (filters x positions) @ patches_b."""
+
+    dkernel = [0.0] * (filters * patch_size)
+    for batch in range(batches):
+        image_b = image[batch * image_size : (batch + 1) * image_size]
+        grad_b = grad[batch * filters * positions : (batch + 1) * filters * positions]
+        for f in range(filters):
+            for q in range(patch_size):
+                column = [image_b[index[p * patch_size + q]] for p in range(positions)]
+                dkernel[f * patch_size + q] += dot(grad_b[f * positions : (f + 1) * positions], column)
+    return dkernel
+
+
 def gather_indexed(
     image: list[float], index: Sequence[int], batches: int, image_size: int,
 ) -> list[float]:

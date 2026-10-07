@@ -223,6 +223,17 @@ def conv_forward(
     return kernel_fn(image, index, kernel, batches, image_size, filters, patch_size, positions)
 
 
+def conv_kernel_grad(
+    image: list[float], index: Sequence[int], grad: list[float], *,
+    batches: int, image_size: int, filters: int, patch_size: int, positions: int,
+) -> list[float]:
+    """Gradient of conv_forward's kernel, summed over the batch, read through
+    ``index`` without building the patch matrix."""
+
+    kernel_fn = kernels_c.conv_kernel_grad if BACKEND == "c" else reference.conv_kernel_grad
+    return kernel_fn(image, index, grad, batches, image_size, filters, patch_size, positions)
+
+
 def gather_indexed(image: list[float], index: Sequence[int], *, batches: int, image_size: int) -> list[float]:
     """For every image in the batch, read the pixels at ``index`` (im2col)."""
 
