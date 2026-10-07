@@ -9,7 +9,9 @@ Three model families, all built on the same NanoGrad core:
 - ``lenet``: the classic LeNet-5 shape, scaled to 28x28 inputs:
   conv 6@5x5 -> tanh -> avgpool 2 -> conv 16@5x5 -> tanh -> avgpool 2
   -> flatten (16*4*4 = 256) -> linear 10
-- ``resnet``: a small residual network with batch norm (resnet.py)
+- ``resnet``: a small residual network with batch norm (resnet.py);
+  ``resnet8`` is the same with widths 16/32/64, the ResNet-8 of MLPerf
+  Tiny's CIFAR-10 image-classification benchmark
 - ``vit``: a tiny vision transformer on 7x7 patches (vit.py)
 
 PyTorch runs the same architecture (torch_twin.py), starts from NanoGrad's
@@ -113,7 +115,7 @@ def batch_pixels(images: list[bytes], indices: list[int]) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
-MODELS = ("lenet", "resnet", "vit")
+MODELS = ("lenet", "resnet", "resnet8", "vit")
 
 
 def build_nanograd(seed: int, model: str = "lenet", image_shape: tuple[int, int, int] = IMAGE_SHAPE) -> TensorModule:
@@ -123,6 +125,9 @@ def build_nanograd(seed: int, model: str = "lenet", image_shape: tuple[int, int,
         return TwoConvCNN(image_shape=image_shape, classes=10, pooling="avg", activation="tanh", seed=seed)
     if model == "resnet":
         return SmallResNet(image_shape=image_shape, classes=10, seed=seed)
+    if model == "resnet8":
+        # MLPerf Tiny's image-classification model: the same shape, wider.
+        return SmallResNet(image_shape=image_shape, classes=10, widths=(16, 32, 64), seed=seed)
     if model == "vit":
         # A 4x4 grid of patches: 7x7 on MNIST, 8x8 on CIFAR-10.
         return TinyViT(image_shape=image_shape, patch_size=image_shape[1] // 4, classes=10, seed=seed)
