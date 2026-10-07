@@ -12,7 +12,13 @@ The ``baby`` preset is nanoGPT's CPU recipe for Tiny Shakespeare
     python3 gpt_train.py --text-file data/tinyshakespeare/input.txt \\
         --preset baby --workers 4 --out-dir runs/baby
 
-Checkpoints use char_checkpoint's format, so they can be sampled later:
+``--tokenizer bpe`` trains a byte-pair-encoding tokenizer (bpe.py) on the
+training split first, so each token covers about two characters. Losses per
+token are then not comparable with a character model's, so the log also
+reports validation *bits per character*, which are.
+
+Character-model checkpoints use char_checkpoint's format, so they can be
+sampled later:
 
     python3 char_demo.py --load-model runs/baby/model.json --generate-only \\
         --sample-mode sample --top-k 10 --seed-text "ROMEO:" --generate 300
@@ -23,16 +29,19 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import random
 from contextlib import nullcontext
 from pathlib import Path
 from time import perf_counter
 
+from bpe import BPETokenizer
 from char_checkpoint import load_checkpoint, save_checkpoint
 from char_demo import generate_text
 from language import CharTransformerModel
 from optim import TensorAdam
 from parallel import DataParallel, sequence_loss
+from sampling import select_next_index
 from schedules import warmup_cosine
 from tensor import no_grad
 from text import CharVocab
@@ -129,21 +138,51 @@ def estimate_loss(
     return losses
 
 
+def build_tokenizer(train_text: str, text: str, args: argparse.Namespace):
+    """Characters, or a BPE vocabulary learned from the training split only."""
+
+    if args.tokenizer == "bpe":
+        return BPETokenizer.train(train_text, args.bpe_vocab_size)
+    return CharVocab.from_text(text)
+
+
+def generate_tokens(model, prompt: list[int], *, length: int, context_size: int,
+                    temperature: float, top_k: int | None, rng: random.Random) -> list[int]:
+    """Sample ``length`` tokens after ``prompt``, one at a time."""
+
+    tokens = list(prompt)
+    for _ in range(length):
+        with no_grad(), evaluation_mode(model):
+            logits = model([tokens[-context_size:]])
+        tokens.append(select_next_index(
+            list(logits.data), sample_mode="sample", temperature=temperature, top_k=top_k, rng=rng,
+        ))
+    return tokens
+
+
 def train(args: argparse.Namespace) -> dict:
     text = Path(args.text_file).read_text(encoding="utf-8")
     if args.max_chars is not None:
         text = text[: args.max_chars]
-    vocab = CharVocab.from_text(text)
     train_text, validation_text = split_text(text, args.validation_fraction)
+    vocab = build_tokenizer(train_text, text, args)
     splits = {"train": vocab.encode(train_text), "val": vocab.encode(validation_text)}
+    # A token covers this many characters on average, so loss per character
+    # = loss per token / chars_per_token (1 for a character model).
+    chars_per_token = len(validation_text) / len(splits["val"])
 
     model = build_model(len(vocab), args)
     out_dir = Path(args.out_dir) if args.out_dir else None
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "config.json").write_text(json.dumps(vars(args), indent=2, default=str) + "\n")
+        if args.tokenizer == "bpe":
+            vocab.save(out_dir / "tokenizer.json")
         if args.resume and (out_dir / "model.json").exists():
-            load_checkpoint(out_dir / "model.json", model, vocab, model_name="transformer")
+            if args.tokenizer == "bpe":
+                model.load(out_dir / "model.json")
+            else:
+                load_checkpoint(out_dir / "model.json", model, vocab, model_name="transformer")
 
     optimizer = TensorAdam(
         model.parameters(),
@@ -161,7 +200,8 @@ def train(args: argparse.Namespace) -> dict:
         decay_steps=args.steps,
     )
 
-    print(f"vocab {len(vocab)}, train {len(splits['train'])} chars, val {len(splits['val'])} chars")
+    print(f"{args.tokenizer} vocab {len(vocab)}, train {len(splits['train'])} tokens, "
+          f"val {len(splits['val'])} tokens ({chars_per_token:.2f} chars/token)")
     print(f"model {model.num_parameters()} parameters, workers {args.workers}")
 
     data_rng = random.Random(args.seed)
@@ -177,16 +217,20 @@ def train(args: argparse.Namespace) -> dict:
             if step % args.eval_every == 0 or step == args.steps:
                 losses = estimate_loss(model, splits, args, eval_rng, parallel)
                 elapsed = perf_counter() - start
+                bits_per_char = losses["val"] / math.log(2) / chars_per_token
                 row = {"step": step, "train_loss": losses["train"], "val_loss": losses["val"],
-                       "lr": schedule(step), "seconds": elapsed}
+                       "val_bits_per_char": bits_per_char, "lr": schedule(step), "seconds": elapsed}
                 log_rows.append(row)
-                print(f"step {step:5d}: train {losses['train']:.4f}, val {losses['val']:.4f}, "
-                      f"{elapsed / 60:.1f} min", flush=True)
+                print(f"step {step:5d}: train {losses['train']:.4f}, val {losses['val']:.4f} "
+                      f"({bits_per_char:.3f} bits/char), {elapsed / 60:.1f} min", flush=True)
                 if out_dir is not None:
                     _write_log(out_dir / "log.csv", log_rows)
                     if losses["val"] < best_val:
                         best_val = losses["val"]
-                        save_checkpoint(out_dir / "model.json", model, vocab, model_name="transformer")
+                        if args.tokenizer == "bpe":
+                            model.save(out_dir / "model.json")
+                        else:
+                            save_checkpoint(out_dir / "model.json", model, vocab, model_name="transformer")
             if step == args.steps:
                 break
 
@@ -205,27 +249,37 @@ def train(args: argparse.Namespace) -> dict:
                 sequence_loss(model, xs, ys).backward()
             optimizer.step()
 
-    samples = [
-        generate_text(
-            model,
-            vocab,
-            seed_text=args.seed_text,
-            length=args.generate,
-            context_size=args.context_size,
-            input_mode="embedding",
-            sample_mode="sample",
-            temperature=args.temperature,
-            top_k=args.top_k,
-            rng=random.Random(args.seed + 100 + index),
-        )
-        for index in range(args.num_samples)
-    ]
+    if args.tokenizer == "bpe":
+        samples = [
+            vocab.decode(generate_tokens(
+                model, vocab.encode(args.seed_text), length=args.generate, context_size=args.context_size,
+                temperature=args.temperature, top_k=args.top_k, rng=random.Random(args.seed + 100 + index),
+            ))
+            for index in range(args.num_samples)
+        ]
+    else:
+        samples = [_char_sample(model, vocab, args, index) for index in range(args.num_samples)]
     for sample in samples:
         print("-" * 60)
         print(sample)
     if out_dir is not None:
         (out_dir / "samples.txt").write_text(("\n" + "-" * 60 + "\n").join(samples) + "\n")
     return {"log": log_rows, "samples": samples, "best_val": best_val}
+
+
+def _char_sample(model, vocab, args, index: int) -> str:
+    return generate_text(
+        model,
+        vocab,
+        seed_text=args.seed_text,
+        length=args.generate,
+        context_size=args.context_size,
+        input_mode="embedding",
+        sample_mode="sample",
+        temperature=args.temperature,
+        top_k=args.top_k,
+        rng=random.Random(args.seed + 100 + index),
+    )
 
 
 def _write_log(path: Path, rows: list[dict]) -> None:
@@ -240,6 +294,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--text-file", required=True)
     parser.add_argument("--preset", choices=tuple(PRESETS), default="mini")
     parser.add_argument("--max-chars", type=int)
+    parser.add_argument("--tokenizer", choices=("char", "bpe"), default="char")
+    parser.add_argument("--bpe-vocab-size", type=int, default=512)
     parser.add_argument("--validation-fraction", type=float, default=0.1)
     for name in ("layers", "heads", "embedding_dim", "context_size", "batch_size", "steps", "warmup_steps"):
         parser.add_argument("--" + name.replace("_", "-"), type=int)

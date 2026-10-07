@@ -1,3 +1,4 @@
+import math
 import random
 import tempfile
 import unittest
@@ -55,6 +56,32 @@ class GptTrainTests(unittest.TestCase):
             vocab = CharVocab.from_text(TEXT)
             model = build_model(len(vocab), args)
             load_checkpoint(out_dir / "model.json", model, vocab, model_name="transformer")
+
+
+    def test_bpe_run_reports_bits_per_char_and_saves_its_tokenizer(self) -> None:
+        from bpe import BPETokenizer
+
+        with tempfile.TemporaryDirectory() as directory:
+            text_path = Path(directory) / "text.txt"
+            text_path.write_text(TEXT)
+            out_dir = Path(directory) / "run"
+            args = parse_args([
+                "--text-file", str(text_path), "--preset", "mini", "--tokenizer", "bpe",
+                "--bpe-vocab-size", "300", "--layers", "1", "--embedding-dim", "16",
+                "--context-size", "8", "--steps", "10", "--eval-every", "10", "--eval-batches", "2",
+                "--generate", "5", "--num-samples", "1", "--out-dir", str(out_dir),
+            ])
+            with redirect_stdout(StringIO()):
+                result = train(args)
+
+            last = result["log"][-1]
+            tokenizer = BPETokenizer.load(out_dir / "tokenizer.json")
+            self.assertGreater(len(tokenizer), 256)
+            validation = split_text(TEXT, args.validation_fraction)[1]
+            chars_per_token = len(validation) / len(tokenizer.encode(validation))
+            self.assertAlmostEqual(last["val_bits_per_char"], last["val_loss"] / math.log(2) / chars_per_token)
+            model = build_model(len(tokenizer), args)
+            model.load(out_dir / "model.json")
 
 
 if __name__ == "__main__":
