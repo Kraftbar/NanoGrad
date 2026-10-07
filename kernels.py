@@ -234,6 +234,17 @@ def conv_kernel_grad(
     return kernel_fn(image, index, grad, batches, image_size, filters, patch_size, positions)
 
 
+def conv_input_grad(
+    grad: list[float], kernel: list[float], index: Sequence[int], *,
+    batches: int, image_size: int, filters: int, patch_size: int, positions: int,
+) -> list[float]:
+    """Gradient of conv_forward's image: patch gradients scattered back onto
+    their pixels (col2im), without a patch-gradient matrix."""
+
+    kernel_fn = kernels_c.conv_input_grad if BACKEND == "c" else reference.conv_input_grad
+    return kernel_fn(grad, kernel, index, batches, image_size, filters, patch_size, positions)
+
+
 def gather_indexed(image: list[float], index: Sequence[int], *, batches: int, image_size: int) -> list[float]:
     """For every image in the batch, read the pixels at ``index`` (im2col)."""
 

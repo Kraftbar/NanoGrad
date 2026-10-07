@@ -325,6 +325,72 @@ void conv_kernel_grad(const real *image, const long *index, const real *grad, re
 #endif
 }
 
+/*
+ * The image gradient of conv_forward ("col2im"), without a patch-gradient
+ * matrix: for each image,
+ *
+ *     dpatches (positions x K) = grad_b^T (positions x filters) @ kernel (filters x K)
+ *     image_grad_b[index[j * K + q]] += dpatches[j][q]
+ *
+ * computed TILE_ROWS positions at a time into a small block that stays in
+ * cache, then scattered straight onto the pixels the patches came from.
+ */
+void conv_input_grad(const real *grad, const real *kernel, const long *index, real *image_grad,
+                     long batches, long image_size, int filters, int patch_size, int positions)
+{
+    const int trans_a = 1, m = positions, k = filters, n = patch_size;
+    (void)trans_a;
+    const int block_rows = 8;
+    real *block = malloc(sizeof(real) * block_rows * n);
+    if (block == NULL) {
+        abort();
+    }
+#ifdef VECTOR_WIDTH
+    real *panel = malloc(sizeof(real) * K_BLOCK * TILE_COLS);
+    if (panel == NULL) {
+        abort();
+    }
+    int full_cols = n >= TILE_COLS ? n - n % TILE_COLS : 0;
+#else
+    int full_cols = 0;
+#endif
+    for (long batch = 0; batch < batches; batch++) {
+        const real *A = grad + batch * (long)k * m;           /* (filters x positions) */
+        real *img_grad = image_grad + batch * image_size;
+        for (int i = 0; i < m; i += block_rows) {
+            int rows = m - i < block_rows ? m - i : block_rows;
+            memset(block, 0, sizeof(real) * rows * n);
+#ifdef VECTOR_WIDTH
+            for (int j = 0; j < full_cols; j += TILE_COLS) {
+                for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
+                    int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
+                    for (int p = 0; p < kb; p++)
+                        memcpy(panel + (long)p * TILE_COLS, kernel + (long)(p0 + p) * n + j, sizeof(real) * TILE_COLS);
+                    /* A + i: rows i.. of grad_b^T become the tile's rows 0.. */
+                    tile(A + i, block, m, k, n, 1, panel, 0, j, p0, kb, rows);
+                }
+            }
+#endif
+            for (int r = 0; r < rows; r++) {                   /* leftover (or all) columns */
+                for (int q = full_cols; q < n; q++) {
+                    double total = 0.0;
+                    for (int p = 0; p < k; p++) total += A[(long)p * m + i + r] * kernel[(long)p * n + q];
+                    block[(long)r * n + q] += total;
+                }
+            }
+            for (int r = 0; r < rows; r++) {                   /* col2im */
+                const long *cells = index + (long)(i + r) * n;
+                const real *values = block + (long)r * n;
+                for (int q = 0; q < n; q++) img_grad[cells[q]] += values[q];
+            }
+        }
+    }
+    free(block);
+#ifdef VECTOR_WIDTH
+    free(panel);
+#endif
+}
+
 #undef A_AT
 
 

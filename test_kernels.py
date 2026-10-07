@@ -130,6 +130,13 @@ class KernelBackendTests(unittest.TestCase):
                                         trans_b=True)
                 self.assertListsClose(c, expected)
                 grad = values(2 * filters * positions, 42)
+                python, c = self.run_both(lambda: kernels.conv_input_grad(grad, kernel, index, **sizes))
+                self.assertListsClose(python, c)
+                d_patches = kernels.gemm(grad, kernel, batches=2, m=positions, k=filters, n=patch_size,
+                                         a_step=filters * positions, b_step=0, c_step=positions * patch_size,
+                                         trans_a=True)
+                expected_image = kernels.scatter_add_indexed(d_patches, index, batches=2, image_size=sizes["image_size"])
+                self.assertListsClose(c, expected_image)
                 python, c = self.run_both(lambda: kernels.conv_kernel_grad(image, index, grad, **sizes))
                 self.assertListsClose(python, c)
                 expected = kernels.gemm(grad, patches, batches=2, m=filters, k=positions, n=patch_size,

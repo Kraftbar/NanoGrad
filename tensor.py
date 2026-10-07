@@ -1603,13 +1603,9 @@ def conv2d_valid(image: Tensor, kernel: Tensor, *, stride: int = 1) -> Tensor:
         if image.requires_grad:
             # dPatches_b = dOut_b^T (P x O) @ K (O x K), then col2im: add each
             # patch gradient back onto the pixels it was read from.
-            d_patches = kernels.gemm(
-                grad, kernel.data, batches=batches, m=positions, k=filters, n=patch_size,
-                a_step=filters * positions, b_step=0, c_step=positions * patch_size,
-                trans_a=True,
-            )
-            _add_grad(image, kernels.scatter_add_indexed(
-                d_patches, patch_index, batches=batches, image_size=image_size,
+            _add_grad(image, kernels.conv_input_grad(
+                grad, kernel.data, patch_index, batches=batches, image_size=image_size,
+                filters=filters, patch_size=patch_size, positions=positions,
             ))
 
     _set_backward(out, _backward)

@@ -168,6 +168,7 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     index_pointer = ctypes.POINTER(ctypes.c_long)
     library.conv_forward.argtypes = [pointer, index_pointer, pointer, pointer] + [count, count] + [ctypes.c_int] * 3
     library.conv_kernel_grad.argtypes = [pointer, index_pointer, pointer, pointer] + [count, count] + [ctypes.c_int] * 3
+    library.conv_input_grad.argtypes = [pointer, pointer, index_pointer, pointer] + [count, count] + [ctypes.c_int] * 3
     for name in ("gather_indexed", "scatter_add_indexed"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer, count, count, count]
     library.add_vectors.argtypes = [pointer, pointer, pointer, count]
@@ -345,6 +346,16 @@ def conv_kernel_grad(image, index, grad, batches: int, image_size: int,
     library.conv_kernel_grad(_buffer(image_buffer), index_buffer, _buffer(grad_buffer), _buffer(dkernel),
                              batches, image_size, filters, patch_size, positions)
     return dkernel
+
+
+def conv_input_grad(grad, kernel, index, batches: int, image_size: int,
+                    filters: int, patch_size: int, positions: int) -> array:
+    grad_buffer, kernel_buffer = _reals(grad), _reals(kernel)
+    keep, index_buffer = _index_buffer(index)
+    image_grad = zeros(batches * image_size)
+    library.conv_input_grad(_buffer(grad_buffer), _buffer(kernel_buffer), index_buffer, _buffer(image_grad),
+                            batches, image_size, filters, patch_size, positions)
+    return image_grad
 
 
 def gather_indexed(

@@ -251,6 +251,25 @@ def conv_kernel_grad(
     return dkernel
 
 
+def conv_input_grad(
+    grad: list[float], kernel: list[float], index: Sequence[int],
+    batches: int, image_size: int, filters: int, patch_size: int, positions: int,
+) -> list[float]:
+    """image_grad: each patch's gradient (grad_b^T @ kernel, one row per
+    position) added back onto the pixels the patch was read from."""
+
+    image_grad = [0.0] * (batches * image_size)
+    columns = [kernel[q::patch_size] for q in range(patch_size)]          # kernel column q
+    for batch in range(batches):
+        grad_b = grad[batch * filters * positions : (batch + 1) * filters * positions]
+        start = batch * image_size
+        for j in range(positions):
+            grad_column = grad_b[j::positions]                            # dOut[:, j]
+            for q in range(patch_size):
+                image_grad[start + index[j * patch_size + q]] += dot(grad_column, columns[q])
+    return image_grad
+
+
 def gather_indexed(
     image: list[float], index: Sequence[int], batches: int, image_size: int,
 ) -> list[float]:
