@@ -110,6 +110,35 @@ def batch_pixels(images: list[bytes], indices: list[int]) -> list[float]:
     return [_PIXEL[byte] for index in indices for byte in images[index]]
 
 
+def augmented_pixels(images, indices, image_shape, rng: random.Random, *, flip: bool) -> list[float]:
+    """The standard CIFAR augmentation: a random 4-pixel shift (a random
+    crop of the image padded with 4 zero pixels per side), and on CIFAR a
+    random horizontal mirror. Digits are not mirrored: a mirrored 2 is not
+    a 2. Both frameworks get exactly these pixels."""
+
+    channels, rows, cols = image_shape
+    out: list[float] = []
+    for index in indices:
+        image = images[index]
+        dy, dx = rng.randint(-4, 4), rng.randint(-4, 4)
+        mirror = flip and rng.random() < 0.5
+        for channel in range(channels):
+            plane = channel * rows * cols
+            for row in range(rows):
+                source = row + dy
+                if not 0 <= source < rows:
+                    out.extend([0.0] * cols)
+                    continue
+                line = [_PIXEL[byte] for byte in image[plane + source * cols : plane + (source + 1) * cols]]
+                if mirror:
+                    line.reverse()
+                shifted = [0.0] * cols
+                for col in range(max(0, -dx), min(cols, cols - dx)):
+                    shifted[col] = line[col + dx]
+                out.extend(shifted)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # NanoGrad side
 # ---------------------------------------------------------------------------
@@ -134,21 +163,24 @@ def build_nanograd(seed: int, model: str = "lenet", image_shape: tuple[int, int,
     raise ValueError(f"unknown model: {model}")
 
 
-def image_loss(model: TensorModule, xs: list[list[float]], ys: list[int], image_shape=IMAGE_SHAPE):
+def image_loss(model: TensorModule, xs: list[list[float]], ys: list[int], image_shape=IMAGE_SHAPE,
+               label_smoothing: float = 0.0):
     """Mean cross entropy of a batch of flat images (also run by workers)."""
 
     inputs = Tensor([value for image in xs for value in image], (len(xs), *image_shape))
-    return softmax_cross_entropy(model(inputs), ys)
+    return softmax_cross_entropy(model(inputs), ys, label_smoothing=label_smoothing)
 
 
 class NanoGradRunner:
-    def __init__(self, model: TensorModule, lr: float, workers: int = 1, image_shape=IMAGE_SHAPE) -> None:
+    def __init__(self, model: TensorModule, lr: float, workers: int = 1, image_shape=IMAGE_SHAPE,
+                 label_smoothing: float = 0.0) -> None:
         self.model = model
+        self.label_smoothing = label_smoothing
         self.image_shape = tuple(image_shape)
         self.image_size = image_shape[0] * image_shape[1] * image_shape[2]
         self.optimizer = TensorAdam(model.parameters(), lr=lr)
         # With workers > 1 each batch is split across processes (parallel.py).
-        loss = partial(image_loss, image_shape=self.image_shape)
+        loss = partial(image_loss, image_shape=self.image_shape, label_smoothing=label_smoothing)
         self.parallel = DataParallel(model, loss, workers=workers) if workers > 1 else None
 
     def train_step(self, pixels: list[float], labels: list[int]) -> float:
@@ -159,7 +191,7 @@ class NanoGradRunner:
             loss = self.parallel.loss_and_gradients(images, labels)
         else:
             inputs = Tensor(pixels, (len(labels), *self.image_shape))
-            loss_tensor = softmax_cross_entropy(self.model(inputs), labels)
+            loss_tensor = softmax_cross_entropy(self.model(inputs), labels, label_smoothing=self.label_smoothing)
             loss_tensor.backward()
             loss = loss_tensor.item()
         self.optimizer.step()
@@ -189,7 +221,8 @@ class NanoGradRunner:
 class TorchRunner:
     """The same model in PyTorch (see torch_twin.py), with PyTorch's Adam."""
 
-    def __init__(self, model: TensorModule, lr: float, dtype: str, threads: int, image_shape=IMAGE_SHAPE) -> None:
+    def __init__(self, model: TensorModule, lr: float, dtype: str, threads: int, image_shape=IMAGE_SHAPE,
+                 label_smoothing: float = 0.0) -> None:
         import torch
 
         from torch_twin import TorchTwin
@@ -198,6 +231,7 @@ class TorchRunner:
         self.torch = torch
         self.dtype = getattr(torch, dtype)
         self.image_shape = tuple(image_shape)
+        self.label_smoothing = label_smoothing
         self.twin = TorchTwin(model, dtype=self.dtype)
         self.optimizer = torch.optim.Adam(self.twin.parameters, lr=lr)
 
@@ -208,7 +242,9 @@ class TorchRunner:
         inputs = self._inputs(pixels, len(labels))
         self.twin.training = True
         self.optimizer.zero_grad()
-        loss = self.torch.nn.functional.cross_entropy(self.twin(inputs), self.torch.tensor(labels))
+        loss = self.torch.nn.functional.cross_entropy(
+            self.twin(inputs), self.torch.tensor(labels), label_smoothing=self.label_smoothing,
+        )
         loss.backward()
         self.optimizer.step()
         return loss.item()
@@ -251,22 +287,31 @@ def run(args: argparse.Namespace) -> dict:
     runners = {}
     for name in args.frameworks:
         if name == "nanograd":
-            runners[name] = NanoGradRunner(model, args.lr, workers=args.workers, image_shape=image_shape)
+            runners[name] = NanoGradRunner(model, args.lr, workers=args.workers, image_shape=image_shape,
+                                           label_smoothing=args.label_smoothing)
         else:
             if importlib.util.find_spec("torch") is None:
                 raise SystemExit("PyTorch is not installed; use --frameworks nanograd")
             # Built before NanoGrad trains, so it copies the initial weights.
-            runners[name] = TorchRunner(model, args.lr, torch_dtype, args.torch_threads, image_shape)
+            runners[name] = TorchRunner(model, args.lr, torch_dtype, args.torch_threads, image_shape,
+                                        label_smoothing=args.label_smoothing)
 
     rng = random.Random(args.seed)
     schedule = [epoch_batches(len(train_labels), args.batch_size, rng) for _ in range(args.epochs)]
+
+    # With --augment both frameworks see the same randomly shifted images.
+    def pixels_for(batch):
+        if not args.augment:
+            return batch_pixels(train_images, batch)
+        batch_rng = random.Random(hash((args.seed, tuple(batch))))
+        return augmented_pixels(train_images, batch, image_shape, batch_rng, flip=args.dataset == "cifar10")
 
     results = {name: [] for name in runners}
     for name, runner in runners.items():
         for epoch, batches in enumerate(schedule, start=1):
             start = perf_counter()
             losses = [
-                runner.train_step(batch_pixels(train_images, batch), [train_labels[i] for i in batch])
+                runner.train_step(pixels_for(batch), [train_labels[i] for i in batch])
                 for batch in batches
             ]
             train_seconds = perf_counter() - start
@@ -308,6 +353,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--test-limit", type=int)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--augment", action="store_true", help="random shifts (and flips on CIFAR)")
+    parser.add_argument("--label-smoothing", type=float, default=0.0)
     parser.add_argument("--workers", type=int, default=1, help="NanoGrad worker processes")
     parser.add_argument("--dtype", choices=("float64", "float32"), default="float64",
                         help="number type for both frameworks")

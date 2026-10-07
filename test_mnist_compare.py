@@ -2,7 +2,7 @@ import importlib.util
 import random
 import unittest
 
-from mnist_compare import IMAGE_SIZE, NanoGradRunner, TorchRunner, build_nanograd, epoch_batches
+from mnist_compare import IMAGE_SIZE, augmented_pixels, NanoGradRunner, TorchRunner, build_nanograd, epoch_batches
 
 
 class EpochBatchTests(unittest.TestCase):
@@ -45,6 +45,26 @@ class TorchAgreementTests(unittest.TestCase):
             for a, b in zip(left, right):
                 self.assertAlmostEqual(a, b, places=12)
         self.assertEqual(nanograd_runner.predict(pixels, 4), torch_runner.predict(pixels, 4))
+
+
+
+class AugmentTests(unittest.TestCase):
+    def test_shift_and_flip_move_pixels_and_fill_zeros(self) -> None:
+        image = bytes(range(1, 17))                        # one 1 x 4 x 4 image, values 1..16
+        shapes = (1, 4, 4)
+        seen_shift = seen_mirror = False
+        for seed in range(40):
+            out = augmented_pixels([image], [0], shapes, random.Random(seed), flip=True)
+            self.assertEqual(len(out), 16)
+            values = {round(v * 255) for v in out} - {0}
+            self.assertTrue(values <= set(range(1, 17)))
+            original = [v / 255 for v in image]
+            if out != original:
+                seen_shift = True
+            if out == [v / 255 for row in range(4) for v in reversed(image[row * 4 : row * 4 + 4])]:
+                seen_mirror = True
+        self.assertTrue(seen_shift)
+        self.assertTrue(seen_mirror)
 
 
 if __name__ == "__main__":

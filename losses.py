@@ -67,23 +67,46 @@ def binary_cross_entropy_with_logits(logits: Tensor, targets: Tensor, *, reducti
     return out
 
 
-def softmax_cross_entropy(logits: Tensor, targets: Tensor | list[int]) -> Tensor:
-    """Mean softmax cross entropy for 2D class logits."""
+def softmax_cross_entropy(
+    logits: Tensor, targets: Tensor | list[int], *, label_smoothing: float = 0.0,
+) -> Tensor:
+    """Mean softmax cross entropy for 2D class logits.
+
+    With label smoothing e, the target is no longer all-or-nothing: the true
+    class gets 1 - e and every class (including it) shares e equally. Per
+    row, with p = softmax(x) and C classes:
+
+        loss = (1 - e) * -log p_target + e * (logsumexp(x) - mean(x))
+        dloss/dx = p - (1 - e) * one_hot(target) - e / C
+    """
 
     if len(logits.shape) != 2:
         raise ValueError("softmax cross entropy expects 2D logits")
+    if not 0.0 <= label_smoothing < 1.0:
+        raise ValueError("label_smoothing must be in [0, 1)")
 
     rows, cols = logits.shape
     classes = _class_indices(targets, rows, cols)
     probabilities = kernels.softmax_rows(logits.data, cols)
     loss = -sum(math.log(probabilities[row * cols + target]) for row, target in enumerate(classes))
+    if label_smoothing:
+        # logsumexp(x) = x_target - log p_target, so the smooth part needs only row sums.
+        x = logits.data
+        smooth = sum(
+            x[row * cols + target] - math.log(probabilities[row * cols + target])
+            - sum(x[row * cols : (row + 1) * cols]) / cols
+            for row, target in enumerate(classes)
+        )
+        loss = (1.0 - label_smoothing) * loss + label_smoothing * smooth
     out = _op_result([loss / rows], (1,), (logits,), "softmax_cross_entropy")
 
     def _backward() -> None:
-        # d(loss)/d(logits) = (softmax - one_hot(target)) / rows
+        # d(loss)/d(logits) = (softmax - smoothed one_hot(target)) / rows
         grad = probabilities[:]
         for row, target in enumerate(classes):
-            grad[row * cols + target] -= 1.0
+            grad[row * cols + target] -= 1.0 - label_smoothing
+        if label_smoothing:
+            grad = kernels.add(grad, kernels.storage([-label_smoothing / cols]) * len(grad))
         _add_grad(logits, kernels.scale(grad, _grad_data(out)[0] / rows))
 
     _set_backward(out, _backward)
