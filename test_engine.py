@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from engine import Value
+from engine import Value, gradients
 
 
 def finite_difference(
@@ -112,6 +112,32 @@ class ValueTests(unittest.TestCase):
     def test_log_rejects_non_positive_values(self) -> None:
         with self.assertRaises(ValueError):
             Value(0.0).log()
+
+
+    def test_trig_and_sqrt_gradients(self) -> None:
+        def fn(values: list[float]) -> float:
+            x, y = values
+            return math.sin(x) * math.cos(y) + math.sqrt(x * x + y * y)
+
+        x = Value(0.7)
+        y = Value(-1.3)
+        out = x.sin() * y.cos() + (x * x + y * y).sqrt()
+        out.backward()
+
+        self.assertAlmostEqual(out.data, fn([0.7, -1.3]))
+        self.assertAlmostEqual(x.grad, finite_difference(fn, [0.7, -1.3], 0))
+        self.assertAlmostEqual(y.grad, finite_difference(fn, [0.7, -1.3], 1))
+
+    def test_gradients_resets_previous_accumulation(self) -> None:
+        x = Value(2.0)
+        y = Value(3.0)
+        shared = x * y
+        first = shared + x
+        second = shared * 2
+
+        self.assertEqual(gradients(first, [x, y]), [4.0, 2.0])
+        self.assertEqual(gradients(second, [x, y]), [6.0, 4.0])
+        self.assertEqual(gradients(first, [x, y]), [4.0, 2.0])
 
 
 if __name__ == "__main__":

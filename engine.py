@@ -126,6 +126,29 @@ class Value:
         out._backward = _backward
         return out
 
+    def sin(self) -> "Value":
+        out = Value(math.sin(self.data), (self,), "sin")
+
+        def _backward() -> None:
+            self.grad += math.cos(self.data) * out.grad
+
+        out._backward = _backward
+        return out
+
+    def cos(self) -> "Value":
+        out = Value(math.cos(self.data), (self,), "cos")
+
+        def _backward() -> None:
+            self.grad -= math.sin(self.data) * out.grad
+
+        out._backward = _backward
+        return out
+
+    def sqrt(self) -> "Value":
+        if self.data <= 0:
+            raise ValueError("sqrt is only differentiable for positive values")
+        return self ** 0.5
+
     def relu(self) -> "Value":
         out = Value(max(0.0, self.data), (self,), "relu")
 
@@ -136,22 +159,48 @@ class Value:
         return out
 
     def backward(self) -> None:
-        topo: list[Value] = []
-        visited: set[Value] = set()
-
-        def build(node: Value) -> None:
-            if node in visited:
-                return
-            visited.add(node)
-            for child in node._prev:
-                build(child)
-            topo.append(node)
-
-        build(self)
+        topo = _topological_order(self)
         self.grad = 1.0
 
         for node in reversed(topo):
             node._backward()
+
+
+def gradients(output: Value, inputs: list[Value]) -> list[float]:
+    """d(output)/d(input) for each input, starting from fresh zero grads.
+
+    ``Value.backward`` accumulates into ``.grad`` (handy for summed losses).
+    This helper zeroes every grad in the graph first, so it can be called once
+    per output to build a Jacobian row by row.
+    """
+
+    for node in _topological_order(output):
+        node.grad = 0.0
+    for value in inputs:
+        value.grad = 0.0
+    output.backward()
+    return [value.grad for value in inputs]
+
+
+def _topological_order(root: Value) -> list[Value]:
+    """Children-before-parents order, without Python recursion limits."""
+
+    order: list[Value] = []
+    visited: set[Value] = set()
+    pending: list[tuple[Value, bool]] = [(root, False)]
+    while pending:
+        node, children_done = pending.pop()
+        if children_done:
+            order.append(node)
+            continue
+        if node in visited:
+            continue
+        visited.add(node)
+        pending.append((node, True))
+        for child in node._prev:
+            if child not in visited:
+                pending.append((child, False))
+    return order
 
 
 def _as_value(value: float | Value) -> Value:
