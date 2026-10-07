@@ -17,11 +17,14 @@ upsample                                                                   x
 linear                     x      x      x    x    x       x       x       x
 attention                                x    x    x
 layer / RMS norm                         x    x    x
-embedding                                     x    x       x
+embedding (row gather)                        x    x       x
+row scatter                                   x
 split / concat                           x    x    x       x               x
 softmax + cross entropy    x      x      x    x    x       x
 BCE with logits / MSE                                              x       x
 ```
+
+(The GPT's row scatter is for its optional mixture-of-experts layers.)
 
 ## Classic CNN: LeNet (`vision.py`)
 
@@ -57,7 +60,10 @@ parts and `--tokenizer bpe` uses byte-pair encoding. See
 [llm_gears.md](./llm_gears.md) and [shakespeare_gpt.md](./shakespeare_gpt.md).
 
 *Added*: embeddings, LayerNorm, GELU, softmax, attention (all heads in
-one batched product), RMSNorm, rotary embeddings, SwiGLU, KV cache.
+one batched product), RMSNorm, rotary embeddings, SwiGLU, KV cache,
+grouped-query and sliding-window attention, mixture-of-experts
+feed-forward layers (`moe.py`, which needed a row-scatter op), LoRA
+adapters (`lora.py`) and weight quantization (`quantize.py`).
 
 ## Encoders: BERT (`bert.py`, `bert_finetune.py`)
 
@@ -75,8 +81,16 @@ decide what to keep and what to write. Training unrolls the loop and
 backpropagates through every step. `gpt_train.py --preset baby-lstm` is
 Karpathy's char-rnn in the GPT's recipe.
 
+`wikitext_lm.py` runs the same LSTM as a word-level language model on
+WikiText-2 with the recipe of PyTorch's own `word_language_model`
+example: the state carries over from one 35-word window to the next while
+gradients stop at the window edge (truncated backpropagation through
+time).
+
 *Added*: `split` (whose pieces share one gradient buffer, so splitting a
-sequence into T steps stays linear in T), sigmoid kernel.
+sequence into T steps stays linear in T), sigmoid kernel, LSTM state in
+and out, and a fused LSTM cell (two ops with C kernels instead of a
+split and seven elementwise ops per step).
 
 ## Variational autoencoder (`vae.py`, `vae_compare.py`)
 
