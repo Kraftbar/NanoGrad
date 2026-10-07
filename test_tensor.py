@@ -1282,5 +1282,20 @@ class BroadcastFastPathTests(unittest.TestCase):
                 self.assertEqual(tensor_module._reduce_to_shape(grad, out_shape, source_shape), expected)
 
 
+
+class StorageEdgeCaseTests(unittest.TestCase):
+    def test_pooling_accepts_a_list_window(self) -> None:
+        x = Tensor([float(i) for i in range(16)], (4, 4))
+        self.assertEqual(list(x.max_pool2d([2, 2]).data), [5.0, 7.0, 13.0, 15.0])
+        self.assertEqual(list(x.avg_pool2d([2, 2]).data), [2.5, 4.5, 10.5, 12.5])
+
+    def test_integer_arrays_are_converted_not_reinterpreted(self) -> None:
+        from array import array
+
+        t = Tensor([0.0] * 3, (3,))
+        t.data = array("l", [1, 2, 3])
+        self.assertEqual(list((t * 2.0).data), [2.0, 4.0, 6.0])
+
+
 if __name__ == "__main__":
     unittest.main()

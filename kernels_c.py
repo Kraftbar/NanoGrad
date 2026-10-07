@@ -112,7 +112,7 @@ def _buffer(values: array):
 def _doubles(values: Sequence[float]) -> array:
     """The values as a C double array; an array passes through uncopied."""
 
-    return values if isinstance(values, array) else array("d", values)
+    return values if type(values) is array and values.typecode == "d" else array("d", values)
 
 
 def gemm(
@@ -256,6 +256,8 @@ def scale(x: list[float], factor: float) -> array:
 def adam_update(w, grad, m, v, *hyperparameters) -> tuple[array, array, array]:
     # m and v are the optimizer's own state: updated in place once they are
     # C arrays (the first call converts them). The weights get a new array.
+    if not len(w) == len(grad) == len(m) == len(v):
+        raise ValueError("adam_update needs weights, gradient and moments of equal length")
     buffers = [_doubles(values) for values in (w, grad, m, v)]
     new_w = zeros(len(w))
     library.adam_update(*map(_buffer, buffers), _buffer(new_w), len(w), *hyperparameters)

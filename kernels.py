@@ -66,7 +66,7 @@ def storage(values: Sequence[float]) -> array | list[float]:
     """
 
     if BACKEND == "c":
-        return values if type(values) is array else array("d", values)
+        return values if type(values) is array and values.typecode == "d" else array("d", values)
     return values if type(values) is list else list(values)
 
 

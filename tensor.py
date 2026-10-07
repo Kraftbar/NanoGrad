@@ -1433,6 +1433,7 @@ def avg_pool2d(
     """
 
     planes, out_shape, stride = _pool2d_setup("avg_pool2d", image, window, stride)
+    window = tuple(window)   # a hashable key for the cached index table
     sizes = dict(
         planes=planes,
         plane_size=image.shape[-2] * image.shape[-1],
@@ -1461,6 +1462,7 @@ def max_pool2d(
     """
 
     planes, out_shape, stride = _pool2d_setup("max_pool2d", image, window, stride)
+    window = tuple(window)   # a hashable key for the cached index table
     index = _pool2d_window_index(image.shape[-2:], window, stride)
     data, max_indices = kernels.window_max(
         image.data, index,
@@ -1514,7 +1516,6 @@ def _pool2d_setup(
     return planes, out_shape, (stride_rows, stride_cols)
 
 
-@lru_cache(maxsize=64)
 @lru_cache(maxsize=64)
 def _pool2d_window_index(
     image_shape: tuple[int, int],
