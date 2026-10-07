@@ -2,6 +2,7 @@ import importlib.util
 import random
 import unittest
 
+from bert import TinyBERT, mask_tokens, masked_loss
 from losses import softmax_cross_entropy
 from mnist_compare import IMAGE_SIZE, NanoGradRunner, build_nanograd
 from resnet import SmallResNet
@@ -71,8 +72,44 @@ class BatchNormTests(unittest.TestCase):
         self.assertEqual(list(model(images).data), list(copy(images).data))
 
 
+class BertTests(unittest.TestCase):
+    def test_mask_tokens_follows_the_recipe(self) -> None:
+        rng = random.Random(8)
+        sequences = [[rng.randrange(10) for _ in range(50)] for _ in range(40)]
+        inputs, positions, targets = mask_tokens(sequences, vocab_size=10, mask_id=10, rng=rng)
+        flat_inputs = [token for row in inputs for token in row]
+        flat_originals = [token for row in sequences for token in row]
+        self.assertEqual(targets, [flat_originals[p] for p in positions])
+        masked = sum(flat_inputs[p] == 10 for p in positions)
+        self.assertAlmostEqual(len(positions) / len(flat_inputs), 0.15, delta=0.03)
+        self.assertAlmostEqual(masked / len(positions), 0.8, delta=0.06)
+        untouched = set(range(len(flat_inputs))) - set(positions)
+        self.assertTrue(all(flat_inputs[i] == flat_originals[i] for i in untouched))
+
+    def test_masked_loss_trains(self) -> None:
+        model = TinyBERT(6, context_size=8, embedding_dim=8, num_heads=2, num_layers=1)
+        inputs, positions, targets = mask_tokens([[1, 2, 3, 4, 5, 0, 1, 2]] * 3, vocab_size=6, mask_id=6, rng=random.Random(9))
+        loss = masked_loss(model, inputs, positions, targets)
+        loss.backward()
+        self.assertTrue(any(value != 0.0 for value in model.head.weight.grad))
+
+
 @unittest.skipUnless(importlib.util.find_spec("torch"), "PyTorch is not installed")
 class TorchAgreementTests(unittest.TestCase):
+    def test_bert_trains_like_pytorch(self) -> None:
+        from bert_compare import NanoGradRunner as BertRunner
+        from bert_compare import TorchRunner as BertTorchRunner
+
+        model = TinyBERT(7, context_size=10, embedding_dim=8, num_heads=2, num_layers=2, seed=4)
+        theirs = BertTorchRunner(model, lr=1e-3, threads=1)
+        ours = BertRunner(model, lr=1e-3)
+        rng = random.Random(10)
+        for _ in range(3):
+            windows = [[rng.randrange(7) for _ in range(10)] for _ in range(3)]
+            batch = mask_tokens(windows, vocab_size=7, mask_id=7, rng=rng)
+            self.assertAlmostEqual(ours.train_step(*batch), theirs.train_step(*batch), places=10)
+        self.assertEqual(ours.predict(*batch[:2]), theirs.predict(*batch[:2]))
+
     def test_every_model_trains_like_pytorch(self) -> None:
         from mnist_compare import TorchRunner
 

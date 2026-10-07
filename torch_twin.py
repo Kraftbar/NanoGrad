@@ -9,7 +9,8 @@ scripts use this to check NanoGrad against PyTorch, and to time the same
 work in both.
 
 Supported: the vision models in ``vision.py`` (TwoConvCNN), ``resnet.py``
-and ``vit.py``, and the layers they are built from. Requires PyTorch.
+and ``vit.py``, the encoder in ``bert.py``, and the layers they are built
+from. Requires PyTorch.
 """
 
 from __future__ import annotations
@@ -19,7 +20,8 @@ import math
 import torch
 import torch.nn.functional as F
 
-from language import CausalSelfAttention, TransformerBlock
+from bert import TinyBERT
+from language import CausalSelfAttention, TokenPositionEmbedding, TransformerBlock
 from resnet import ResidualBlock, SmallResNet
 from tensor_nn import TensorBatchNorm2d, TensorConv2D, TensorLayerNorm, TensorLinear, TensorModule
 from vision import TwoConvCNN
@@ -62,6 +64,8 @@ class TorchTwin:
             (SmallResNet, self._small_resnet),
             (ResidualBlock, self._residual_block),
             (TinyViT, self._tiny_vit),
+            (TinyBERT, self._tiny_bert),
+            (TokenPositionEmbedding, self._token_position),
             (TransformerBlock, self._transformer_block),
             (CausalSelfAttention, self._attention),
             (TensorConv2D, self._conv),
@@ -88,6 +92,10 @@ class TorchTwin:
             x, running_mean, running_var, self._p(layer.weight), self._p(layer.bias),
             training=self.training, momentum=layer.momentum, eps=layer.eps,
         )
+
+    def _token_position(self, layer: TokenPositionEmbedding, indices):
+        tokens = self._p(layer.token_embedding.weight)[indices]
+        return tokens + self._p(layer.position_embedding.weight)[: indices.shape[-1]]
 
     def _layer_norm(self, layer: TensorLayerNorm, x):
         return F.layer_norm(x, (layer.normalized_shape,), self._p(layer.weight), self._p(layer.bias), layer.eps)
@@ -146,3 +154,9 @@ class TorchTwin:
         for block in model.blocks:
             tokens = self._transformer_block(block, tokens)
         return self._linear(model.classifier, self._layer_norm(model.norm, tokens).mean(dim=1))
+
+    def _tiny_bert(self, model: TinyBERT, indices):
+        hidden = self._token_position(model.embedding, indices)
+        for block in model.blocks:
+            hidden = self._transformer_block(block, hidden)
+        return self._linear(model.head, self._layer_norm(model.norm, hidden))
