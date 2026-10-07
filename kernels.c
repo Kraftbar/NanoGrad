@@ -49,9 +49,12 @@ typedef REAL real;
  *    row slice of B (2 vectors) and 8 numbers of A, and does 16 vector
  *    multiply-adds, instead of loading and storing rows of C every step.
  * 2. Packing: copy the B columns this tile needs into a small contiguous
- *    "panel", so the inner loop reads memory in order.
- * 3. k-blocking: do the sum over p in chunks of 256, so the panel stays in
- *    the fastest cache while every row tile of A passes over it.
+ *    "panel", and each block of A tile by tile, so the inner loop reads
+ *    memory in order whichever way A and B are stored.
+ * 3. Blocking: do the sum over p in chunks of 256, and the rows of A in
+ *    blocks of about 64K numbers, so one block of A stays in cache while
+ *    every column panel of B passes over it (and the panel in the fastest
+ *    cache while the block's row tiles pass over it).
  *
  * Vector types are a GCC/Clang extension: `vec` is VECTOR_WIDTH doubles
  * that + and * act on elementwise. Without AVX the plain loop below is
@@ -69,16 +72,19 @@ typedef real vec __attribute__((vector_size(VECTOR_BYTES)));
 #define TILE_ROWS 8
 #define TILE_COLS (2 * VECTOR_WIDTH)
 #define K_BLOCK 256
+#define A_BLOCK 65536          /* numbers of op(A) per cached block (m_block * kb) */
 #define VEC_LOAD(v, p) memcpy(&(v), (p), sizeof(vec))
 #define VEC_STORE(p, v) memcpy((p), &(v), sizeof(vec))
 
-/* One register tile: rows (<= TILE_ROWS) rows of C, TILE_COLS columns at
- * column j, summing over p0 .. p0 + kb - 1 with B's columns packed in panel.
- * Always inlined, so the full-tile call (rows = TILE_ROWS) gets a constant
- * row count the compiler can unroll. */
+/* One register tile: C[r, c] += sum over p < kb of a(r, p) * panel[p, c]
+ * for rows (<= TILE_ROWS) rows and cols (<= TILE_COLS) columns, where
+ * a(r, p) = A[r * row_step + p * col_step] (so A can be a plain matrix, its
+ * transpose, or a packed block) and C rows are n apart. The panel holds
+ * B's columns, zero-padded past cols. Always inlined, so the full-tile call
+ * (rows = TILE_ROWS, cols = TILE_COLS) gets constants the compiler can unroll. */
 static inline __attribute__((always_inline)) void tile(
-    const real *A, real *C, int m, int k, int n, int trans_a,
-    const real *panel, int i, int j, int p0, int kb, int rows)
+    const real *A, long row_step, long col_step, real *C, int n,
+    const real *panel, int kb, int rows, int cols)
 {
     vec acc[TILE_ROWS][2];
     memset(acc, 0, sizeof acc);
@@ -87,48 +93,89 @@ static inline __attribute__((always_inline)) void tile(
         VEC_LOAD(b0, panel + (long)p * TILE_COLS);
         VEC_LOAD(b1, panel + (long)p * TILE_COLS + VECTOR_WIDTH);
         for (int r = 0; r < rows; r++) {
-            real a_rp = A_AT(i + r, p0 + p);
+            real a_rp = A[r * row_step + p * col_step];
             acc[r][0] += a_rp * b0;
             acc[r][1] += a_rp * b1;
         }
     }
     for (int r = 0; r < rows; r++) {
-        real *c_row = C + (long)(i + r) * n + j;
-        vec c0, c1;
-        VEC_LOAD(c0, c_row);
-        VEC_LOAD(c1, c_row + VECTOR_WIDTH);
-        c0 += acc[r][0];
-        c1 += acc[r][1];
-        VEC_STORE(c_row, c0);
-        VEC_STORE(c_row + VECTOR_WIDTH, c1);
+        real *c_row = C + (long)r * n;
+        if (cols == TILE_COLS) {
+            vec c0, c1;
+            VEC_LOAD(c0, c_row);
+            VEC_LOAD(c1, c_row + VECTOR_WIDTH);
+            c0 += acc[r][0];
+            c1 += acc[r][1];
+            VEC_STORE(c_row, c0);
+            VEC_STORE(c_row + VECTOR_WIDTH, c1);
+        } else {                                   /* a partial tile at the right edge */
+            real sums[TILE_COLS];
+            VEC_STORE(sums, acc[r][0]);
+            VEC_STORE(sums + VECTOR_WIDTH, acc[r][1]);
+            for (int c = 0; c < cols; c++) c_row[c] += sums[c];
+        }
     }
 }
 
-/* C (m x n) += op(A) (m x k) @ B (k x n, row-major). panel: K_BLOCK * TILE_COLS doubles. */
-static void gemm_tiled(const real *A, const real *B, real *C,
-                       int m, int k, int n, int trans_a, real *panel)
+/* Every register tile down one column panel: rows of C, TILE_ROWS at a
+ * time. Row tile t starts at A + t * tile_step. Inlined at each call, so
+ * constant steps (the packed block) are folded into the inner loop. */
+static inline __attribute__((always_inline)) void row_tiles(
+    const real *A, long row_step, long col_step, long tile_step,
+    real *C, int n, const real *panel, int kb, int rows, int cols)
 {
-    int full_cols = n - n % TILE_COLS;
-    for (int j = 0; j < full_cols; j += TILE_COLS) {
-        for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
-            int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
-            for (int p = 0; p < kb; p++)                       /* 2. pack */
-                memcpy(panel + (long)p * TILE_COLS, B + (long)(p0 + p) * n + j, sizeof(real) * TILE_COLS);
-
-            int i = 0;
-            for (; i + TILE_ROWS <= m; i += TILE_ROWS)          /* 1. register tiles */
-                tile(A, C, m, k, n, trans_a, panel, i, j, p0, kb, TILE_ROWS);
-            if (i < m)                                           /* leftover rows */
-                tile(A, C, m, k, n, trans_a, panel, i, j, p0, kb, m - i);
-        }
+    int i = 0;
+    for (; i + TILE_ROWS <= rows; i += TILE_ROWS) {
+        const real *a = A + (i / TILE_ROWS) * tile_step;
+        if (cols == TILE_COLS)
+            tile(a, row_step, col_step, C + (long)i * n, n, panel, kb, TILE_ROWS, TILE_COLS);
+        else
+            tile(a, row_step, col_step, C + (long)i * n, n, panel, kb, TILE_ROWS, cols);
     }
-    if (full_cols < n) {                                       /* leftover columns */
-        for (int i = 0; i < m; i++) {
-            real *c_row = C + (long)i * n;
-            for (int p = 0; p < k; p++) {
-                real a_ip = A_AT(i, p);
-                const real *b_row = B + (long)p * n;
-                for (int jj = full_cols; jj < n; jj++) c_row[jj] += a_ip * b_row[jj];
+    if (i < rows)                                              /* leftover rows */
+        tile(A + (i / TILE_ROWS) * tile_step, row_step, col_step, C + (long)i * n, n, panel, kb, rows - i, cols);
+}
+
+/* C (m x n) += op(A) (m x k) @ op(B) (k x n). Packing reads B either way,
+ * so op(B) = B^T needs no transposed copy.
+ * panel: K_BLOCK * TILE_COLS numbers; packed: A_BLOCK + K_BLOCK * TILE_ROWS. */
+static void gemm_tiled(const real *A, const real *B, real *C,
+                       int m, int k, int n, int trans_a, int trans_b, real *panel, real *packed)
+{
+    for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
+        int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
+        int m_block = A_BLOCK / kb / TILE_ROWS * TILE_ROWS;
+        if (m_block < TILE_ROWS) m_block = TILE_ROWS;
+        for (int i0 = 0; i0 < m; i0 += m_block) {             /* 3. a block of A stays cached */
+            int i_end = m - i0 < m_block ? m : i0 + m_block;
+            /* 2. pack the block: TILE_ROWS rows at a time, a(r, p) at [p * TILE_ROWS + r]
+             * (worth it only when several column tiles will reuse it) */
+            int pack_a = n >= 4 * TILE_COLS;
+            for (int i = i0; pack_a && i < i_end; i += TILE_ROWS) {
+                real *dst = packed + (long)(i - i0) * kb;
+                int rows = i_end - i < TILE_ROWS ? i_end - i : TILE_ROWS;
+                for (int p = 0; p < kb; p++)
+                    for (int r = 0; r < rows; r++) dst[p * TILE_ROWS + r] = A_AT(i + r, p0 + p);
+            }
+            for (int j = 0; j < n; j += TILE_COLS) {
+                int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
+                if (cols < TILE_COLS)                            /* 2. pack B (zero-padded) */
+                    memset(panel, 0, sizeof(real) * K_BLOCK * TILE_COLS);
+                if (trans_b) {                                   /* op(B)[p, c] = B[c, p] */
+                    for (int c = 0; c < cols; c++) {
+                        const real *b_row = B + (long)(j + c) * k + p0;
+                        for (int p = 0; p < kb; p++) panel[(long)p * TILE_COLS + c] = b_row[p];
+                    }
+                } else {
+                    for (int p = 0; p < kb; p++)
+                        memcpy(panel + (long)p * TILE_COLS, B + (long)(p0 + p) * n + j, sizeof(real) * cols);
+                }
+                if (pack_a)                                      /* 1. register tiles */
+                    row_tiles(packed, 1, TILE_ROWS, (long)TILE_ROWS * kb, C + (long)i0 * n + j, n, panel, kb, i_end - i0, cols);
+                else if (trans_a)
+                    row_tiles(A + (long)p0 * m + i0, 1, m, TILE_ROWS, C + (long)i0 * n + j, n, panel, kb, i_end - i0, cols);
+                else
+                    row_tiles(A + (long)i0 * k + p0, k, 1, (long)TILE_ROWS * k, C + (long)i0 * n + j, n, panel, kb, i_end - i0, cols);
             }
         }
     }
@@ -141,17 +188,24 @@ void gemm(
     long a_step, long b_step, long c_step,
     int trans_a, int trans_b)
 {
-    /* For op(B) = B^T, copy B^T into a scratch (k x n) buffer once per batch
-     * entry, so the inner loop below always walks contiguous rows of op(B).
-     * (Summing dot products instead would be a reduction, which compilers
-     * will not vectorize without permission to reorder additions.) */
-    real *scratch = trans_b ? malloc(sizeof(real) * (size_t)k * n) : NULL;
-    if (trans_b && scratch == NULL) {
+#ifdef VECTOR_WIDTH
+    int tiled = n >= TILE_COLS;
+#else
+    int tiled = 0;
+#endif
+    /* Without the tiled path, op(B) = B^T is first copied into a scratch
+     * (k x n) buffer once per batch entry, so the inner loop below always
+     * walks contiguous rows of op(B). (Summing dot products instead would be
+     * a reduction, which compilers will not vectorize without permission to
+     * reorder additions.) */
+    real *scratch = trans_b && !tiled ? malloc(sizeof(real) * (size_t)k * n) : NULL;
+    if (trans_b && !tiled && scratch == NULL) {
         abort();  /* out of memory: fail loudly rather than return zeros */
     }
 #ifdef VECTOR_WIDTH
     real *panel = malloc(sizeof(real) * K_BLOCK * TILE_COLS);
-    if (panel == NULL) {
+    real *packed = malloc(sizeof(real) * (A_BLOCK + K_BLOCK * TILE_ROWS));
+    if (panel == NULL || packed == NULL) {
         abort();
     }
 #endif
@@ -161,19 +215,18 @@ void gemm(
         const real *B = b + batch * b_step;
         real *C = c + batch * c_step;
 
+#ifdef VECTOR_WIDTH
+        if (tiled) {
+            gemm_tiled(A, B, C, m, k, n, trans_a, trans_b, panel, packed);
+            continue;
+        }
+#endif
         if (trans_b) {
             for (int j = 0; j < n; j++)
                 for (int p = 0; p < k; p++)
                     scratch[(long)p * n + j] = B[(long)j * k + p];
             B = scratch;
         }
-
-#ifdef VECTOR_WIDTH
-        if (n >= TILE_COLS) {
-            gemm_tiled(A, B, C, m, k, n, trans_a, panel);
-            continue;
-        }
-#endif
 
         /* Row i of C is a weighted sum of rows of op(B):
          * c_row += A'(i, p) * op(B)[p, :] for each p. The inner loop runs
@@ -210,6 +263,7 @@ void gemm(
     free(scratch);
 #ifdef VECTOR_WIDTH
     free(panel);
+    free(packed);
 #endif
 }
 
@@ -250,9 +304,9 @@ void conv_forward(const real *image, const long *index, const real *kernel, real
                         panel[(long)p * TILE_COLS + jj] = img[index[(long)(j + jj) * k + p0 + p]];
                 int i = 0;
                 for (; i + TILE_ROWS <= m; i += TILE_ROWS)
-                    tile(A, C, m, k, n, 0, panel, i, j, p0, kb, TILE_ROWS);
+                    tile(A + (long)i * k + p0, k, 1, C + (long)i * n + j, n, panel, kb, TILE_ROWS, TILE_COLS);
                 if (i < m)
-                    tile(A, C, m, k, n, 0, panel, i, j, p0, kb, m - i);
+                    tile(A + (long)i * k + p0, k, 1, C + (long)i * n + j, n, panel, kb, m - i, TILE_COLS);
             }
         }
 #endif
@@ -306,9 +360,9 @@ void conv_kernel_grad(const real *image, const long *index, const real *grad, re
                 }
                 int i = 0;
                 for (; i + TILE_ROWS <= m; i += TILE_ROWS)
-                    tile(A, dkernel, m, k, n, 0, panel, i, j, p0, kb, TILE_ROWS);
+                    tile(A + (long)i * k + p0, k, 1, dkernel + (long)i * n + j, n, panel, kb, TILE_ROWS, TILE_COLS);
                 if (i < m)
-                    tile(A, dkernel, m, k, n, 0, panel, i, j, p0, kb, m - i);
+                    tile(A + (long)i * k + p0, k, 1, dkernel + (long)i * n + j, n, panel, kb, m - i, TILE_COLS);
             }
         }
 #endif
@@ -367,7 +421,7 @@ void conv_input_grad(const real *grad, const real *kernel, const long *index, re
                     for (int p = 0; p < kb; p++)
                         memcpy(panel + (long)p * TILE_COLS, kernel + (long)(p0 + p) * n + j, sizeof(real) * TILE_COLS);
                     /* A + i: rows i.. of grad_b^T become the tile's rows 0.. */
-                    tile(A + i, block, m, k, n, 1, panel, 0, j, p0, kb, rows);
+                    tile(A + i + (long)p0 * m, 1, m, block + j, n, panel, kb, rows, TILE_COLS);
                 }
             }
 #endif

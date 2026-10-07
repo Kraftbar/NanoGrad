@@ -110,6 +110,18 @@ class KernelBackendTests(unittest.TestCase):
                             ))
                             self.assertListsClose(python, c)
 
+    def test_gemm_with_more_rows_than_one_cached_block_agrees(self) -> None:
+        m, k, n = 264, 260, 33            # 256-row blocks of A at kb = 256, then a 4-deep k block
+        a, b = values(m * k, 5), values(k * n, 6)
+        for trans_a in (False, True):
+            for trans_b in (False, True):
+                with self.subTest(trans_a=trans_a, trans_b=trans_b):
+                    python, c = self.run_both(lambda: kernels.gemm(
+                        a, b, batches=1, m=m, k=k, n=n, a_step=0, b_step=0, c_step=0,
+                        trans_a=trans_a, trans_b=trans_b,
+                    ))
+                    self.assertListsClose(python, c)
+
     def test_conv_forward_agrees_with_gather_then_gemm(self) -> None:
         from tensor import _conv2d_patch_index
 
