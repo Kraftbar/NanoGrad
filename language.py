@@ -270,28 +270,36 @@ class CausalSelfAttention(TensorModule):
 
         # Attention runs per sequence: scores are (batch, context, context),
         # so a token only ever looks at tokens from its own row.
-        mask = self._causal_mask(context_size) if self.causal else None
-        scale = 1 / math.sqrt(self.head_dim)
-        head_outputs = []
-        for query_layer, key_layer, value_layer in zip(
-            self.queries,
-            self.keys,
-            self.values,
-        ):
-            query = query_layer(inputs)                      # (B, T, D)
-            key = key_layer(inputs)                          # (B, T, D)
-            value = value_layer(inputs)                      # (B, T, D)
-            if self.rotary:
-                query, key = rotary_embedding(query), rotary_embedding(key)
-            key_t = key.permute((0, 2, 1))                   # (B, D, T)
-            scores = matmul(query, key_t) * scale            # (B, T, T)
-            if mask is not None:
-                scores = scores + mask                       # hide future keys
-            weights = scores.softmax(axis=-1)                # (B, T, T)
-            weights = self.attention_dropout(weights)
-            head_outputs.append(matmul(weights, value))      # (B, T, D)
+        #
+        # All heads are computed together. Each head has its own query, key
+        # and value layers (D = embedding_dim / heads outputs each); stacking
+        # their weights gives one (C x C) projection per role, and reshaping
+        # (B, T, H * D) -> (B * H, T, D) turns the heads into extra batch
+        # entries. So the whole layer is 3 projections and 2 batched matrix
+        # products, instead of 5 small products per head.
+        batch, length, _ = inputs.shape
+        heads, head_dim = self.num_heads, self.head_dim
+        mask = self._causal_mask(length) if self.causal else None
+        scale = 1 / math.sqrt(head_dim)
 
-        attended = concat(head_outputs, axis=-1)             # (B, T, C)
+        def project(layers: list[TensorLinear]) -> Tensor:
+            weight = concat([layer.weight for layer in layers], axis=0)     # (C, C)
+            bias = concat([layer.bias for layer in layers], axis=0)         # (C,)
+            out = matmul(inputs, weight.T) + bias                           # (B, T, H * D)
+            out = out.reshape((batch, length, heads, head_dim)).permute((0, 2, 1, 3))
+            return out.reshape((batch * heads, length, head_dim))           # (B * H, T, D)
+
+        query, key, value = project(self.queries), project(self.keys), project(self.values)
+        if self.rotary:            # positions rotate queries and keys, never values
+            query, key = rotary_embedding(query), rotary_embedding(key)
+        scores = matmul(query, key.permute((0, 2, 1))) * scale             # (B * H, T, T)
+        if mask is not None:
+            scores = scores + mask                                          # hide future keys
+        weights = self.attention_dropout(scores.softmax(axis=-1))
+        attended = matmul(weights, value)                                   # (B * H, T, D)
+        # Back to (B, T, H * D): each token's head outputs side by side.
+        attended = attended.reshape((batch, heads, length, head_dim)).permute((0, 2, 1, 3))
+        attended = attended.reshape((batch, length, heads * head_dim))
         return self.output_dropout(self.projection(attended))
 
     def step(self, inputs: Tensor, cache: dict, position: int = 0) -> Tensor:
