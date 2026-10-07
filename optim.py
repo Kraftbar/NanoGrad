@@ -26,13 +26,24 @@ class SGD:
 
 
 class TensorSGD:
-    """Plain stochastic gradient descent for tensor parameters."""
+    """Stochastic gradient descent for tensor parameters, with optional
+    momentum (PyTorch's ``torch.optim.SGD`` rules, so runs can be compared):
+
+        g   = grad (+ weight_decay * w)
+        buf = momentum * buf + g              (buf starts as the first g)
+        d   = g + momentum * buf  if nesterov  else  buf
+        w   = w - lr * d
+
+    With momentum 0 this is plain SGD: w = w - lr * g.
+    """
 
     def __init__(
         self,
         parameters: list[Tensor],
         lr: float = 0.01,
         *,
+        momentum: float = 0.0,
+        nesterov: bool = False,
         weight_decay: float = 0.0,
         weight_decay_min_ndim: int | None = None,
         max_grad_norm: float | None = None,
@@ -43,11 +54,18 @@ class TensorSGD:
             raise ValueError("weight_decay_min_ndim must be positive")
         if max_grad_norm is not None and max_grad_norm <= 0.0:
             raise ValueError("max_grad_norm must be positive")
+        if not 0.0 <= momentum < 1.0:
+            raise ValueError("momentum must be in [0, 1)")
+        if nesterov and momentum == 0.0:
+            raise ValueError("nesterov needs momentum")
         self.parameters = parameters
         self.lr = lr
+        self.momentum = momentum
+        self.nesterov = nesterov
         self.weight_decay = weight_decay
         self.weight_decay_min_ndim = weight_decay_min_ndim
         self.max_grad_norm = max_grad_norm
+        self._buffers: list = [None] * len(parameters)
 
     def zero_grad(self) -> None:
         for parameter in self.parameters:
@@ -55,21 +73,19 @@ class TensorSGD:
 
     def step(self) -> None:
         grad_scale = _global_grad_scale(self.parameters, self.max_grad_norm)
-        for parameter in self.parameters:
+        for index, parameter in enumerate(self.parameters):
             if parameter.grad is None:
                 continue
-            use_weight_decay = _uses_weight_decay(
-                parameter,
-                self.weight_decay,
-                self.weight_decay_min_ndim,
-            )
-            # w <- w * (1 - lr * weight_decay) - lr * clipped_grad
-            decay = 1.0 - self.lr * self.weight_decay if use_weight_decay else 1.0
-            step = self.lr * grad_scale
-            parameter.data = [
-                value * decay - step * grad
-                for value, grad in zip(parameter.data, parameter.grad)
-            ]
+            g = kernels.scale(parameter.grad, grad_scale)
+            if _uses_weight_decay(parameter, self.weight_decay, self.weight_decay_min_ndim):
+                g = kernels.add(g, kernels.scale(parameter.data, self.weight_decay))
+            direction = g
+            if self.momentum:
+                buffer = self._buffers[index]
+                buffer = g if buffer is None else kernels.add(kernels.scale(buffer, self.momentum), g)
+                self._buffers[index] = buffer
+                direction = kernels.add(g, kernels.scale(buffer, self.momentum)) if self.nesterov else buffer
+            parameter.data = kernels.add(parameter.data, kernels.scale(direction, -self.lr))
 
 
 class TensorAdam:

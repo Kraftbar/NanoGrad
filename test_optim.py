@@ -132,5 +132,36 @@ class OptimizerTests(unittest.TestCase):
             TensorAdam([], max_grad_norm=0.0)
 
 
+
+class MomentumTests(unittest.TestCase):
+    @unittest.skipUnless(__import__("importlib").util.find_spec("torch"), "PyTorch is not installed")
+    def test_momentum_and_nesterov_match_pytorch(self) -> None:
+        import random
+
+        import torch
+
+        from optim import TensorSGD
+        from tensor import Tensor
+
+        for nesterov in (False, True):
+            with self.subTest(nesterov=nesterov):
+                rng = random.Random(1)
+                start = [rng.uniform(-1.0, 1.0) for _ in range(6)]
+                ours = Tensor(start, (2, 3), requires_grad=True)
+                theirs = torch.tensor(start, dtype=torch.float64).reshape(2, 3).requires_grad_()
+                optimizer = TensorSGD([ours], lr=0.1, momentum=0.9, nesterov=nesterov, weight_decay=0.01)
+                reference = torch.optim.SGD([theirs], lr=0.1, momentum=0.9, nesterov=nesterov, weight_decay=0.01)
+                for step in range(4):
+                    target = [rng.uniform(-1.0, 1.0) for _ in range(6)]
+                    optimizer.zero_grad()
+                    ((ours - Tensor(target, (2, 3))) * (ours - Tensor(target, (2, 3)))).sum().backward()
+                    optimizer.step()
+                    reference.zero_grad()
+                    ((theirs - torch.tensor(target, dtype=torch.float64).reshape(2, 3)) ** 2).sum().backward()
+                    reference.step()
+                for a, b in zip(ours.data, theirs.detach().reshape(-1).tolist()):
+                    self.assertAlmostEqual(a, b, places=12)
+
+
 if __name__ == "__main__":
     unittest.main()
