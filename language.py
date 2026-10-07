@@ -6,7 +6,13 @@ import math
 import random
 
 from tensor import Tensor, _add_grad, _grad_data, _op_result, concat, matmul
-from tensor_nn import TensorEmbedding, TensorLayerNorm, TensorLinear, TensorModule
+from tensor_nn import (
+    TensorDropout,
+    TensorEmbedding,
+    TensorLayerNorm,
+    TensorLinear,
+    TensorModule,
+)
 
 
 TRANSFORMER_INITS = ("xavier", "gpt2")
@@ -191,6 +197,7 @@ class CausalSelfAttention(TensorModule):
         context_size: int,
         *,
         num_heads: int = 1,
+        dropout: float = 0.0,
         seed: int = 0,
     ) -> None:
         if embedding_dim <= 0:
@@ -224,6 +231,10 @@ class CausalSelfAttention(TensorModule):
             embedding_dim,
             seed=seed + num_heads * 3,
         )
+        # nanoGPT's two attention dropouts: on the attention weights, and on
+        # the output before it joins the residual stream.
+        self.attention_dropout = TensorDropout(dropout, seed=seed + 101)
+        self.output_dropout = TensorDropout(dropout, seed=seed + 102)
 
     def __call__(self, inputs: Tensor) -> Tensor:
         if inputs.ndim != 3:
@@ -251,10 +262,11 @@ class CausalSelfAttention(TensorModule):
             key_t = key.permute((0, 2, 1))                   # (B, D, T)
             scores = matmul(query, key_t) * scale            # (B, T, T)
             weights = (scores + mask).softmax(axis=-1)       # (B, T, T)
+            weights = self.attention_dropout(weights)
             head_outputs.append(matmul(weights, value))      # (B, T, D)
 
         attended = concat(head_outputs, axis=-1)             # (B, T, C)
-        return self.projection(attended)
+        return self.output_dropout(self.projection(attended))
 
     def _causal_mask(self, context_size: int) -> Tensor:
         if context_size not in self._mask_cache:
@@ -350,6 +362,7 @@ class TransformerBlock(TensorModule):
         hidden_dim: int | None = None,
         num_heads: int = 1,
         feed_forward_activation: str = "relu",
+        dropout: float = 0.0,
         seed: int = 0,
     ) -> None:
         if embedding_dim <= 0:
@@ -373,6 +386,7 @@ class TransformerBlock(TensorModule):
             embedding_dim,
             context_size,
             num_heads=num_heads,
+            dropout=dropout,
             seed=seed,
         )
         self.norm2 = TensorLayerNorm(embedding_dim)
@@ -386,6 +400,7 @@ class TransformerBlock(TensorModule):
             embedding_dim,
             seed=seed + 5,
         )
+        self.feed_forward_dropout = TensorDropout(dropout, seed=seed + 103)
 
     def __call__(self, inputs: Tensor) -> Tensor:
         if inputs.ndim != 3:
@@ -405,7 +420,7 @@ class TransformerBlock(TensorModule):
             self.feed_forward_in(self.norm2(residual)),
             self.feed_forward_activation,
         )
-        update = self.feed_forward_out(hidden)
+        update = self.feed_forward_dropout(self.feed_forward_out(hidden))
         return residual + update
 
     def parameters(self) -> list[Tensor]:
@@ -466,6 +481,7 @@ class CharTransformerModel(TensorModule):
         feed_forward_activation: str = "relu",
         tie_embeddings: bool = False,
         init: str = "xavier",
+        dropout: float = 0.0,
         seed: int = 0,
     ) -> None:
         if vocab_size <= 0:
@@ -506,10 +522,12 @@ class CharTransformerModel(TensorModule):
                 hidden_dim=hidden_dim,
                 num_heads=num_heads,
                 feed_forward_activation=feed_forward_activation,
+                dropout=dropout,
                 seed=seed + 2 + layer_index * 8,
             )
             for layer_index in range(num_layers)
         ]
+        self.embedding_dropout = TensorDropout(dropout, seed=seed + 104)
         self.norm = TensorLayerNorm(embedding_dim)
         self.projection = TensorLinear(
             embedding_dim,
@@ -550,7 +568,7 @@ class CharTransformerModel(TensorModule):
         return _last_time_step(self.sequence_logits(inputs))
 
     def sequence_logits(self, inputs: Tensor) -> Tensor:
-        hidden = self.embedding(inputs)
+        hidden = self.embedding_dropout(self.embedding(inputs))
         for block in self.blocks:
             hidden = block(hidden)
         return self.projection(self.norm(hidden))

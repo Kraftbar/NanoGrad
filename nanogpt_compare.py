@@ -44,6 +44,7 @@ from losses import softmax_cross_entropy
 from optim import TensorAdam
 from sampling import sample_from_logits
 from tensor import Tensor, no_grad
+from train import evaluation_mode
 from text import CharVocab, distinct_ngram_ratio
 
 
@@ -160,6 +161,7 @@ class NanoGradRunner:
         )
 
     def train_step(self, xs: list[list[int]], ys: list[list[int]]) -> float:
+        self.model.train()
         loss = self._loss(xs, ys)
         self.optimizer.zero_grad()
         loss.backward()
@@ -167,11 +169,11 @@ class NanoGradRunner:
         return loss.item()
 
     def evaluate(self, xs: list[list[int]], ys: list[list[int]]) -> float:
-        with no_grad():
+        with no_grad(), evaluation_mode(self.model):
             return self._loss(xs, ys).item()
 
     def next_logits(self, context: list[int]) -> list[float]:
-        with no_grad():
+        with no_grad(), evaluation_mode(self.model):
             return self.model(Tensor.from_list([context])).data
 
     def _loss(self, xs: list[list[int]], ys: list[list[int]]) -> Tensor:

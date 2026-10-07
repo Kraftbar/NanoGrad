@@ -14,13 +14,40 @@ from tensor import (
     _grad_data,
     _op_result,
     conv2d_valid,
+    dropout,
     gather_rows,
     matmul,
 )
 
 
 class TensorModule:
-    """Base class for tensor modules with trainable parameters."""
+    """Base class for tensor modules with trainable parameters.
+
+    Modules start in training mode. ``eval()`` switches a module and every
+    module inside it to evaluation mode (which, for now, only turns dropout
+    off); ``train()`` switches back.
+    """
+
+    training = True
+
+    def train(self, mode: bool = True) -> "TensorModule":
+        for module in self.modules():
+            module.training = mode
+        return self
+
+    def eval(self) -> "TensorModule":
+        return self.train(False)
+
+    def modules(self) -> list["TensorModule"]:
+        """This module and every module stored in its attributes, recursively."""
+
+        found: list[TensorModule] = [self]
+        for value in vars(self).values():
+            children = value if isinstance(value, (list, tuple)) else [value]
+            for child in children:
+                if isinstance(child, TensorModule):
+                    found.extend(child.modules())
+        return found
 
     def parameters(self) -> list[Tensor]:
         return []
@@ -135,6 +162,22 @@ class TensorConv2D(TensorModule):
     def load_state_dict(self, state: dict) -> None:
         self.kernel.data = _state_data(state, "kernel", self.kernel.shape)
         self.bias.data = _state_data(state, "bias", self.bias.shape)
+
+
+
+class TensorDropout(TensorModule):
+    """Dropout as a module: active in training mode, identity in eval mode."""
+
+    def __init__(self, p: float = 0.0, *, seed: int | None = None) -> None:
+        if not 0.0 <= p < 1.0:
+            raise ValueError("dropout probability must be in [0, 1)")
+        self.p = p
+        self.rng = random.Random(seed)
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        if not self.training or self.p == 0.0:
+            return inputs
+        return dropout(inputs, self.p, self.rng)
 
 
 class TensorEmbedding(TensorModule):

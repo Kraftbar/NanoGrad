@@ -30,6 +30,7 @@ from text import (
     next_char_sequence_dataset,
 )
 from train import (
+    evaluation_mode,
     TrainingSummary,
     evaluate_tensor_multiclass_dataset,
     evaluate_tensor_sequence_multiclass_dataset,
@@ -49,6 +50,7 @@ DEFAULT_OPTIONS = {
     "layers": 1,
     "activation": "relu",
     "tie_embeddings": False,
+    "dropout": 0.0,
     "eval_only": False,
     "epochs": 200,
     "batch_size": 8,
@@ -572,7 +574,7 @@ def generate_text(
     text = seed_text
     for _ in range(length):
         context = vocab.encode(text[-context_size:])
-        with no_grad():
+        with no_grad(), evaluation_mode(model):
             logits = model(_generation_inputs(context, vocab, input_mode=input_mode))
         next_index = select_next_index(
             logits.data[: len(vocab)],
@@ -701,6 +703,7 @@ def build_model(args: argparse.Namespace, *, vocab_size: int) -> TensorModule:
             num_layers=args.layers,
             feed_forward_activation=args.activation,
             tie_embeddings=args.tie_embeddings,
+            dropout=args.dropout,
             seed=args.seed,
         )
     raise ValueError(f"unknown char model: {args.model}")
@@ -805,6 +808,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--tie-embeddings",
         action=argparse.BooleanOptionalAction,
         default=DEFAULT_OPTIONS["tie_embeddings"],
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=DEFAULT_OPTIONS["dropout"],
+        help="transformer dropout probability during training (nanoGPT uses 0.2)",
     )
     parser.add_argument(
         "--eval-only",

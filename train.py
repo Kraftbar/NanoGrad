@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from time import perf_counter
 
@@ -306,6 +307,7 @@ def train_tensor_multiclass_dataset(
         weight_decay_min_ndim=weight_decay_min_ndim,
         max_grad_norm=max_grad_norm,
     )
+    _train_mode(model)
     history = []
     start = perf_counter()
 
@@ -437,6 +439,7 @@ def train_tensor_sequence_multiclass_dataset(
         weight_decay_min_ndim=weight_decay_min_ndim,
         max_grad_norm=max_grad_norm,
     )
+    _train_mode(model)
     history = []
     start = perf_counter()
 
@@ -555,7 +558,7 @@ def evaluate_tensor_sequence_multiclass_dataset(
     confusion_matrix: list[list[int]] | None = None
 
     # Evaluation never calls backward, so skip building the graph.
-    with no_grad():
+    with no_grad(), evaluation_mode(model):
         for xs, ys in dataset.batches(batch_size, shuffle=False):
             inputs = Tensor.from_list(xs)
             targets = Tensor.from_list(ys)
@@ -599,7 +602,7 @@ def evaluate_tensor_multiclass_dataset(
     confusion_matrix: list[list[int]] | None = None
 
     # Evaluation never calls backward, so skip building the graph.
-    with no_grad():
+    with no_grad(), evaluation_mode(model):
         for xs, ys in dataset.batches(batch_size, shuffle=False):
             inputs = Tensor.from_list(xs)
             targets = Tensor.from_list(ys)
@@ -622,6 +625,30 @@ def evaluate_tensor_multiclass_dataset(
         examples_seen=total_count,
         confusion_matrix=confusion_matrix,
     )
+
+
+
+@contextmanager
+def evaluation_mode(model) -> Iterator[None]:
+    """Run a block with the model in eval mode (dropout off), then restore.
+
+    Scalar models and other objects without train()/eval() are left alone.
+    """
+
+    previous = getattr(model, "training", None)
+    if previous is None or not hasattr(model, "eval"):
+        yield
+        return
+    model.eval()
+    try:
+        yield
+    finally:
+        model.train(previous)
+
+
+def _train_mode(model) -> None:
+    if hasattr(model, "train") and hasattr(model, "training"):
+        model.train()
 
 
 def _tensor_optimizer(

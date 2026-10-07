@@ -26,6 +26,7 @@ Performance notes, kept deliberately simple:
 from __future__ import annotations
 
 import math
+import random
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from functools import lru_cache
@@ -1011,6 +1012,37 @@ def _join_chunks(
         for tensor, tensor_grad in zip(tensors, tensor_grads):
             if tensor.requires_grad:
                 _add_grad(tensor, tensor_grad)
+
+    out._backward = _backward
+    return out
+
+
+
+def dropout(tensor: Tensor, p: float, rng: random.Random) -> Tensor:
+    """Zero each value with probability ``p``; scale survivors by 1 / (1 - p).
+
+    The scaling keeps every value's expected output equal to its input, so
+    at evaluation time dropout is simply switched off (no rescaling). The
+    backward pass sends gradient only through the values that survived,
+    with the same 1 / (1 - p) factor.
+    """
+
+    if not 0.0 <= p < 1.0:
+        raise ValueError("dropout probability must be in [0, 1)")
+    if p == 0.0:
+        return tensor
+
+    keep = 1.0 / (1.0 - p)
+    mask = [0.0 if rng.random() < p else keep for _ in tensor.data]
+    out = _op_result(
+        [value * scale for value, scale in zip(tensor.data, mask)],
+        tensor.shape,
+        (tensor,),
+        "dropout",
+    )
+
+    def _backward() -> None:
+        _add_grad(tensor, [g * scale for g, scale in zip(_grad_data(out), mask)])
 
     out._backward = _backward
     return out
