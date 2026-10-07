@@ -174,7 +174,7 @@ def build_tokenizer(train_text: str, text: str, args: argparse.Namespace):
 
 def generate_tokens(model, prompt: list[int], *, length: int, context_size: int,
                     temperature: float, top_k: int | None, rng: random.Random,
-                    kv_cache: bool = True) -> list[int]:
+                    kv_cache: bool = True, top_p: float | None = None) -> list[int]:
     """Sample ``length`` tokens after ``prompt``, one at a time.
 
     Without the KV cache, every new token runs the model on the last
@@ -187,7 +187,7 @@ def generate_tokens(model, prompt: list[int], *, length: int, context_size: int,
 
     def choose(logits) -> int:
         return select_next_index(list(logits.data), sample_mode="sample",
-                                 temperature=temperature, top_k=top_k, rng=rng)
+                                 temperature=temperature, top_k=top_k, top_p=top_p, rng=rng)
 
     if not prompt:
         raise ValueError("generation needs at least one prompt token")
@@ -310,7 +310,7 @@ def train(args: argparse.Namespace) -> dict:
             vocab.decode(generate_tokens(
                 model, vocab.encode(args.seed_text), length=args.generate, context_size=args.context_size,
                 temperature=args.temperature, top_k=args.top_k, rng=random.Random(args.seed + 100 + index),
-                kv_cache=args.architecture == "transformer",
+                kv_cache=args.architecture == "transformer", top_p=args.top_p,
             ))
             for index in range(args.num_samples)
         ]
@@ -382,6 +382,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--num-samples", type=int, default=2)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--top-p", type=float, help="nucleus sampling (BPE / LSTM samples)")
     args = parser.parse_args(argv)
     defaults = {"architecture": "transformer", "lstm_hidden": 256,
                 "norm": "layer", "positions": "learned", "activation": "gelu"}   # GPT-2's parts

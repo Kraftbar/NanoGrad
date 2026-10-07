@@ -5,7 +5,10 @@ Sampling recipe (the same one nanoGPT's ``generate`` uses):
 1. keep only the ``top_k`` largest logits (optional)
 2. divide by ``temperature``: < 1 sharpens, > 1 flattens the distribution
 3. softmax into probabilities
-4. draw one index with a uniform random number and the cumulative sum
+4. keep only the most likely tokens whose probabilities add up to
+   ``top_p`` (optional "nucleus" sampling: how many tokens survive adapts
+   to how confident the model is)
+5. draw one index with a uniform random number and the cumulative sum
 
 Everything takes a plain list of floats so any model (NanoGrad or not) can be
 sampled the same way with the same random stream.
@@ -36,9 +39,11 @@ def sample_from_logits(
     *,
     temperature: float = 1.0,
     top_k: int | None = None,
+    top_p: float | None = None,
     rng: random.Random | None = None,
 ) -> int:
-    """Draw one index from softmax(values / temperature), limited to top_k."""
+    """Draw one index from softmax(values / temperature), limited to top_k
+    and to the top_p probability nucleus."""
 
     if not values:
         raise ValueError("sample values must not be empty")
@@ -46,6 +51,8 @@ def sample_from_logits(
         raise ValueError("temperature must be positive")
     if top_k is not None and top_k <= 0:
         raise ValueError("top_k must be positive")
+    if top_p is not None and not 0.0 < top_p <= 1.0:
+        raise ValueError("top_p must be in (0, 1]")
 
     generator = rng or random.Random()
     indexed_values = list(enumerate(values))
@@ -61,6 +68,16 @@ def sample_from_logits(
         math.exp((value - row_max) / temperature)
         for _index, value in indexed_values
     ]
+    if top_p is not None:
+        # Most likely first; keep tokens until their share reaches top_p.
+        ranked = sorted(zip(indexed_values, weights), key=lambda item: item[1], reverse=True)
+        total, kept = sum(weights), []
+        for item in ranked:
+            kept.append(item)
+            if sum(weight for _, weight in kept) >= top_p * total:
+                break
+        indexed_values = [item for item, _ in kept]
+        weights = [weight for _, weight in kept]
     total = sum(weights)
     threshold = generator.random() * total
     cumulative = 0.0
@@ -77,6 +94,7 @@ def select_next_index(
     sample_mode: str,
     temperature: float = 1.0,
     top_k: int | None = None,
+    top_p: float | None = None,
     rng: random.Random | None = None,
 ) -> int:
     """Greedy argmax or a sampled index, chosen by ``sample_mode``."""
@@ -88,6 +106,7 @@ def select_next_index(
             values,
             temperature=temperature,
             top_k=top_k,
+            top_p=top_p,
             rng=rng,
         )
     raise ValueError(f"unknown sample mode: {sample_mode}")
