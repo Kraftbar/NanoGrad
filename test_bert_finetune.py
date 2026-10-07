@@ -19,7 +19,7 @@ class BertFinetuneTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder, "text.txt")
             path.write_text(SPEECHES, encoding="utf-8")
-            for extra in ([], ["--probe"]):
+            for extra in ([], ["--probe"], ["--lora", "2"]):
                 args = parse_args(["--text-file", str(path), "--speakers", "2", "--pretrain-steps", "2",
                                    "--finetune-steps", "2", "--batch-size", "2", "--context-size", "16",
                                    "--embedding-dim", "8", "--heads", "2", "--layers", "1",

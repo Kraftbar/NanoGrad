@@ -12,10 +12,13 @@ The GLUE-style workflow, end to end, on Tiny Shakespeare (see speakers.py):
 Accuracy on held-out speeches shows what pretraining bought (chance is 1/8).
 With ``--probe`` the encoder is frozen and only the classifier layer
 trains (a "linear probe"), which measures how much the pretrained
-features alone say about the speaker.
+features alone say about the speaker. With ``--lora 4`` the encoder is
+frozen too, but rank-4 LoRA adapters on its attention layers train along
+with the classifier (lora.py).
 
     python3 bert_finetune.py --pretrain-steps 2000 --finetune-steps 1000
     python3 bert_finetune.py --probe
+    python3 bert_finetune.py --lora 4
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from time import perf_counter
 
 from bert import BERTClassifier, TinyBERT, mask_tokens, masked_loss
 from gpt_train import random_batch
+from lora import add_lora
 from losses import softmax_cross_entropy
 from optim import TensorAdam
 from speakers import speaker_data, speech_windows
@@ -62,7 +66,11 @@ def pretrain(encoder: TinyBERT, encoded: list[int], args: argparse.Namespace) ->
 
 
 def fine_tune(model: BERTClassifier, vocab: CharVocab, data, args: argparse.Namespace, label: str) -> float:
-    trainable = model.classifier.parameters() if args.probe else model.parameters()
+    if args.lora:
+        trainable = add_lora(model.encoder, rank=args.lora, seed=args.seed) + model.classifier.parameters()
+    else:
+        trainable = model.classifier.parameters() if args.probe else model.parameters()
+    print(f"{label}: training {sum(parameter.numel for parameter in trainable)} parameters", flush=True)
     optimizer = TensorAdam(trainable, lr=args.finetune_lr, weight_decay=0.01, weight_decay_min_ndim=2)
     rng = random.Random(args.seed + 10)
     start = perf_counter()
@@ -139,6 +147,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--finetune-lr", type=float, default=3e-4)
     parser.add_argument("--probe", action="store_true", help="freeze the encoder, train only the classifier")
+    parser.add_argument("--lora", type=int, default=0, metavar="RANK",
+                        help="freeze the encoder, train LoRA adapters of this rank and the classifier")
     parser.add_argument("--eval-windows", type=int, default=2000)
     parser.add_argument("--report-every", type=int, default=250)
     parser.add_argument("--seed", type=int, default=0)

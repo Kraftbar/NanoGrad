@@ -11,6 +11,7 @@ checked against PyTorch where PyTorch has an equivalent.
 | RMSNorm | `tensor_nn.rms_norm` | LLaMA's simpler LayerNorm: no mean, no bias |
 | rotary position embeddings | `tensor.rotary_embedding` | positions as rotations of queries and keys |
 | SwiGLU | `language.py` (feed-forward) | gated feed-forward: `silu(x W_in) * (x W_up)` |
+| LoRA | `lora.py`, `bert_finetune.py --lora 4` | fine-tune through small low-rank updates to frozen attention weights |
 | grouped-query attention | `num_kv_heads` / `--kv-heads` | query heads share key/value heads: a smaller KV cache (LLaMA 3, Mistral) |
 | bidirectional attention | `causal=False` | for encoders: ViT (`vit.py`) and BERT (`bert.py`) |
 | masked language modeling | `bert.py` | BERT's training task |
