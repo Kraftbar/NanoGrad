@@ -283,3 +283,21 @@ void window_max(const double *image, const long *index, double *out, long *argma
         }
     }
 }
+
+/*
+ * Elementwise arithmetic on equal-length arrays.
+ */
+void add_vectors(const double *x, const double *y, double *out, long count)
+{
+    for (long i = 0; i < count; i++) out[i] = x[i] + y[i];
+}
+
+void multiply_vectors(const double *x, const double *y, double *out, long count)
+{
+    for (long i = 0; i < count; i++) out[i] = x[i] * y[i];
+}
+
+void scale_vector(const double *x, double factor, double *out, long count)
+{
+    for (long i = 0; i < count; i++) out[i] = x[i] * factor;
+}

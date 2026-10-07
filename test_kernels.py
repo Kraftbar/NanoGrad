@@ -106,13 +106,24 @@ class KernelBackendTests(unittest.TestCase):
         self.assertListsClose(python, c)
         self.assertAlmostEqual(python[5], grad[1] + grad[2])   # index 5 appears twice
 
-    def test_scratch_results_feed_other_kernels(self) -> None:
+    def test_kernel_results_feed_other_kernels(self) -> None:
         image = values(2 * 12, 14)
         index = [0, 5, 5, 11]
-        scratch = kernels.gather_indexed(image, index, batches=2, image_size=12, scratch=True)
-        product = kernels.gemm(scratch, [1.0] * 4, batches=2, m=1, k=4, n=1, a_step=4, b_step=0, c_step=1)
-        self.assertIsInstance(product, list)
+        patches = kernels.gather_indexed(image, index, batches=2, image_size=12)
+        self.assertIs(type(patches), type(kernels.storage([0.0])))
+        product = kernels.gemm(patches, [1.0] * 4, batches=2, m=1, k=4, n=1, a_step=4, b_step=0, c_step=1)
         self.assertAlmostEqual(product[1], sum(image[12 + i] for i in index))
+
+    def test_elementwise_arithmetic_agrees(self) -> None:
+        x, y = values(40, 19), values(40, 20)
+        for function in (kernels.add, kernels.multiply):
+            python, c = self.run_both(lambda: function(x, y))
+            self.assertListsClose(python, c)
+        python, c = self.run_both(lambda: kernels.scale(x, -2.5))
+        self.assertListsClose(python, c)
+        self.assertAlmostEqual(python[3], x[3] * -2.5)
+        with self.assertRaises(ValueError):
+            kernels.add(x, y[:-1])
 
     def test_tanh_agrees(self) -> None:
         x = values(50, 15)
@@ -140,7 +151,7 @@ class KernelBackendTests(unittest.TestCase):
 
         (python_max, python_at), (c_max, c_at) = self.run_both(lambda: kernels.window_max(image, index, **sizes))
         self.assertListsClose(python_max, c_max)
-        self.assertEqual(python_at, c_at)
+        self.assertEqual(list(python_at), list(c_at))
         self.assertEqual(python_at[0], 0)
         self.assertEqual(python_at[3], 12 + max((0, 1, 4, 5), key=lambda i: image[12 + i]))
 

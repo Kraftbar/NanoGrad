@@ -138,7 +138,7 @@ class GradientCheckTests(unittest.TestCase):
         self.assertGradientsMatch(lambda: gather_rows(table, [4, 0, 4, 2]), [table])
 
         gather_rows(table, [1, 1]).sum().backward()
-        self.assertEqual(table.grad[3:6], [2.0, 2.0, 2.0])
+        self.assertEqual(list(table.grad[3:6]), [2.0, 2.0, 2.0])
         with self.assertRaises(ValueError):
             gather_rows(table, [5])
 
@@ -277,7 +277,7 @@ class GradientCheckTests(unittest.TestCase):
 
         out.backward()
 
-        self.assertEqual(value.grad, [1.0])
+        self.assertEqual(list(value.grad), [1.0])
 
 
     def test_backward_frees_the_graph_unless_retained(self) -> None:
@@ -285,15 +285,15 @@ class GradientCheckTests(unittest.TestCase):
         out = (weight * weight).sum()
 
         out.backward(retain_graph=True)
-        first = weight.grad[:]
+        first = list(weight.grad)
         out.backward()
-        self.assertEqual(weight.grad, first)
+        self.assertEqual(list(weight.grad), first)
 
         with self.assertRaises(RuntimeError):
             out.backward()
         # A new graph from the same leaves works as usual.
         (weight * 3.0).sum().backward()
-        self.assertEqual(weight.grad, [3.0, 3.0, 3.0])
+        self.assertEqual(list(weight.grad), [3.0, 3.0, 3.0])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 """Small tensor container, shape-checked math helpers, and tensor autograd.
 
-Tensor data is plain Python lists of floats in row-major order. The file
-reads top to bottom as:
+Tensor data is a flat sequence of floats in row-major order: a C array of
+doubles when the C kernels are on, a plain list otherwise (see
+``kernels.storage``). Ops index, slice and iterate it the same way either
+way. The file reads top to bottom as:
 
 1. ``Tensor``: the container and the backward pass
 2. Recording ops: ``no_grad`` and ``_op_result``, the helper every op uses
@@ -45,7 +47,12 @@ Number = int | float
 
 
 class Tensor:
-    """A dense tensor backed by flat row-major data."""
+    """A dense tensor backed by flat row-major data.
+
+    ``data`` (and ``grad``) hold the values in the kernel backend's own form
+    (see ``kernels.storage``): a C array of doubles when the C kernels are
+    on, a list otherwise. Assigning any sequence of numbers converts it.
+    """
 
     def __init__(
         self,
@@ -63,18 +70,30 @@ class Tensor:
         if len(data) != _numel(shape):
             raise ValueError("data length does not match shape")
 
-        self.data = [float(value) for value in data]
+        self.data = list(map(float, data))   # always a copy
         self.shape = tuple(shape)
         self.requires_grad = requires_grad
-        self.grad: list[float] | None = (
-            [0.0] * len(self.data)
-            if requires_grad
-            else None
-        )
+        self.grad = kernels.zeros(len(self.data)) if requires_grad else None
 
         self._prev = set(_children)
         self._op = _op
         self._backward: Callable[[], None] = _no_backward
+
+    @property
+    def data(self) -> Sequence[float]:
+        return self._data
+
+    @data.setter
+    def data(self, values: Sequence[float]) -> None:
+        self._data = kernels.storage(values)
+
+    @property
+    def grad(self) -> Sequence[float] | None:
+        return self._grad
+
+    @grad.setter
+    def grad(self, values: Sequence[float] | None) -> None:
+        self._grad = None if values is None else kernels.storage(values)
 
     def __repr__(self) -> str:
         return f"Tensor(shape={self.shape}, data={self.tolist()})"
@@ -234,7 +253,7 @@ class Tensor:
 
     def zero_grad(self) -> None:
         if self.requires_grad:
-            self.grad = [0.0] * len(self.data)
+            self.grad = kernels.zeros(len(self.data))
 
     def backward(
         self,
@@ -348,7 +367,9 @@ def _op_result(
 
     This is the one place that decides whether an op joins the autograd
     graph: only when gradients are enabled and some parent needs them. Ops
-    pass trusted float lists, so no validation or copy happens here.
+    pass trusted floats, so no validation happens here. Assigning
+    ``out.data`` stores them in the backend's form: a kernel's C array as
+    is, a list built by Python code converted once.
 
     A custom op is three steps: compute ``data``, call ``_op_result``, then
     pass a function that reads ``out.grad`` and calls ``_add_grad`` on each
@@ -414,14 +435,11 @@ def _add_grad(tensor: Tensor, grad: Sequence[Number]) -> None:
     if len(grad) != len(tensor.data):
         raise ValueError("gradient length does not match tensor data")
     if tensor.grad is None:
-        # Gradient lists are never modified in place (accumulating builds a
-        # new list), so a list can be adopted as-is instead of copied.
-        tensor.grad = grad if type(grad) is list else [float(value) for value in grad]
+        # Gradients are never modified in place (accumulating builds a new
+        # sequence), so the first one can be adopted as-is, not copied.
+        tensor.grad = grad
         return
-    tensor.grad = [
-        current + value
-        for current, value in zip(tensor.grad, grad)
-    ]
+    tensor.grad = kernels.add(tensor.grad, grad)
 
 
 # ---------------------------------------------------------------------------
@@ -453,12 +471,7 @@ def add(left: Tensor, right: Number | Tensor) -> Tensor:
     out_shape = _broadcast_shape(left.shape, right.shape)
     left_values = _expand(left, out_shape)
     right_values = _expand(right, out_shape)
-    out = _op_result(
-        [a + b for a, b in zip(left_values, right_values)],
-        out_shape,
-        (left, right),
-        "+",
-    )
+    out = _op_result(kernels.add(left_values, right_values), out_shape, (left, right), "+")
 
     def _backward() -> None:
         grad = _grad_data(out)
@@ -503,15 +516,10 @@ def multiply(left: Tensor, right: Number | Tensor) -> Tensor:
     """
 
     if isinstance(right, (int, float)):
-        out = _op_result(
-            [value * right for value in left.data],
-            left.shape,
-            (left,),
-            "*",
-        )
+        out = _op_result(kernels.scale(left.data, right), left.shape, (left,), "*")
 
         def _backward_scalar() -> None:
-            _add_grad(left, [right * grad for grad in _grad_data(out)])
+            _add_grad(left, kernels.scale(_grad_data(out), right))
 
         _set_backward(out, _backward_scalar)
         return out
@@ -519,20 +527,15 @@ def multiply(left: Tensor, right: Number | Tensor) -> Tensor:
     out_shape = _broadcast_shape(left.shape, right.shape)
     left_values = _expand(left, out_shape)
     right_values = _expand(right, out_shape)
-    out = _op_result(
-        [a * b for a, b in zip(left_values, right_values)],
-        out_shape,
-        (left, right),
-        "*",
-    )
+    out = _op_result(kernels.multiply(left_values, right_values), out_shape, (left, right), "*")
 
     def _backward() -> None:
         grad = _grad_data(out)
         if left.requires_grad:
-            left_grad = [g * b for g, b in zip(grad, right_values)]
+            left_grad = kernels.multiply(grad, right_values)
             _add_grad(left, _reduce_to_shape(left_grad, out_shape, left.shape))
         if right.requires_grad:
-            right_grad = [g * a for g, a in zip(grad, left_values)]
+            right_grad = kernels.multiply(grad, left_values)
             _add_grad(right, _reduce_to_shape(right_grad, out_shape, right.shape))
 
     _set_backward(out, _backward)
@@ -1300,10 +1303,7 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
     image_size = channels * image_rows * image_cols
 
     # im2col: every image becomes a (P x K) matrix of patches.
-    # (scratch: patches only ever feed other kernels, so they can stay in C.)
-    patches = kernels.gather_indexed(
-        image.data, patch_index, batches=batches, image_size=image_size, scratch=True,
-    )
+    patches = kernels.gather_indexed(image.data, patch_index, batches=batches, image_size=image_size)
     sizes = dict(batches=batches, m=filters, k=patch_size, n=positions)
 
     # out_b = kernels (O x K) @ patches_b^T  ->  (O x P) per image
@@ -1327,7 +1327,7 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
             d_patches = kernels.gemm(
                 grad, kernel.data, batches=batches, m=positions, k=filters, n=patch_size,
                 a_step=filters * positions, b_step=0, c_step=positions * patch_size,
-                trans_a=True, scratch=True,
+                trans_a=True,
             )
             _add_grad(image, kernels.scatter_add_indexed(
                 d_patches, patch_index, batches=batches, image_size=image_size,
@@ -1474,11 +1474,11 @@ def max_pool2d(
     out = _op_result(data, out_shape, (image,), "max_pool2d")
 
     def _backward() -> None:
-        # Only the winning pixel of each window affected the output.
-        image_grad = [0.0] * image.numel
-        for out_grad, image_index in zip(_grad_data(out), max_indices):
-            image_grad[image_index] += out_grad
-        _add_grad(image, image_grad)
+        # Only the winning pixel of each window affected the output: send
+        # each window's gradient back to the pixel at its argmax.
+        _add_grad(image, kernels.scatter_add_indexed(
+            _grad_data(out), max_indices, batches=1, image_size=image.numel,
+        ))
 
     _set_backward(out, _backward)
     return out
@@ -1657,7 +1657,7 @@ def _flatten_nested(values: Sequence) -> list[float]:
 
 def _nested_list(data: list[float], shape: tuple[int, ...]) -> list:
     if len(shape) == 1:
-        return data[: shape[0]]
+        return list(data[: shape[0]])
 
     step = _numel(shape[1:])
     return [

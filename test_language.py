@@ -638,7 +638,7 @@ class LanguageModuleTests(unittest.TestCase):
         self.assertAlmostEqual(std(model.blocks[0].feed_forward_in.weight.data), 0.02, delta=0.003)
         self.assertAlmostEqual(std(model.blocks[1].feed_forward_out.weight.data), 0.01, delta=0.0015)
         self.assertIs(model.projection.weight, model.embedding.token_embedding.weight)
-        self.assertEqual(model.blocks[0].norm1.weight.data, [1.0] * 32)
+        self.assertEqual(list(model.blocks[0].norm1.weight.data), [1.0] * 32)
         with self.assertRaises(ValueError):
             CharTransformerModel(vocab_size=4, init="kaiming")
 

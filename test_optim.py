@@ -11,7 +11,7 @@ class OptimizerTests(unittest.TestCase):
 
         TensorSGD([parameter], lr=0.2).step()
 
-        self.assertEqual(parameter.data, [0.9, -0.95])
+        self.assertEqual(list(parameter.data), [0.9, -0.95])
 
     def test_tensor_sgd_clips_global_gradient_norm(self) -> None:
         parameter = Tensor.from_list([1.0, 1.0], requires_grad=True)
@@ -28,7 +28,7 @@ class OptimizerTests(unittest.TestCase):
 
         TensorSGD([parameter], lr=1.0, max_grad_norm=1.0).step()
 
-        self.assertEqual(parameter.data, [0.7, 0.6])
+        self.assertEqual(list(parameter.data), [0.7, 0.6])
 
     def test_tensor_sgd_applies_weight_decay(self) -> None:
         parameter = Tensor.from_list([1.0], requires_grad=True)
@@ -83,7 +83,7 @@ class OptimizerTests(unittest.TestCase):
 
         TensorAdam([parameter]).zero_grad()
 
-        self.assertEqual(parameter.grad, [0.0])
+        self.assertEqual(list(parameter.grad), [0.0])
 
     def test_tensor_adam_applies_decoupled_weight_decay(self) -> None:
         parameter = Tensor.from_list([1.0], requires_grad=True)

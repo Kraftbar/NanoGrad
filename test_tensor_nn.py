@@ -28,7 +28,7 @@ class TensorNNTests(unittest.TestCase):
         self.assertEqual(weight.shape, (2, 3))
         self.assertTrue(weight.requires_grad)
         self.assertTrue(all(-limit <= value <= limit for value in weight.data))
-        self.assertEqual(weight.data, repeat.data)
+        self.assertEqual(list(weight.data), list(repeat.data))
         self.assertNotEqual(weight.data, different.data)
 
     def test_xavier_uniform_shape_error(self) -> None:
@@ -44,7 +44,7 @@ class TensorNNTests(unittest.TestCase):
         self.assertEqual(kernel.shape, (2, 3))
         self.assertTrue(kernel.requires_grad)
         self.assertTrue(all(-limit <= value <= limit for value in kernel.data))
-        self.assertEqual(kernel.data, repeat.data)
+        self.assertEqual(list(kernel.data), list(repeat.data))
         self.assertNotEqual(kernel.data, different.data)
 
     def test_conv2d_channel_kernel_initialization(self) -> None:
@@ -55,7 +55,7 @@ class TensorNNTests(unittest.TestCase):
         self.assertEqual(kernel.shape, (2, 2, 3))
         self.assertTrue(kernel.requires_grad)
         self.assertTrue(all(-limit <= value <= limit for value in kernel.data))
-        self.assertEqual(kernel.data, repeat.data)
+        self.assertEqual(list(kernel.data), list(repeat.data))
 
     def test_conv2d_multi_filter_kernel_initialization(self) -> None:
         kernel = conv2d_kernel((3, 2, 2, 2), seed=7)
@@ -65,7 +65,7 @@ class TensorNNTests(unittest.TestCase):
         self.assertEqual(kernel.shape, (3, 2, 2, 2))
         self.assertTrue(kernel.requires_grad)
         self.assertTrue(all(-limit <= value <= limit for value in kernel.data))
-        self.assertEqual(kernel.data, repeat.data)
+        self.assertEqual(list(kernel.data), list(repeat.data))
 
     def test_conv2d_kernel_shape_error(self) -> None:
         with self.assertRaises(ValueError):
@@ -82,7 +82,7 @@ class TensorNNTests(unittest.TestCase):
         self.assertEqual(weight.shape, (3, 2))
         self.assertTrue(weight.requires_grad)
         self.assertTrue(all(-limit <= value <= limit for value in weight.data))
-        self.assertEqual(weight.data, repeat.data)
+        self.assertEqual(list(weight.data), list(repeat.data))
         self.assertNotEqual(weight.data, different.data)
 
         with self.assertRaises(ValueError):
@@ -123,8 +123,8 @@ class TensorNNTests(unittest.TestCase):
         self.assertTrue(any(grad != 0.0 for grad in layer.weight.grad or []))
         layer.zero_grad()
 
-        self.assertEqual(layer.weight.grad, [0.0, 0.0])
-        self.assertEqual(layer.bias.grad, [0.0])
+        self.assertEqual(list(layer.weight.grad), [0.0, 0.0])
+        self.assertEqual(list(layer.bias.grad), [0.0])
 
     def test_tensor_linear_state_dict_round_trip(self) -> None:
         source = TensorLinear(
@@ -207,7 +207,7 @@ class TensorNNTests(unittest.TestCase):
         layer([2, 0, 2]).sum().backward()
 
         self.assertEqual(
-            layer.weight.grad,
+            list(layer.weight.grad),
             [
                 1.0,
                 1.0,
@@ -331,7 +331,7 @@ class TensorNNTests(unittest.TestCase):
         self.assertIsNotNone(layer.bias.grad)
         self.assertTrue(any(abs(value) > 0.0 for value in inputs.grad or []))
         self.assertTrue(any(abs(value) > 0.0 for value in layer.weight.grad or []))
-        self.assertEqual(layer.bias.grad, [1.5, 0.0, -1.5])
+        self.assertEqual(list(layer.bias.grad), [1.5, 0.0, -1.5])
 
     def test_tensor_layer_norm_state_dict_round_trip(self) -> None:
         source = TensorLayerNorm(
@@ -570,7 +570,7 @@ class TensorNNTests(unittest.TestCase):
 
         outputs.sum().backward()
 
-        self.assertEqual(layer.bias.grad, [8.0, 8.0])
+        self.assertEqual(list(layer.bias.grad), [8.0, 8.0])
         self.assertTrue(any(grad != 0.0 for grad in layer.kernel.grad or []))
 
     def test_batched_cnn_path_composes_with_linear_layer(self) -> None:
@@ -632,7 +632,7 @@ class TensorNNTests(unittest.TestCase):
 
         self.assertTrue(any(grad != 0.0 for grad in conv.kernel.grad or []))
         self.assertTrue(any(grad != 0.0 for grad in linear_layer.weight.grad or []))
-        self.assertEqual(linear_layer.bias.grad, [2.0])
+        self.assertEqual(list(linear_layer.bias.grad), [2.0])
 
     def test_tensor_conv2d_multi_filter_default_bias(self) -> None:
         layer = TensorConv2D((2, 1, 2, 2), seed=0)
@@ -653,8 +653,8 @@ class TensorNNTests(unittest.TestCase):
         self.assertTrue(any(grad != 0.0 for grad in layer.bias.grad or []))
         layer.zero_grad()
 
-        self.assertEqual(layer.kernel.grad, [0.0, 0.0, 0.0, 0.0])
-        self.assertEqual(layer.bias.grad, [0.0])
+        self.assertEqual(list(layer.kernel.grad), [0.0, 0.0, 0.0, 0.0])
+        self.assertEqual(list(layer.bias.grad), [0.0])
 
     def test_tensor_conv2d_state_dict_round_trip(self) -> None:
         source = TensorConv2D(

@@ -612,7 +612,7 @@ def _apply_activation(tensor: Tensor, activation: str) -> Tensor:
 def _tensor_state(tensor: Tensor) -> dict:
     return {
         "shape": list(tensor.shape),
-        "data": tensor.data[:],
+        "data": list(tensor.data),   # a plain list, so it can be saved as JSON
     }
 
 

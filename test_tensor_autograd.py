@@ -32,7 +32,7 @@ class TensorAutogradTests(unittest.TestCase):
         self.assertEqual(y.shape, (1,))
         self.assertIsNotNone(x.grad)
         self.assertEqual(
-            x.grad,
+            list(x.grad),
             [
                 4.0 / 3.0,
                 6.0 / 3.0,
@@ -56,7 +56,7 @@ class TensorAutogradTests(unittest.TestCase):
         y.backward()
 
         self.assertEqual(y.shape, (1,))
-        self.assertEqual(x.grad, [2.0] * 8)
+        self.assertEqual(list(x.grad), [2.0] * 8)
 
     def test_subtraction_and_scalar_reverse_gradients(self) -> None:
         x = Tensor.from_list([1.0, -2.0, 3.0], requires_grad=True)
@@ -65,8 +65,8 @@ class TensorAutogradTests(unittest.TestCase):
 
         loss.backward()
 
-        self.assertEqual(x.grad, [-2.0, -2.0, -2.0])
-        self.assertEqual(y.grad, [2.0, 2.0, 2.0])
+        self.assertEqual(list(x.grad), [-2.0, -2.0, -2.0])
+        self.assertEqual(list(y.grad), [2.0, 2.0, 2.0])
 
     def test_backward_with_explicit_gradient(self) -> None:
         x = Tensor.from_list([1.0, 2.0, 3.0], requires_grad=True)
@@ -74,7 +74,7 @@ class TensorAutogradTests(unittest.TestCase):
 
         y.backward([1.0, 0.5, -1.0])
 
-        self.assertEqual(x.grad, [2.0, 2.0, -6.0])
+        self.assertEqual(list(x.grad), [2.0, 2.0, -6.0])
 
     def test_non_scalar_backward_requires_explicit_gradient(self) -> None:
         x = Tensor.from_list([1.0, 2.0], requires_grad=True)
@@ -128,7 +128,7 @@ class TensorAutogradTests(unittest.TestCase):
 
         loss.backward()
 
-        self.assertEqual(x.grad, [0.5, -1.0, 2.0, 3.0])
+        self.assertEqual(list(x.grad), [0.5, -1.0, 2.0, 3.0])
 
     def test_flatten_gradient_preserves_flat_order(self) -> None:
         x = Tensor.from_list([
@@ -155,7 +155,7 @@ class TensorAutogradTests(unittest.TestCase):
 
         loss.backward()
 
-        self.assertEqual(x.grad, weights.data)
+        self.assertEqual(list(x.grad), list(weights.data))
 
     def test_flatten_from_axis_gradient_preserves_flat_order(self) -> None:
         x = Tensor.from_list([
@@ -188,7 +188,7 @@ class TensorAutogradTests(unittest.TestCase):
 
         loss.backward()
 
-        self.assertEqual(x.grad, weights.data)
+        self.assertEqual(list(x.grad), list(weights.data))
 
     def test_stack_gradient_routes_to_each_input(self) -> None:
         a = Tensor.from_list([
@@ -213,8 +213,8 @@ class TensorAutogradTests(unittest.TestCase):
 
         loss.backward()
 
-        self.assertEqual(a.grad, weights.data[:4])
-        self.assertEqual(b.grad, weights.data[4:])
+        self.assertEqual(list(a.grad), list(weights.data[:4]))
+        self.assertEqual(list(b.grad), list(weights.data[4:]))
 
     def test_conv2d_valid_gradients_match_finite_difference(self) -> None:
         image = Tensor.from_list([
@@ -551,7 +551,7 @@ class TensorAutogradTests(unittest.TestCase):
 
         max_pool2d(image, (2, 2)).sum().backward()
 
-        self.assertEqual(image.grad, [1.0, 0.0, 0.0, 0.0])
+        self.assertEqual(list(image.grad), [1.0, 0.0, 0.0, 0.0])
 
     def test_transpose_gradient_matches_finite_difference(self) -> None:
         x = Tensor.from_list([
@@ -689,7 +689,7 @@ class TensorAutogradTests(unittest.TestCase):
         loss = (inputs + bias).sum()
         loss.backward()
 
-        self.assertEqual(bias.grad, [2.0, 2.0])
+        self.assertEqual(list(bias.grad), [2.0, 2.0])
 
     def test_scalar_tensor_broadcast_gradient(self) -> None:
         inputs = Tensor.from_list([
@@ -702,9 +702,9 @@ class TensorAutogradTests(unittest.TestCase):
 
         loss.backward()
 
-        self.assertEqual(inputs.grad, [0.5, 0.5, 0.5, 0.5])
-        self.assertEqual(bias.grad, [2.0])
-        self.assertEqual(scale.grad, [50.0])
+        self.assertEqual(list(inputs.grad), [0.5, 0.5, 0.5, 0.5])
+        self.assertEqual(list(bias.grad), [2.0])
+        self.assertEqual(list(scale.grad), [50.0])
 
     def test_row_broadcast_multiply_gradient(self) -> None:
         inputs = Tensor.from_list([
@@ -716,8 +716,8 @@ class TensorAutogradTests(unittest.TestCase):
 
         loss.backward()
 
-        self.assertEqual(inputs.grad, [10.0, -2.0, 10.0, -2.0])
-        self.assertEqual(row.grad, [4.0, 6.0])
+        self.assertEqual(list(inputs.grad), [10.0, -2.0, 10.0, -2.0])
+        self.assertEqual(list(row.grad), [4.0, 6.0])
 
     def test_division_gradient_matches_finite_difference(self) -> None:
         inputs = Tensor.from_list([

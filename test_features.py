@@ -117,7 +117,7 @@ class PgmEdgeCaseTests(unittest.TestCase):
     def test_header_comments_and_errors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             image = load_pgm(self.write(directory, b"P5 # comment\n2#c\n1 255\n\x00\xff"))
-            self.assertEqual(image.data, [0.0, 1.0])
+            self.assertEqual(list(image.data), [0.0, 1.0])
             for bad in (b"P5 2 1 255", b"P5 2 1 0\n\x00\x00", b"P5 2 1 255\n\x00", b"P2 2 1 255\n00"):
                 with self.subTest(content=bad), self.assertRaises(ValueError):
                     load_pgm(self.write(directory, bad))

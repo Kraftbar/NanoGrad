@@ -1,7 +1,8 @@
 """Compute kernels with two interchangeable backends: C and pure Python.
 
 The heavy inner loops (batched matrix multiplication, im2col, pooling,
-GELU, tanh, row softmax and row LayerNorm, forward and backward) live here so ``tensor.py`` can stay
+GELU, tanh, row softmax, row LayerNorm and elementwise arithmetic, forward
+and backward) live here so ``tensor.py`` can stay
 about the math. Two backends compute the same thing:
 
 - ``"c"``: ``kernels.c``, compiled with the system C compiler (``$CC`` or
@@ -59,7 +60,6 @@ def _python_gemm(
     c_step: int,
     trans_a: bool,
     trans_b: bool,
-    scratch: bool = False,
 ) -> list[float]:
     """Reference ``gemm``: every output entry is one dot product.
 
@@ -163,7 +163,7 @@ def _python_layer_norm_rows_backward(
 
 
 def _python_gather_indexed(
-    image: list[float], index: Sequence[int], batches: int, image_size: int, scratch: bool = False,
+    image: list[float], index: Sequence[int], batches: int, image_size: int,
 ) -> list[float]:
     out: list[float] = []
     for batch in range(batches):
@@ -184,6 +184,18 @@ def _python_scatter_add_indexed(
         for i, value in zip(index, values):
             image_grad[start + i] += value
     return image_grad
+
+
+def _python_add(x: list[float], y: list[float]) -> list[float]:
+    return [a + b for a, b in zip(x, y)]
+
+
+def _python_multiply(x: list[float], y: list[float]) -> list[float]:
+    return [a * b for a, b in zip(x, y)]
+
+
+def _python_scale(x: list[float], factor: float) -> list[float]:
+    return [value * factor for value in x]
 
 
 def _python_tanh(x: list[float]) -> list[float]:
@@ -299,6 +311,9 @@ def _build_library() -> ctypes.CDLL | None:
     index_pointer = ctypes.POINTER(ctypes.c_long)
     for name in ("gather_indexed", "scatter_add_indexed"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer, count, count, count]
+    library.add_vectors.argtypes = [pointer, pointer, pointer, count]
+    library.multiply_vectors.argtypes = [pointer, pointer, pointer, count]
+    library.scale_vector.argtypes = [pointer, ctypes.c_double, pointer, count]
     library.tanh_forward.argtypes = [pointer, pointer, count]
     library.tanh_backward.argtypes = [pointer, pointer, pointer, count]
     for name in ("window_mean", "window_mean_backward"):
@@ -317,12 +332,6 @@ def _doubles(values: Sequence[float]) -> array:
     return values if isinstance(values, array) else array("d", values)
 
 
-def _result(values: array, scratch: bool) -> array | list[float]:
-    """Tensors hold lists; ``scratch`` results only feed other kernels."""
-
-    return values if scratch else values.tolist()
-
-
 def _c_gemm(
     a: list[float],
     b: list[float],
@@ -335,7 +344,6 @@ def _c_gemm(
     c_step: int,
     trans_a: bool,
     trans_b: bool,
-    scratch: bool = False,
 ) -> list[float]:
     size = c_step * (batches - 1) + m * n if c_step else m * n
     a_buffer = _doubles(a)
@@ -347,7 +355,7 @@ def _c_gemm(
         a_step, b_step, c_step,
         int(trans_a), int(trans_b),
     )
-    return _result(c_buffer, scratch)
+    return c_buffer
 
 
 _ZERO = array("d", [0.0])
@@ -360,20 +368,20 @@ def _zeros(count: int) -> array:
 def _c_gelu(x: list[float]) -> tuple[list[float], list[float]]:
     x_buffer, y, cdf = _doubles(x), _zeros(len(x)), _zeros(len(x))
     _library.gelu_forward(_c_buffer(x_buffer), _c_buffer(y), _c_buffer(cdf), len(x))
-    return y.tolist(), cdf.tolist()
+    return y, cdf
 
 
 def _c_gelu_backward(x: list[float], cdf: list[float], grad: list[float]) -> list[float]:
     dx = _zeros(len(x))
     buffers = [_doubles(values) for values in (x, cdf, grad)]
     _library.gelu_backward(*map(_c_buffer, buffers), _c_buffer(dx), len(x))
-    return dx.tolist()
+    return dx
 
 
 def _c_softmax_rows(x: list[float], width: int) -> list[float]:
     x_buffer, y = _doubles(x), _zeros(len(x))
     _library.softmax_rows(_c_buffer(x_buffer), _c_buffer(y), len(x) // width, width)
-    return y.tolist()
+    return y
 
 
 def _c_softmax_rows_backward(y: list[float], grad: list[float], width: int) -> list[float]:
@@ -381,7 +389,7 @@ def _c_softmax_rows_backward(y: list[float], grad: list[float], width: int) -> l
     _library.softmax_rows_backward(
         _c_buffer(y_buffer), _c_buffer(grad_buffer), _c_buffer(dx), len(y) // width, width,
     )
-    return dx.tolist()
+    return dx
 
 
 def _c_layer_norm_rows(
@@ -393,7 +401,7 @@ def _c_layer_norm_rows(
     _library.layer_norm_rows(
         *map(_c_buffer, inputs), _c_buffer(y), _c_buffer(x_hat), _c_buffer(inv_std), rows, width, eps,
     )
-    return y.tolist(), x_hat.tolist(), inv_std.tolist()
+    return y, x_hat, inv_std
 
 
 def _c_layer_norm_rows_backward(
@@ -407,7 +415,7 @@ def _c_layer_norm_rows_backward(
         *map(_c_buffer, inputs), _c_buffer(dx), _c_buffer(dweight), _c_buffer(dbias),
         len(inv_std), width, int(need_dx),
     )
-    return (dx.tolist() if need_dx else None), dweight.tolist(), dbias.tolist()
+    return (dx if need_dx else None), dweight, dbias
 
 
 def _c_index_buffer(index: Sequence[int]):
@@ -416,7 +424,7 @@ def _c_index_buffer(index: Sequence[int]):
 
 
 def _c_gather_indexed(
-    image: list[float], index: Sequence[int], batches: int, image_size: int, scratch: bool = False,
+    image: list[float], index: Sequence[int], batches: int, image_size: int,
 ) -> list[float]:
     image_buffer = _doubles(image)
     keep, index_buffer = _c_index_buffer(index)
@@ -424,7 +432,7 @@ def _c_gather_indexed(
     _library.gather_indexed(
         _c_buffer(image_buffer), index_buffer, _c_buffer(out), batches, image_size, len(index),
     )
-    return _result(out, scratch)
+    return out
 
 
 def _c_scatter_add_indexed(
@@ -436,19 +444,41 @@ def _c_scatter_add_indexed(
     _library.scatter_add_indexed(
         _c_buffer(grad_buffer), index_buffer, _c_buffer(image_grad), batches, image_size, len(index),
     )
-    return image_grad.tolist()
+    return image_grad
+
+
+def _c_elementwise(function, x: list[float], y: list[float]) -> array:
+    if len(x) != len(y):
+        raise ValueError("elementwise kernels need equal lengths")
+    x_buffer, y_buffer, out = _doubles(x), _doubles(y), _zeros(len(x))
+    function(_c_buffer(x_buffer), _c_buffer(y_buffer), _c_buffer(out), len(x))
+    return out
+
+
+def _c_add(x: list[float], y: list[float]) -> array:
+    return _c_elementwise(_library.add_vectors, x, y)
+
+
+def _c_multiply(x: list[float], y: list[float]) -> array:
+    return _c_elementwise(_library.multiply_vectors, x, y)
+
+
+def _c_scale(x: list[float], factor: float) -> array:
+    x_buffer, out = _doubles(x), _zeros(len(x))
+    _library.scale_vector(_c_buffer(x_buffer), factor, _c_buffer(out), len(x))
+    return out
 
 
 def _c_tanh(x: list[float]) -> list[float]:
     x_buffer, y = _doubles(x), _zeros(len(x))
     _library.tanh_forward(_c_buffer(x_buffer), _c_buffer(y), len(x))
-    return y.tolist()
+    return y
 
 
 def _c_tanh_backward(y: list[float], grad: list[float]) -> list[float]:
     y_buffer, grad_buffer, dx = _doubles(y), _doubles(grad), _zeros(len(y))
     _library.tanh_backward(_c_buffer(y_buffer), _c_buffer(grad_buffer), _c_buffer(dx), len(y))
-    return dx.tolist()
+    return dx
 
 
 def _c_window_mean(
@@ -461,7 +491,7 @@ def _c_window_mean(
     _library.window_mean(
         _c_buffer(image_buffer), index_buffer, _c_buffer(out), planes, plane_size, windows, window_size,
     )
-    return out.tolist()
+    return out
 
 
 def _c_window_mean_backward(
@@ -474,7 +504,7 @@ def _c_window_mean_backward(
         _c_buffer(grad_buffer), index_buffer, _c_buffer(image_grad),
         planes, plane_size, len(index) // window_size, window_size,
     )
-    return image_grad.tolist()
+    return image_grad
 
 
 def _c_window_max(
@@ -489,7 +519,7 @@ def _c_window_max(
         _c_buffer(image_buffer), index_buffer, _c_buffer(out), argmax_buffer,
         planes, plane_size, windows, window_size,
     )
-    return out.tolist(), argmax.tolist()
+    return out, argmax
 
 
 # ---------------------------------------------------------------------------
@@ -517,6 +547,25 @@ def use_backend(name: str) -> None:
     BACKEND = "c"
 
 
+def storage(values: Sequence[float]) -> array | list[float]:
+    """Tensor values in the active backend's own form.
+
+    The C kernels read and write C arrays of doubles (``array("d")``), so
+    with the C backend tensors keep their values in one: data then flows
+    from kernel to kernel without being copied into Python lists and back.
+    The Python backend keeps plain lists. Both are flat sequences of floats
+    that index, slice and iterate the same way.
+    """
+
+    if BACKEND == "c":
+        return values if type(values) is array else array("d", values)
+    return values if type(values) is list else list(values)
+
+
+def zeros(count: int) -> array | list[float]:
+    return _zeros(count) if BACKEND == "c" else [0.0] * count
+
+
 def gemm(
     a: list[float],
     b: list[float],
@@ -530,17 +579,14 @@ def gemm(
     c_step: int,
     trans_a: bool = False,
     trans_b: bool = False,
-    scratch: bool = False,
 ) -> list[float]:
     """Batched ``C = op(A) @ op(B)``; see ``kernels.c`` for the conventions.
 
     A ``c_step`` of 0 sums all batch products into one (m x n) result.
-    ``scratch=True`` is for results that only feed other kernels: the C
-    backend then keeps them as a C array instead of copying to a list.
     """
 
     kernel = _c_gemm if BACKEND == "c" else _python_gemm
-    return kernel(a, b, batches, m, k, n, a_step, b_step, c_step, trans_a, trans_b, scratch)
+    return kernel(a, b, batches, m, k, n, a_step, b_step, c_step, trans_a, trans_b)
 
 
 def gelu(x: list[float]) -> tuple[list[float], list[float]]:
@@ -583,16 +629,11 @@ def layer_norm_rows_backward(
     return kernel(grad, x_hat, inv_std, weight, width, need_dx)
 
 
-def gather_indexed(
-    image: list[float], index: Sequence[int], *, batches: int, image_size: int, scratch: bool = False,
-) -> list[float]:
-    """For every image in the batch, read the pixels at ``index`` (im2col).
-
-    ``scratch`` works as in ``gemm``.
-    """
+def gather_indexed(image: list[float], index: Sequence[int], *, batches: int, image_size: int) -> list[float]:
+    """For every image in the batch, read the pixels at ``index`` (im2col)."""
 
     kernel = _c_gather_indexed if BACKEND == "c" else _python_gather_indexed
-    return kernel(image, index, batches, image_size, scratch)
+    return kernel(image, index, batches, image_size)
 
 
 def scatter_add_indexed(grad: list[float], index: Sequence[int], *, batches: int, image_size: int) -> list[float]:
@@ -600,6 +641,24 @@ def scatter_add_indexed(grad: list[float], index: Sequence[int], *, batches: int
 
     kernel = _c_scatter_add_indexed if BACKEND == "c" else _python_scatter_add_indexed
     return kernel(grad, index, batches, image_size)
+
+
+def add(x: list[float], y: list[float]) -> list[float]:
+    """``x + y``, elementwise."""
+
+    return (_c_add if BACKEND == "c" else _python_add)(x, y)
+
+
+def multiply(x: list[float], y: list[float]) -> list[float]:
+    """``x * y``, elementwise."""
+
+    return (_c_multiply if BACKEND == "c" else _python_multiply)(x, y)
+
+
+def scale(x: list[float], factor: float) -> list[float]:
+    """Every value times ``factor``."""
+
+    return (_c_scale if BACKEND == "c" else _python_scale)(x, factor)
 
 
 def tanh(x: list[float]) -> list[float]:

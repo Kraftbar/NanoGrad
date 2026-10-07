@@ -1272,7 +1272,7 @@ class BroadcastFastPathTests(unittest.TestCase):
                 source = Tensor([float(i + 1) for i in range(count)], source_shape)
                 index_map = tensor_module._broadcast_index_map(out_shape, source_shape)
                 self.assertEqual(
-                    tensor_module._expand(source, out_shape),
+                    list(tensor_module._expand(source, out_shape)),
                     [source.data[i] for i in index_map],
                 )
                 grad = [float(i % 7) for i in range(len(index_map))]
