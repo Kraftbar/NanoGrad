@@ -26,13 +26,16 @@ Every row is the same recipe as nanoGPT's baby GPT (about 0.8M parameters,
 2,000 steps of 12 x 64 tokens, AdamW, warmup + cosine; 4 worker processes
 on a 4-core CPU), changing one thing at a time. Bits per character on the
 validation text make character and BPE models comparable (lower is better).
+Times are wall-clock with the kernels of the day; the kernels got faster
+between runs, so they are rough.
 
 | model | val bits / char | val loss (nats / token) | time |
 | --- | ---: | ---: | ---: |
-| GPT-2 parts, characters (`--preset baby`) | 2.77 | 1.921 | 11 min |
+| GPT-2 parts, characters (`--preset baby`) | 2.77 | 1.921 | 6 min |
 | nanoGPT itself, PyTorch, same recipe | 2.72 | 1.886 | 2 min |
 | GPT-2 parts, BPE 512 tokens (`--tokenizer bpe`) | 2.44 | 3.180 | 8 min |
 | LLaMA parts, characters (`--preset baby-llama`) | 2.44 | 1.693 | 7 min |
+| LLaMA parts, BPE 512 tokens (`--preset baby-llama --tokenizer bpe`) | **2.22** | 2.885 | 6 min |
 | 2-layer LSTM, characters (`--preset baby-lstm`, 875K parameters) | 2.71 | 1.875 | 24 min |
 
 The LSTM (Karpathy's char-rnn at the same size and recipe) ends level
@@ -40,7 +43,8 @@ with the GPT-2-style transformer, but takes three times as long: its 64
 steps per window run one after another, while attention handles all 64
 positions in a few large matrix products.
 
-Two independent improvements of about the same size:
+Two independent improvements of about the same size, and they add up:
+both together reach 2.22 bits per character.
 
 - **BPE** makes each token cover 1.88 characters, so each of the 2,000
   steps sees about twice as much text.
