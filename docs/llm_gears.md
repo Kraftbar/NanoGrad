@@ -28,6 +28,12 @@ validation text make character and BPE models comparable (lower is better).
 | nanoGPT itself, PyTorch, same recipe | 2.72 | 1.886 | 2 min |
 | GPT-2 parts, BPE 512 tokens (`--tokenizer bpe`) | 2.44 | 3.180 | 8 min |
 | LLaMA parts, characters (`--preset baby-llama`) | 2.44 | 1.693 | 7 min |
+| 2-layer LSTM, characters (`--preset baby-lstm`, 875K parameters) | 2.71 | 1.875 | 24 min |
+
+The LSTM (Karpathy's char-rnn at the same size and recipe) ends level
+with the GPT-2-style transformer, but takes three times as long: its 64
+steps per window run one after another, while attention handles all 64
+positions in a few large matrix products.
 
 Two independent improvements of about the same size:
 
