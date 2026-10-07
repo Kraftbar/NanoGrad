@@ -172,3 +172,29 @@ void layer_norm_rows_backward(const double *grad, const double *x_hat, const dou
         }
     }
 }
+
+/*
+ * im2col / col2im with a precomputed index table: patch value i of every
+ * image reads pixel index[i] (an offset inside one image).
+ *     gather:  out[b, i] = image[b, index[i]]
+ *     scatter: image_grad[b, index[i]] += grad[b, i]   (overlapping patches add up)
+ */
+void gather_indexed(const double *image, const long *index, double *out,
+                    long batches, long image_size, long count)
+{
+    for (long b = 0; b < batches; b++) {
+        const double *in = image + b * image_size;
+        double *o = out + b * count;
+        for (long i = 0; i < count; i++) o[i] = in[index[i]];
+    }
+}
+
+void scatter_add_indexed(const double *grad, const long *index, double *image_grad,
+                         long batches, long image_size, long count)
+{
+    for (long b = 0; b < batches; b++) {
+        const double *g = grad + b * count;
+        double *o = image_grad + b * image_size;
+        for (long i = 0; i < count; i++) o[index[i]] += g[i];
+    }
+}

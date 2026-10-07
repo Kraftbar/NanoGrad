@@ -20,8 +20,8 @@ Performance notes, kept deliberately simple:
   ``dB = A^T @ dC``), is one call to ``kernels.gemm``. That runs compiled C
   when a C compiler is available and plain-Python dot products otherwise
   (see kernels.py); both give the same numbers.
-- Convolution is "im2col": gather every image patch into a row, then do one
-  dot-product table against the flattened kernels.
+- Convolution is "im2col": gather every image patch into a row, then one
+  batched ``kernels.gemm`` against the flattened kernels.
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ import random
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from functools import lru_cache
-from operator import mul
 from typing import Callable, NamedTuple
 
 import kernels
@@ -729,44 +728,14 @@ def tensor_reciprocal(tensor: Tensor) -> Tensor:
 # ---------------------------------------------------------------------------
 
 
-def _python_dot(left: Sequence[float], right: Sequence[float]) -> float:
-    return sum(map(mul, left, right))
-
-
-# math.sumprod (Python 3.12+) is a C-speed dot product.
-_dot: Callable[[Sequence[float], Sequence[float]], float] = getattr(
-    math,
-    "sumprod",
-    _python_dot,
-)
+# A C-speed dot product (math.sumprod on Python 3.12+); see kernels.py.
+_dot = kernels.dot
 
 
 def _rows(data: list[float], width: int) -> list[list[float]]:
     """Split a flat row-major matrix into its rows."""
 
     return [data[start : start + width] for start in range(0, len(data), width)]
-
-
-def _columns(data: list[float], width: int) -> list[list[float]]:
-    """Split a flat row-major matrix into its columns."""
-
-    return [data[col::width] for col in range(width)]
-
-
-def _dot_table(
-    row_vectors: Sequence[Sequence[float]],
-    column_vectors: Sequence[Sequence[float]],
-) -> list[float]:
-    """Flat (rows, cols) table with ``out[i, j] = row_i . column_j``.
-
-    This is the whole matrix-multiply kernel: ``A @ B`` is the dot table of
-    the rows of A against the columns of B.
-    """
-
-    out: list[float] = []
-    for row in row_vectors:
-        out.extend([_dot(row, column) for column in column_vectors])
-    return out
 
 
 def matmul(left: Tensor, right: Tensor) -> Tensor:
@@ -1272,71 +1241,54 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
     row-major list is free), using im2col:
 
         patches[p] = the C*kh*kw image values under the kernel at position p
-        out[b, o, p] = kernel_o . patches[p]
+        out[b, o, p] = kernel_o . patches[p]     i.e.  out_b = K @ patches_b^T
     """
 
     batches, channels, image_rows, image_cols, filters, out_shape = (
         _conv2d_shapes(image.shape, kernel.shape)
     )
     kernel_rows, kernel_cols = kernel.shape[-2:]
-    patch_indices = _conv2d_patch_indices(
+    patch_index = _conv2d_patch_index(
         channels,
         image_rows,
         image_cols,
         kernel_rows,
         kernel_cols,
     )
-    patch_size = channels * kernel_rows * kernel_cols
+    patch_size = channels * kernel_rows * kernel_cols      # K
+    positions = len(patch_index) // patch_size             # P
     image_size = channels * image_rows * image_cols
-    positions = len(patch_indices)
-    kernel_vectors = _rows(kernel.data, patch_size)
 
-    image_data = image.data
-    batch_patches: list[list[list[float]]] = []
-    data: list[float] = []
-    for batch in range(batches):
-        single = image_data[batch * image_size : (batch + 1) * image_size]
-        patches = [
-            [single[index] for index in indices]
-            for indices in patch_indices
-        ]
-        batch_patches.append(patches)
-        data.extend(_dot_table(kernel_vectors, patches))
+    # im2col: every image becomes a (P x K) matrix of patches.
+    patches = kernels.gather_indexed(image.data, patch_index, batches=batches, image_size=image_size)
+    sizes = dict(batches=batches, m=filters, k=patch_size, n=positions)
 
+    # out_b = kernels (O x K) @ patches_b^T  ->  (O x P) per image
+    data = kernels.gemm(
+        kernel.data, patches, a_step=0, b_step=positions * patch_size,
+        c_step=filters * positions, trans_b=True, **sizes,
+    )
     out = _op_result(data, out_shape, (image, kernel), "conv2d_valid")
 
     def _backward() -> None:
         grad = _grad_data(out)
-        kernel_grad = [0.0] * kernel.numel if kernel.requires_grad else None
-        image_grad = [0.0] * image.numel if image.requires_grad else None
-
-        for batch, patches in enumerate(batch_patches):
-            out_start = batch * filters * positions
-            d_out = grad[out_start : out_start + filters * positions]
-
-            if kernel_grad is not None:
-                # dK = dOut @ patches: (O, P) @ (P, C*kh*kw)
-                patch_columns = list(zip(*patches))
-                d_kernel = _dot_table(_rows(d_out, positions), patch_columns)
-                _accumulate(kernel_grad, 0, d_kernel)
-
-            if image_grad is not None:
-                # dPatches = dOut^T @ K: (P, O) @ (O, C*kh*kw), then scatter
-                # each patch gradient back onto the pixels it was read from.
-                d_patches = _dot_table(
-                    _columns(d_out, positions),
-                    _columns(kernel.data, patch_size),
-                )
-                image_start = batch * image_size
-                for position, indices in enumerate(patch_indices):
-                    row_start = position * patch_size
-                    for offset, index in enumerate(indices):
-                        image_grad[image_start + index] += d_patches[row_start + offset]
-
-        if kernel_grad is not None:
-            _add_grad(kernel, kernel_grad)
-        if image_grad is not None:
-            _add_grad(image, image_grad)
+        if kernel.requires_grad:
+            # dK = sum over images of dOut_b (O x P) @ patches_b (P x K)
+            _add_grad(kernel, kernels.gemm(
+                grad, patches, batches=batches, m=filters, k=positions, n=patch_size,
+                a_step=filters * positions, b_step=positions * patch_size, c_step=0,
+            ))
+        if image.requires_grad:
+            # dPatches_b = dOut_b^T (P x O) @ K (O x K), then col2im: add each
+            # patch gradient back onto the pixels it was read from.
+            d_patches = kernels.gemm(
+                grad, kernel.data, batches=batches, m=positions, k=filters, n=patch_size,
+                a_step=filters * positions, b_step=0, c_step=positions * patch_size,
+                trans_a=True,
+            )
+            _add_grad(image, kernels.scatter_add_indexed(
+                d_patches, patch_index, batches=batches, image_size=image_size,
+            ))
 
     _set_backward(out, _backward)
     return out
@@ -1397,14 +1349,14 @@ def _conv2d_shapes(
 
 
 @lru_cache(maxsize=64)
-def _conv2d_patch_indices(
+def _conv2d_patch_index(
     channels: int,
     image_rows: int,
     image_cols: int,
     kernel_rows: int,
     kernel_cols: int,
-) -> tuple[tuple[int, ...], ...]:
-    """For every output position, the flat image indices under the kernel.
+) -> tuple[int, ...]:
+    """Flat image indices of every patch, patch after patch (P x K, row-major).
 
     Index order inside a patch matches a flattened (C, kh, kw) kernel.
     """
@@ -1417,9 +1369,10 @@ def _conv2d_patch_indices(
         for col in range(kernel_cols)
     ]
     return tuple(
-        tuple(out_row * image_cols + out_col + offset for offset in patch_offsets)
+        out_row * image_cols + out_col + offset
         for out_row in range(image_rows - kernel_rows + 1)
         for out_col in range(image_cols - kernel_cols + 1)
+        for offset in patch_offsets
     )
 
 

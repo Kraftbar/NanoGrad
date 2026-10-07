@@ -94,6 +94,18 @@ class KernelBackendTests(unittest.TestCase):
         no_dx = kernels.layer_norm_rows_backward(grad, *kernels.layer_norm_rows(x, weight, bias, 6, 1e-5)[1:], weight, 6, False)
         self.assertIsNone(no_dx[0])
 
+    def test_gather_and_scatter_agree(self) -> None:
+        image = values(2 * 12, 12)
+        index = [0, 5, 5, 11, 3]
+        grad = values(2 * 5, 13)
+
+        python, c = self.run_both(lambda: kernels.gather_indexed(image, index, batches=2, image_size=12))
+        self.assertListsClose(python, c)
+        self.assertEqual(python[:5], [image[i] for i in index])
+        python, c = self.run_both(lambda: kernels.scatter_add_indexed(grad, index, batches=2, image_size=12))
+        self.assertListsClose(python, c)
+        self.assertAlmostEqual(python[5], grad[1] + grad[2])   # index 5 appears twice
+
     def test_unknown_backend(self) -> None:
         with self.assertRaises(ValueError):
             kernels.use_backend("cuda")

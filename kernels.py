@@ -160,6 +160,30 @@ def _python_layer_norm_rows_backward(
     return (dx if need_dx else None), dweight, dbias
 
 
+def _python_gather_indexed(
+    image: list[float], index: Sequence[int], batches: int, image_size: int,
+) -> list[float]:
+    out: list[float] = []
+    for batch in range(batches):
+        start = batch * image_size
+        single = image[start : start + image_size]
+        out.extend([single[i] for i in index])
+    return out
+
+
+def _python_scatter_add_indexed(
+    grad: list[float], index: Sequence[int], batches: int, image_size: int,
+) -> list[float]:
+    image_grad = [0.0] * (batches * image_size)
+    count = len(index)
+    for batch in range(batches):
+        start = batch * image_size
+        values = grad[batch * count : (batch + 1) * count]
+        for i, value in zip(index, values):
+            image_grad[start + i] += value
+    return image_grad
+
+
 _SQRT_TWO = math.sqrt(2.0)
 _SQRT_TWO_PI = math.sqrt(2.0 * math.pi)
 
@@ -215,6 +239,9 @@ def _build_library() -> ctypes.CDLL | None:
     library.softmax_rows_backward.argtypes = [pointer, pointer, pointer, count, count]
     library.layer_norm_rows.argtypes = [pointer] * 6 + [count, count, ctypes.c_double]
     library.layer_norm_rows_backward.argtypes = [pointer] * 7 + [count, count, ctypes.c_int]
+    index_pointer = ctypes.POINTER(ctypes.c_long)
+    for name in ("gather_indexed", "scatter_add_indexed"):
+        getattr(library, name).argtypes = [pointer, index_pointer, pointer, count, count, count]
     return library
 
 
@@ -305,6 +332,35 @@ def _c_layer_norm_rows_backward(
     return (dx.tolist() if need_dx else None), dweight.tolist(), dbias.tolist()
 
 
+def _c_index_buffer(index: Sequence[int]):
+    values = array("l", index)
+    return values, (ctypes.c_long * len(values)).from_buffer(values)
+
+
+def _c_gather_indexed(
+    image: list[float], index: Sequence[int], batches: int, image_size: int,
+) -> list[float]:
+    image_buffer = array("d", image)
+    keep, index_buffer = _c_index_buffer(index)
+    out = _zeros(batches * len(index))
+    _library.gather_indexed(
+        _c_buffer(image_buffer), index_buffer, _c_buffer(out), batches, image_size, len(index),
+    )
+    return out.tolist()
+
+
+def _c_scatter_add_indexed(
+    grad: list[float], index: Sequence[int], batches: int, image_size: int,
+) -> list[float]:
+    grad_buffer = array("d", grad)
+    keep, index_buffer = _c_index_buffer(index)
+    image_grad = _zeros(batches * image_size)
+    _library.scatter_add_indexed(
+        _c_buffer(grad_buffer), index_buffer, _c_buffer(image_grad), batches, image_size, len(index),
+    )
+    return image_grad.tolist()
+
+
 # ---------------------------------------------------------------------------
 # Backend selection
 # ---------------------------------------------------------------------------
@@ -391,3 +447,17 @@ def layer_norm_rows_backward(
 
     kernel = _c_layer_norm_rows_backward if BACKEND == "c" else _python_layer_norm_rows_backward
     return kernel(grad, x_hat, inv_std, weight, width, need_dx)
+
+
+def gather_indexed(image: list[float], index: Sequence[int], *, batches: int, image_size: int) -> list[float]:
+    """For every image in the batch, read the pixels at ``index`` (im2col)."""
+
+    kernel = _c_gather_indexed if BACKEND == "c" else _python_gather_indexed
+    return kernel(image, index, batches, image_size)
+
+
+def scatter_add_indexed(grad: list[float], index: Sequence[int], *, batches: int, image_size: int) -> list[float]:
+    """Inverse of ``gather_indexed`` for gradients: add values back (col2im)."""
+
+    kernel = _c_scatter_add_indexed if BACKEND == "c" else _python_scatter_add_indexed
+    return kernel(grad, index, batches, image_size)
