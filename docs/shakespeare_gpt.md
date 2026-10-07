@@ -79,18 +79,26 @@ this config ("it's still good fun").
 | | wall time for 2000 steps |
 | --- | --- |
 | nanoGPT, PyTorch, 4 CPU threads | 1 min 53 s |
-| NanoGrad, 4 worker processes, C matmul | about 2 hours |
+| NanoGrad, 4 worker processes, C kernels | 11 min 20 s |
+| NanoGrad, first run (C matmul only) | about 2 hours |
 | NanoGrad, 1 process, pure Python (estimated from a 46 s step) | about 26 hours |
+
+The 11-minute run reproduces the 2-hour run exactly: same loss at every
+evaluation, same samples. Only the speed changed.
 
 Getting here took:
 
 - the tensor-core rewrite (index maps, im2col, slice reductions)
-- C kernels for every matrix product (`kernels.c`, optional)
+- C kernels for the inner loops (`kernels.c`, optional; the pure-Python
+  versions in `kernels_reference.py` stay the readable reference)
 - data-parallel workers for training and evaluation (`parallel.py`)
 - freeing each step's graph after `backward()`, and not creating
   backward closures under `no_grad`. Before that fix, workers grew to
   3.5 GB and the first run was killed by the out-of-memory killer.
+- storing tensor values as C arrays, so data goes from kernel to kernel
+  without copies, plus kernels for elementwise math and a fused Adam
+  update ([benchmarks.md](./benchmarks.md#how-the-gap-closed))
 
-The remaining gap to PyTorch is mostly ops still running in Python
-(LayerNorm, GELU, softmax, elementwise adds) and copying data between
-Python lists and C arrays on every kernel call.
+The remaining 6x gap to PyTorch is mostly matrix products: NanoGrad's
+plain C loop runs at about 8 GFLOP/s against about 60 for PyTorch's tuned
+BLAS on this CPU.

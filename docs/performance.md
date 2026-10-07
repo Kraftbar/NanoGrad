@@ -1,9 +1,15 @@
 # Performance Notes
 
-NanoGrad stays pure Python with no dependencies. The speedups below come from
-doing less Python work per number, not from hiding the math. Every op still
-reads as its equation, and `test_gradcheck.py` verifies each backward rule
-against finite differences.
+NanoGrad needs nothing but Python. This page covers the first round of
+speedups, to the pure-Python core: doing less Python work per number, not
+hiding the math. Every op still reads as its equation, and
+`test_gradcheck.py` verifies each backward rule against finite differences.
+
+The second round added optional C kernels (`kernels.c`) with the pure-Python
+loops kept beside them as the readable reference (`kernels_reference.py`),
+and tensors that store their values as C arrays. That round, and how
+NanoGrad now compares with PyTorch, is in [benchmarks.md](./benchmarks.md).
+Some code snippets below show the pure-Python versions from the first round.
 
 ## Before / After
 
@@ -52,6 +58,10 @@ The backward pass sums gradients through the same map
 
 ### 2. Every matrix product is one dot-product table
 
+(Today every matrix product is one call to `kernels.gemm`. Its Python
+version in `kernels_reference.py` still works this way: each output entry is
+one dot product of a row slice and a column slice.)
+
 ```python
 def _dot_table(row_vectors, column_vectors):
     out = []
@@ -81,12 +91,8 @@ Gather every kernel-sized image patch into a row (index lists cached per
 shape), then `out = dot_table(kernels, patches)`. The backward pass is two
 more tables plus a scatter-add of patch gradients back onto pixels.
 
-Average pooling is written as a sum of shifted images: for each offset
-inside the window, add one strided slice per output row. It no longer needs
-a table of every window's pixel indices. Building that table dominated the
-first call on each new image size: 0.61 s versus 0.12 s for a 5x5 box filter
-on a 238x318 image. Once the table was cached, the two were close (0.107 s
-versus 0.092 s).
+Pooling reads every window through a cached table of pixel offsets, like
+im2col (`kernels.window_mean` and `window_max`).
 
 ### 4. Reductions and softmax work on lanes
 
@@ -140,8 +146,7 @@ bigger share of a cheap step. Use `--workers 4` with `char_demo.py`.
 
 ## Where The Time Goes Now
 
-Profiling `small-gpt` fwd+bwd shows about two thirds of the time inside
-`math.sumprod` and `_dot_table`, which is the arithmetic itself. The next
-costs are GELU (`math.erf`), LayerNorm, and elementwise adds. Further big
-wins would need a compiled kernel or numpy, which this project deliberately
-avoids.
+See [benchmarks.md](./benchmarks.md#how-the-gap-closed). In short, with the
+C kernels on, most of a GPT step is now matrix products, and NanoGrad's
+plain C loop runs at about 8 GFLOP/s against about 60 for PyTorch's tuned
+BLAS.
