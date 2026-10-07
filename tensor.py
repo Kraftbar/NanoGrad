@@ -1219,7 +1219,7 @@ def _split_piece_backward(whole: Tensor, piece: Tensor, index, outer: int, full:
     return _backward
 
 
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=2048)          # one entry per piece offset: long sequences need many
 def _range_index(start: int, count: int):
     return kernels.index_table(range(start, start + count))
 
