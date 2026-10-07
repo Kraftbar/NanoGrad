@@ -31,6 +31,7 @@ from tensor_nn import TensorDropout, TensorModule
 
 
 LossFunction = Callable[[TensorModule, list, list], Tensor]
+BALANCE_WEIGHT = 0.01        # the Switch Transformer's weight for the experts' load-balancing loss
 
 
 def sequence_loss(model: TensorModule, xs: list, ys: list) -> Tensor:
@@ -39,7 +40,11 @@ def sequence_loss(model: TensorModule, xs: list, ys: list) -> Tensor:
     logits = model.sequence_logits(Tensor.from_list(xs))
     batch, context, vocab = logits.shape
     targets = [int(target) for row in ys for target in row]
-    return softmax_cross_entropy(logits.reshape((batch * context, vocab)), targets)
+    loss = softmax_cross_entropy(logits.reshape((batch * context, vocab)), targets)
+    balance = getattr(model, "auxiliary_loss", lambda: None)()
+    if balance is not None and model.training:      # mixture of experts: keep the routing balanced
+        loss = loss + balance * BALANCE_WEIGHT
+    return loss
 
 
 def target_count(ys: list) -> int:

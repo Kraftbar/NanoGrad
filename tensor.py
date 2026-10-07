@@ -1306,6 +1306,32 @@ def gather_rows(table: Tensor, indices: Sequence[int]) -> Tensor:
     return out
 
 
+def scatter_add_rows(values: Tensor, indices: Sequence[int], rows: int) -> Tensor:
+    """The reverse of ``gather_rows``: a (rows, width) tensor of zeros with
+    row i of ``values`` added into row ``indices[i]`` (repeats add up).
+
+    Mixture-of-experts layers use it to put each expert's outputs back at
+    the tokens they came from. The backward pass is a gather.
+    """
+
+    if values.ndim != 2 or len(indices) != values.shape[0]:
+        raise ValueError("scatter_add_rows expects (len(indices), width) values")
+    if indices and (min(indices) < 0 or max(indices) >= rows):
+        raise ValueError("scatter index out of range")
+
+    width = values.shape[1]
+    ids = kernels.index_table(indices)
+    data = kernels.scatter_add_rows(values.data, ids, width=width, rows=rows)
+    out = _op_result(data, (rows, width), (values,), "scatter_add_rows")
+
+    def _backward() -> None:
+        if indices:
+            _add_grad(values, kernels.gather_rows(_grad_data(out), ids, width=width))
+
+    _set_backward(out, _backward)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Reductions
 # ---------------------------------------------------------------------------

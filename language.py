@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import random
 
+from moe import MoEFeedForward
 from tensor import Tensor, concat, matmul, rotary_embedding
 from tensor_nn import (
     TensorDropout,
@@ -454,6 +455,8 @@ class TransformerBlock(TensorModule):
         causal: bool = True,
         norm: str = "layer",
         rotary: bool = False,
+        num_experts: int = 0,
+        expert_top_k: int = 2,
         seed: int = 0,
     ) -> None:
         if embedding_dim <= 0:
@@ -487,6 +490,12 @@ class TransformerBlock(TensorModule):
             seed=seed,
         )
         self.norm2 = _norm_layer(norm, embedding_dim)
+        # A mixture of experts (moe.py) replaces the one feed-forward network.
+        self.moe = (
+            MoEFeedForward(embedding_dim, hidden_dim, num_experts=num_experts, top_k=expert_top_k,
+                           activation=feed_forward_activation, seed=seed + 4)
+            if num_experts else None
+        )
         self.feed_forward_in = TensorLinear(
             embedding_dim,
             hidden_dim,
@@ -503,7 +512,14 @@ class TransformerBlock(TensorModule):
             TensorLinear(embedding_dim, hidden_dim, seed=seed + 6)
             if feed_forward_activation == "swiglu" else None
         )
+        if self.moe is not None:                      # the experts hold the feed-forward weights
+            self.feed_forward_in = self.feed_forward_out = self.feed_forward_up = None
         self.feed_forward_dropout = TensorDropout(dropout, seed=seed + 103)
+
+    def _feed_forward(self, normed: Tensor) -> Tensor:
+        if self.moe is not None:
+            return self.moe(normed)
+        return self.feed_forward_out(self._feed_forward_hidden(normed))
 
     def _feed_forward_hidden(self, normed: Tensor) -> Tensor:
         hidden = _feed_forward_activation(self.feed_forward_in(normed), self.feed_forward_activation)
@@ -525,21 +541,27 @@ class TransformerBlock(TensorModule):
         # x = x + feed_forward(norm2(x))
         attended = self.attention(self.norm1(inputs))
         residual = inputs + attended
-        hidden = self._feed_forward_hidden(self.norm2(residual))
-        update = self.feed_forward_dropout(self.feed_forward_out(hidden))
+        update = self.feed_forward_dropout(self._feed_forward(self.norm2(residual)))
         return residual + update
 
     def step(self, inputs: Tensor, cache: dict, position: int = 0) -> Tensor:
         """``__call__`` for one new token, with the attention KV cache."""
 
         residual = inputs + self.attention.step(self.norm1(inputs), cache, position)
-        return residual + self.feed_forward_out(self._feed_forward_hidden(self.norm2(residual)))
+        return residual + self._feed_forward(self.norm2(residual))
 
     def parameters(self) -> list[Tensor]:
         return [
             *self.norm1.parameters(),
             *self.attention.parameters(),
             *self.norm2.parameters(),
+            *self._feed_forward_parameters(),
+        ]
+
+    def _feed_forward_parameters(self) -> list[Tensor]:
+        if self.moe is not None:
+            return self.moe.parameters()
+        return [
             *self.feed_forward_in.parameters(),
             *([] if self.feed_forward_up is None else self.feed_forward_up.parameters()),
             *self.feed_forward_out.parameters(),
@@ -555,6 +577,13 @@ class TransformerBlock(TensorModule):
             "norm1": self.norm1.state_dict(),
             "attention": self.attention.state_dict(),
             "norm2": self.norm2.state_dict(),
+            **self._feed_forward_state(),
+        }
+
+    def _feed_forward_state(self) -> dict:
+        if self.moe is not None:
+            return {"moe": self.moe.state_dict()}
+        return {
             "feed_forward_in": self.feed_forward_in.state_dict(),
             "feed_forward_out": self.feed_forward_out.state_dict(),
             **({} if self.feed_forward_up is None else {"feed_forward_up": self.feed_forward_up.state_dict()}),
@@ -576,6 +605,9 @@ class TransformerBlock(TensorModule):
         self.norm1.load_state_dict(state["norm1"])
         self.attention.load_state_dict(state["attention"])
         self.norm2.load_state_dict(state["norm2"])
+        if self.moe is not None:
+            self.moe.load_state_dict(state["moe"])
+            return
         self.feed_forward_in.load_state_dict(state["feed_forward_in"])
         self.feed_forward_out.load_state_dict(state["feed_forward_out"])
         if self.feed_forward_up is not None:
@@ -594,6 +626,8 @@ class CharTransformerModel(TensorModule):
         hidden_dim: int | None = None,
         num_heads: int = 1,
         num_kv_heads: int | None = None,
+        num_experts: int = 0,
+        expert_top_k: int = 2,
         num_layers: int = 1,
         feed_forward_activation: str = "relu",
         tie_embeddings: bool = False,
@@ -628,6 +662,8 @@ class CharTransformerModel(TensorModule):
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         self.num_kv_heads = num_heads if num_kv_heads is None else num_kv_heads
+        self.num_experts = num_experts
+        self.expert_top_k = expert_top_k
         self.num_layers = num_layers
         self.feed_forward_activation = feed_forward_activation
         self.tie_embeddings = tie_embeddings
@@ -651,6 +687,8 @@ class CharTransformerModel(TensorModule):
                 dropout=dropout,
                 norm=norm,
                 rotary=positions == "rope",
+                num_experts=num_experts,
+                expert_top_k=expert_top_k,
                 seed=seed + 2 + layer_index * 8,
             )
             for layer_index in range(num_layers)
@@ -684,7 +722,10 @@ class CharTransformerModel(TensorModule):
         residual_writers = {
             id(layer.weight)
             for block in self.blocks
-            for layer in (block.attention.projection, block.feed_forward_out)
+            for layer in (
+                block.attention.projection,
+                *([expert.feed_forward_out for expert in block.moe.experts] if block.moe else [block.feed_forward_out]),
+            )
         }
         for parameter in self.parameters():
             if parameter.ndim < 2:
@@ -702,6 +743,18 @@ class CharTransformerModel(TensorModule):
         for block in self.blocks:
             hidden = block(hidden)
         return self.projection(self.norm(hidden))
+
+    def auxiliary_loss(self) -> Tensor | None:
+        """The experts' load-balancing losses from the last forward pass, summed
+        (None without mixture-of-experts layers)."""
+
+        losses = [block.moe.aux_loss for block in self.blocks if block.moe is not None]
+        if not losses:
+            return None
+        total = losses[0]
+        for loss in losses[1:]:
+            total = total + loss
+        return total
 
     # -- generation with a KV cache (inference only: no dropout) ----------
 
@@ -754,6 +807,8 @@ class CharTransformerModel(TensorModule):
             "hidden_dim": self.hidden_dim,
             "num_heads": self.num_heads,
             "num_kv_heads": self.num_kv_heads,
+            "num_experts": self.num_experts,
+            "expert_top_k": self.expert_top_k,
             "num_layers": self.num_layers,
             "feed_forward_activation": self.feed_forward_activation,
             "tie_embeddings": self.tie_embeddings,
@@ -781,6 +836,8 @@ class CharTransformerModel(TensorModule):
             raise ValueError("state num_heads does not match CharTransformerModel")
         if state.get("num_kv_heads", self.num_heads) != self.num_kv_heads:
             raise ValueError("state num_kv_heads does not match CharTransformerModel")
+        if (state.get("num_experts", 0), state.get("expert_top_k", 2)) != (self.num_experts, self.expert_top_k):
+            raise ValueError("state experts do not match CharTransformerModel")
         if state.get("num_layers") != self.num_layers:
             raise ValueError("state num_layers does not match CharTransformerModel")
         if state.get("feed_forward_activation", "relu") != self.feed_forward_activation:

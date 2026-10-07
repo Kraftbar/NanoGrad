@@ -64,6 +64,12 @@ PRESETS = {
         steps=2000, lr=1e-3, min_lr=1e-4, warmup_steps=100, dropout=0.0,
         norm="rms", positions="rope", activation="swiglu",
     ),
+    # LLaMA parts with a Mixtral-style feed-forward: 4 experts, 2 per token.
+    "baby-moe": dict(
+        layers=4, heads=4, embedding_dim=128, context_size=64, batch_size=12,
+        steps=2000, lr=1e-3, min_lr=1e-4, warmup_steps=100, dropout=0.0,
+        norm="rms", positions="rope", activation="swiglu", experts=4,
+    ),
     # Karpathy's char-rnn in the same recipe: a 2-layer LSTM of about the
     # same size (embedding 64, hidden 256: 874,881 parameters).
     "baby-lstm": dict(
@@ -126,6 +132,8 @@ def build_model(vocab_size: int, config: argparse.Namespace):
         hidden_dim=hidden_dim,
         num_heads=config.heads,
         num_kv_heads=config.kv_heads,
+        num_experts=config.experts,
+        expert_top_k=config.expert_top_k,
         num_layers=config.layers,
         feed_forward_activation=config.activation,
         norm=config.norm,
@@ -370,6 +378,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--architecture", choices=("transformer", "lstm", "gru"))
     parser.add_argument("--lstm-hidden", type=int)
     parser.add_argument("--kv-heads", type=int, help="key/value heads (grouped-query attention); default: --heads")
+    parser.add_argument("--experts", type=int, help="mixture-of-experts feed-forward with this many experts")
+    parser.add_argument("--expert-top-k", type=int, default=2, help="experts per token")
     parser.add_argument("--norm", choices=("layer", "rms"))
     parser.add_argument("--positions", choices=("learned", "rope"))
     parser.add_argument("--activation", choices=("gelu", "relu", "swiglu"))
@@ -390,7 +400,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--top-p", type=float, help="nucleus sampling (BPE / LSTM samples)")
     args = parser.parse_args(argv)
-    defaults = {"architecture": "transformer", "lstm_hidden": 256, "kv_heads": None,
+    defaults = {"architecture": "transformer", "lstm_hidden": 256, "kv_heads": None, "experts": 0,
                 "norm": "layer", "positions": "learned", "activation": "gelu"}   # GPT-2's parts
     for name, value in {**defaults, **PRESETS[args.preset]}.items():
         if getattr(args, name) is None:
