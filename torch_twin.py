@@ -56,6 +56,11 @@ class TorchTwin:
     def _p(self, parameter) -> torch.Tensor:
         return self._tensors[id(parameter)]
 
+    def _dropout(self, layer, x):
+        """A NanoGrad TensorDropout's probability, with PyTorch's own masks."""
+
+        return F.dropout(x, layer.p, training=self.training) if layer.p else x
+
     # -- dispatch --------------------------------------------------------
 
     def forward(self, module: TensorModule, x: torch.Tensor) -> torch.Tensor:
@@ -134,10 +139,12 @@ class TorchTwin:
             if layer.causal:
                 future = torch.ones(context, context, dtype=torch.bool).triu(1)
                 scores = scores + torch.zeros(context, context, dtype=x.dtype).masked_fill(future, -1e9)
-            heads.append(scores.softmax(dim=-1) @ v)
-        return self._linear(layer.projection, torch.cat(heads, dim=-1))
+            heads.append(self._dropout(layer.attention_dropout, scores.softmax(dim=-1)) @ v)
+        return self._dropout(layer.output_dropout, self._linear(layer.projection, torch.cat(heads, dim=-1)))
 
     def _transformer_block(self, block: TransformerBlock, x):
+        if block.moe is not None:
+            raise TypeError("TorchTwin does not support mixture-of-experts blocks")
         x = x + self._attention(block.attention, self._norm(block.norm1, x))
         normed = self._norm(block.norm2, x)
         hidden = self._linear(block.feed_forward_in, normed)
@@ -145,7 +152,7 @@ class TorchTwin:
             hidden = F.silu(hidden) * self._linear(block.feed_forward_up, normed)
         else:
             hidden = F.gelu(hidden) if block.feed_forward_activation == "gelu" else F.relu(hidden)
-        return x + self._linear(block.feed_forward_out, hidden)
+        return x + self._dropout(block.feed_forward_dropout, self._linear(block.feed_forward_out, hidden))
 
     # -- models ----------------------------------------------------------
 
@@ -193,7 +200,7 @@ class TorchTwin:
     def _char_transformer(self, model: CharTransformerModel, indices):
         """All positions' next-token logits, like ``sequence_logits``."""
 
-        hidden = self._token_position(model.embedding, indices)
+        hidden = self._dropout(model.embedding_dropout, self._token_position(model.embedding, indices))
         for block in model.blocks:
             hidden = self._transformer_block(block, hidden)
         return self._linear(model.projection, self._norm(model.norm, hidden))

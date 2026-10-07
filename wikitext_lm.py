@@ -18,6 +18,12 @@ The recipe is PyTorch's own example (pytorch/examples, word_language_model):
     python3 wikitext_lm.py --epochs 6                          # NanoGrad
     .venv/bin/python wikitext_lm.py --epochs 6 --framework torch
     .venv/bin/python wikitext_lm.py --compare --steps 50       # same weights, both frameworks
+    python3 wikitext_lm.py --cell transformer --lr 5           # a 2-layer GPT instead of the LSTM
+
+``--cell transformer`` is NanoGrad's GPT (language.py) at the example's
+sizes: each 35-word window is read on its own, with no state carried
+over, as in the example's Transformer model. Its PyTorch side is
+torch_twin.py.
 
 The data is in data/wikitext-2 ({train,valid,test}.txt, from the
 pytorch/examples repository).
@@ -34,7 +40,8 @@ import kernels
 from losses import softmax_cross_entropy
 from optim import TensorSGD
 from rnn import WordRNNModel, detach_state
-from tensor import no_grad
+from language import CharTransformerModel
+from tensor import Tensor, no_grad
 from train import evaluation_mode
 
 
@@ -113,7 +120,10 @@ class NanoGradRunner:
             return self._loss(inputs, targets).item()
 
     def _loss(self, inputs, targets):
-        logits, self.state = self.model(inputs, self.state)
+        if isinstance(self.model, WordRNNModel):
+            logits, self.state = self.model(inputs, self.state)
+        else:
+            logits = self.model.sequence_logits(Tensor.from_list(inputs))
         batch, length, vocab = logits.shape
         return softmax_cross_entropy(logits.reshape((batch * length, vocab)), [t for row in targets for t in row])
 
@@ -221,6 +231,61 @@ class TorchRunner:
                     extra.zero_()
 
 
+class TorchTransformerRunner:
+    """The GPT through torch_twin.py: PyTorch computes the same layers from
+    the same weights (and draws its own dropout masks)."""
+
+    def __init__(self, model: CharTransformerModel, *, clip: float, dtype: str = "float64") -> None:
+        import torch
+
+        from torch_twin import TorchTwin
+
+        self.torch = torch
+        self.clip = clip
+        self.twin = TorchTwin(model, dtype=getattr(torch, dtype))
+        self.parameters = self.twin.parameters
+
+    def reset(self) -> None:
+        pass
+
+    def _loss(self, inputs, targets):
+        logits = self.twin(self.torch.tensor(inputs))
+        return self.torch.nn.functional.cross_entropy(
+            logits.reshape(-1, logits.shape[-1]), self.torch.tensor(targets).reshape(-1))
+
+    def train_step(self, inputs, targets, lr: float) -> float:
+        torch = self.torch
+        self.twin.training = True
+        for parameter in self.parameters:
+            parameter.grad = None
+        loss = self._loss(inputs, targets)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters, self.clip)
+        with torch.no_grad():
+            for parameter in self.parameters:
+                parameter.add_(parameter.grad, alpha=-lr)
+        return loss.item()
+
+    def eval_loss(self, inputs, targets) -> float:
+        self.twin.training = False
+        with self.torch.no_grad():
+            return self._loss(inputs, targets).item()
+
+    def weights(self) -> list[list[float]]:
+        return [parameter.detach().reshape(-1).tolist() for parameter in self.parameters]
+
+    def load_weights(self, weights) -> None:
+        with self.torch.no_grad():
+            for parameter, values in zip(self.parameters, weights):
+                parameter.copy_(self.torch.tensor(values, dtype=parameter.dtype).reshape(parameter.shape))
+
+
+def torch_runner(model, args: argparse.Namespace, *, dropout: float, dtype: str = "float64"):
+    if isinstance(model, CharTransformerModel):
+        return TorchTransformerRunner(model, clip=args.clip, dtype=dtype)
+    return TorchRunner(model, clip=args.clip, dropout=dropout, dtype=dtype)
+
+
 # ---------------------------------------------------------------------------
 # Training and evaluation
 # ---------------------------------------------------------------------------
@@ -251,7 +316,14 @@ def train_epoch(runner, columns, *, bptt: int, lr: float, epoch: int, log_every:
             recent, start = [], perf_counter()
 
 
-def build_model(vocab_size: int, args: argparse.Namespace, *, dropout: float | None = None) -> WordRNNModel:
+def build_model(vocab_size: int, args: argparse.Namespace, *, dropout: float | None = None):
+    if args.cell == "transformer":
+        return CharTransformerModel(
+            vocab_size, context_size=args.bptt, embedding_dim=args.emsize, hidden_dim=args.nhid,
+            num_heads=args.nhead, num_layers=args.nlayers, feed_forward_activation="relu",
+            tie_embeddings=args.tied, init="gpt2", seed=args.seed,
+            dropout=args.dropout if dropout is None else dropout,
+        )
     return WordRNNModel(
         vocab_size, embedding_dim=args.emsize, hidden=args.nhid, num_layers=args.nlayers, cell=args.cell,
         dropout=args.dropout if dropout is None else dropout, tied=args.tied, seed=args.seed,
@@ -264,7 +336,7 @@ def run(args: argparse.Namespace) -> dict:
           f"valid {len(corpus.valid)}, test {len(corpus.test)} tokens", flush=True)
     model = build_model(len(corpus.words), args)
     runner = (NanoGradRunner(model, clip=args.clip) if args.framework == "nanograd"
-              else TorchRunner(model, clip=args.clip, dropout=args.dropout, dtype=args.dtype or "float64"))
+              else torch_runner(model, args, dropout=args.dropout, dtype=args.dtype or "float64"))
     train_columns = batchify(corpus.train, args.batch_size)
     valid_columns = batchify(corpus.valid, args.eval_batch_size)
     test_columns = batchify(corpus.test, args.eval_batch_size)
@@ -297,7 +369,7 @@ def compare(args: argparse.Namespace) -> dict:
     torch.set_num_threads(args.threads)
     corpus = Corpus(args.data)
     model = build_model(len(corpus.words), args, dropout=0.0)
-    runners = {"torch": TorchRunner(model, clip=args.clip, dropout=0.0),     # copies the initial weights
+    runners = {"torch": torch_runner(model, args, dropout=0.0),               # copies the initial weights
                "nanograd": NanoGradRunner(model, clip=args.clip)}
     batches = list(windows(batchify(corpus.train, args.batch_size), args.bptt))[: args.steps]
     results = {}
@@ -321,7 +393,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--data", default="data/wikitext-2")
     parser.add_argument("--framework", choices=("nanograd", "torch"), default="nanograd")
     parser.add_argument("--compare", action="store_true", help="time both frameworks on the same steps")
-    parser.add_argument("--cell", choices=("lstm", "gru"), default="lstm")
+    parser.add_argument("--cell", choices=("lstm", "gru", "transformer"), default="lstm")
+    parser.add_argument("--nhead", type=int, default=2, help="attention heads (transformer)")
     parser.add_argument("--emsize", type=int, default=200)
     parser.add_argument("--nhid", type=int, default=200)
     parser.add_argument("--nlayers", type=int, default=2)

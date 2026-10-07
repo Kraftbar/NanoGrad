@@ -77,6 +77,22 @@ class WikiTextTests(unittest.TestCase):
         self.assertLess(results["test_ppl"], 2.718281828 ** before)
 
     @unittest.skipUnless(HAS_TORCH, "PyTorch not installed")
+    def test_transformer_trains_identically_in_pytorch(self) -> None:
+        from wikitext_lm import build_model, torch_runner
+
+        args = parse_args(["--cell", "transformer", "--emsize", "8", "--nhid", "12", "--bptt", "5", "--dropout", "0"])
+        model = build_model(30, args)
+        theirs, ours = torch_runner(model, args, dropout=0.0), NanoGradRunner(model, clip=args.clip)
+        rng = random.Random(1)
+        columns = batchify([rng.randrange(30) for _ in range(300)], 4)
+        for inputs, targets in list(windows(columns, 5))[:5]:
+            self.assertAlmostEqual(ours.train_step(inputs, targets, 5.0), theirs.train_step(inputs, targets, 5.0), places=10)
+        for a, b in zip(ours.weights(), theirs.weights()):
+            for x, y in zip(a, b):
+                self.assertAlmostEqual(x, y, places=10)
+        self.assertAlmostEqual(evaluate(ours, columns, 5), evaluate(theirs, columns, 5), places=10)
+
+    @unittest.skipUnless(HAS_TORCH, "PyTorch not installed")
     def test_pytorch_twin_trains_identically(self) -> None:
         from wikitext_lm import TorchRunner
 
