@@ -190,9 +190,7 @@ class CharLSTMModel(TensorModule):
     def __call__(self, indices) -> Tensor:
         """Scores after the last position: (batch, vocab)."""
 
-        logits = self.sequence_logits(indices)
-        batch, length, vocab = logits.shape
-        return logits.split([length - 1, 1], axis=1)[1].reshape((batch, vocab)) if length > 1 else logits.reshape((batch, vocab))
+        return self.sequence_logits(indices)[:, -1]
 
     def parameters(self) -> list[Tensor]:
         return [

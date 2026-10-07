@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import random
 
-from tensor import Tensor, _add_grad, _grad_data, _op_result, _set_backward, concat, matmul, rotary_embedding
+from tensor import Tensor, concat, matmul, rotary_embedding
 from tensor_nn import (
     TensorDropout,
     TensorEmbedding,
@@ -662,7 +662,9 @@ class CharTransformerModel(TensorModule):
             parameter.data = [rng.gauss(0.0, std) for _ in parameter.data]
 
     def __call__(self, inputs: Tensor) -> Tensor:
-        return _last_time_step(self.sequence_logits(inputs))
+        """Next-token logits after the last position: (batch, vocab)."""
+
+        return self.sequence_logits(inputs)[:, -1]
 
     def sequence_logits(self, inputs: Tensor) -> Tensor:
         hidden = self.embedding_dropout(self.embedding(inputs))
@@ -764,32 +766,6 @@ class CharTransformerModel(TensorModule):
             block.load_state_dict(block_state)
         self.norm.load_state_dict(state["norm"])
         self.projection.load_state_dict(state["projection"])
-
-
-def _last_time_step(sequence: Tensor) -> Tensor:
-    if sequence.ndim != 3:
-        raise ValueError("last time step expects a 3D tensor")
-
-    batch_size, context_size, width = sequence.shape
-    data = []
-    for batch in range(batch_size):
-        start = (batch * context_size + context_size - 1) * width
-        data.extend(sequence.data[start : start + width])
-
-    out = _op_result(data, (batch_size, width), (sequence,), "last_time_step")
-
-    def _backward() -> None:
-        grad = _grad_data(out)
-        sequence_grad = [0.0] * sequence.numel
-        for batch in range(batch_size):
-            source_start = (batch * context_size + context_size - 1) * width
-            grad_start = batch * width
-            for offset in range(width):
-                sequence_grad[source_start + offset] += grad[grad_start + offset]
-        _add_grad(sequence, sequence_grad)
-
-    _set_backward(out, _backward)
-    return out
 
 
 FEED_FORWARD_ACTIVATIONS = ("relu", "gelu", "swiglu")
