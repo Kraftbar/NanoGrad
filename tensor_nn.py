@@ -485,21 +485,25 @@ def xavier_uniform(inputs: int, outputs: int, *, seed: int | None = None) -> Ten
 
 
 def conv2d_kernel(kernel_shape: tuple[int, ...], *, seed: int | None = None) -> Tensor:
-    """Create a trainable convolution kernel."""
+    """Create a trainable convolution kernel, initialized like PyTorch's.
+
+    Each weight is uniform in +-1 / sqrt(fan_in), where fan_in is how many
+    inputs one output value sums over: channels * kernel rows * kernel cols
+    for a (filters, channels, rows, cols) kernel (for 2D/3D kernels, the
+    kernel area). That keeps each output's variance about the same as its
+    inputs', however many filters the layer has.
+    """
 
     if len(kernel_shape) not in (2, 3, 4):
         raise ValueError("kernel shape must be 2D, 3D, or 4D")
     if any(dim <= 0 for dim in kernel_shape):
         raise ValueError("kernel dimensions must be positive")
 
-    fan_in = _numel(kernel_shape)
-    limit = math.sqrt(6.0 / (fan_in + 1))
+    fan_in = _numel(kernel_shape[1:]) if len(kernel_shape) == 4 else _numel(kernel_shape[-2:])
+    limit = 1.0 / math.sqrt(fan_in)
     rng = random.Random(seed)
     return Tensor(
-        [
-            rng.uniform(-limit, limit)
-            for _ in range(fan_in)
-        ],
+        [rng.uniform(-limit, limit) for _ in range(_numel(kernel_shape))],
         kernel_shape,
         requires_grad=True,
     )
