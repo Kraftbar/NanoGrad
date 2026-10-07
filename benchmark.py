@@ -2,7 +2,7 @@
 
 In the spirit of Baidu's DeepBench: instead of a whole model, time the
 individual operations models are built from, at the shapes real models use
-(the MNIST LeNet in ``mnist_compare.py`` and the baby GPT in
+(LeNet, ResNet and ViT in ``mnist_compare.py``, the baby GPT in
 ``gpt_train.py``). Each op runs a forward pass and a backward pass with a
 fixed random output gradient.
 
@@ -24,8 +24,8 @@ from time import perf_counter
 
 import kernels
 from losses import softmax_cross_entropy
-from tensor import Tensor, avg_pool2d, conv2d_valid, matmul, max_pool2d
-from tensor_nn import layer_norm, linear
+from tensor import Tensor, avg_pool2d, conv2d, conv2d_valid, matmul, max_pool2d
+from tensor_nn import TensorBatchNorm2d, layer_norm, linear
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,17 @@ CASES = [
          lambda x: avg_pool2d(x, (2, 2)), lambda x: _torch().nn.functional.avg_pool2d(x, 2), model="LeNet"),
     Case("max_pool 2x2 32x6x24x24", ((32, 6, 24, 24),),
          lambda x: max_pool2d(x, (2, 2)), lambda x: _torch().nn.functional.max_pool2d(x, 2), model="LeNet"),
+    Case("conv2d 3x3 pad 1 32x8x28x28 * 8x8x3x3", ((32, 8, 28, 28), (8, 8, 3, 3)),
+         lambda x, k: conv2d(x, k, padding=1),
+         lambda x, k: _torch().nn.functional.conv2d(x, k, padding=1), model="ResNet"),
+    Case("conv2d 3x3 stride 2 32x8x28x28 * 16x8x3x3", ((32, 8, 28, 28), (16, 8, 3, 3)),
+         lambda x, k: conv2d(x, k, stride=2, padding=1),
+         lambda x, k: _torch().nn.functional.conv2d(x, k, stride=2, padding=1), model="ResNet"),
+    Case("batch_norm 32x8x28x28", ((32, 8, 28, 28), (8,), (8,)),
+         lambda x, w, b: _batch_norm(x, w, b),
+         lambda x, w, b: _torch().nn.functional.batch_norm(x, None, None, w, b, training=True), model="ResNet"),
+    Case("relu 32x8x28x28", ((32, 8, 28, 28),),
+         lambda x: x.relu(), lambda x: x.relu(), model="ResNet"),
 ]
 
 
@@ -209,6 +220,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--torch", action="store_true", help="also time PyTorch and check agreement")
     parser.add_argument("--only", nargs="+", help="run ops whose name contains one of these words")
     return parser.parse_args(argv)
+
+
+def _batch_norm(x: Tensor, weight: Tensor, bias: Tensor) -> Tensor:
+    norm = TensorBatchNorm2d(weight.shape[0])
+    norm.weight, norm.bias = weight, bias
+    return norm(x)
 
 
 def _torch():
