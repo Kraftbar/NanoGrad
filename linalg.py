@@ -6,9 +6,10 @@ the 3x3 .. 12x12 systems that show up in camera geometry, not for big data.
 The two workhorses:
 
 - ``solve``: Gaussian elimination with partial pivoting, for normal equations.
-- ``symmetric_eigen``: the Jacobi rotation method. It repeatedly zeroes the
-  largest off-diagonal entry with a plane rotation until the matrix is
-  diagonal. Slow-ish but short, robust, and easy to follow.
+- ``symmetric_eigen``: the cyclic Jacobi method. Each sweep visits every
+  off-diagonal pair (p, q) and zeroes it with a plane rotation; sweeps repeat
+  until the matrix is diagonal. Slow-ish but short, robust, and easy to
+  follow.
 
 Everything else (null vectors, a 3x3 SVD, nearest rotation) is built on those.
 """

@@ -58,6 +58,17 @@ class RotationTests(unittest.TestCase):
             for expected, actual in zip(axis_angle, recovered):
                 self.assertAlmostEqual(expected, actual, places=6)
 
+    def test_axis_angle_near_half_turn_keeps_axis_sign(self) -> None:
+        length = math.sqrt(0.8 ** 2 + 0.3 ** 2 + 0.5 ** 2)
+        axis = [-0.8 / length, 0.3 / length, 0.5 / length]
+        theta = math.pi - 9e-7
+        rotation = rotation_from_axis_angle([theta * value for value in axis])
+
+        recovered = axis_angle_from_rotation(rotation)
+
+        for expected, actual in zip(axis, recovered):
+            self.assertAlmostEqual(theta * expected, actual, places=5)
+
     def test_skew_is_cross_product(self) -> None:
         v = [1.0, 2.0, 3.0]
         w = [-0.5, 0.25, 2.0]

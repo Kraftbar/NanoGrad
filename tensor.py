@@ -30,7 +30,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from functools import lru_cache
 from operator import mul
-from typing import Callable
+from typing import Callable, NamedTuple
 
 
 Number = int | float
@@ -751,40 +751,12 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
         dB = A^T @ dC
     """
 
-    left_shape = (1, *left.shape) if left.ndim == 1 else left.shape
-    right_shape = (*right.shape, 1) if right.ndim == 1 else right.shape
-    rows, shared = left_shape[-2:]
-    right_shared, cols = right_shape[-2:]
-    if shared != right_shared:
-        raise ValueError("matmul inner dimensions must match")
-
-    left_batch = left_shape[:-2]
-    right_batch = right_shape[:-2]
-    if not right_batch:
-        # A shared right matrix: fold every left batch axis into the rows.
-        rows = _numel(left_shape[:-1])
-        batch_shape: tuple[int, ...] = ()
-        out_shape = (*left_shape[:-1], cols)
-    elif not left_batch or left_batch == right_batch:
-        batch_shape = right_batch
-        out_shape = (*batch_shape, rows, cols)
-    else:
-        raise ValueError("matmul batch dimensions must match")
-
-    if left.ndim == 1 and right.ndim == 1:
-        out_shape = (1,)
-    elif left.ndim == 1:
-        out_shape = out_shape[:-2] + out_shape[-1:]
-    elif right.ndim == 1:
-        out_shape = out_shape[:-1]
-
-    batches = _numel(batch_shape)
+    plan = _matmul_plan(left.shape, right.shape)
+    batches, rows, shared, cols = plan.batches, plan.rows, plan.shared, plan.cols
+    left_step, right_step = plan.left_step, plan.right_step
     left_size = rows * shared
     right_size = shared * cols
     out_size = rows * cols
-    # A batch step of 0 means "reuse the same matrix for every batch entry".
-    left_step = left_size if left_batch else 0
-    right_step = right_size if right_batch else 0
     left_data = left.data
     right_data = right.data
 
@@ -794,7 +766,7 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
         b = right_data[batch * right_step : batch * right_step + right_size]
         data.extend(_dot_table(_rows(a, shared), _columns(b, cols)))
 
-    out = _op_result(data, out_shape, (left, right), "matmul")
+    out = _op_result(data, plan.out_shape, (left, right), "matmul")
 
     def _backward() -> None:
         grad = _grad_data(out)
@@ -824,6 +796,62 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
 
     out._backward = _backward
     return out
+
+
+class _MatmulPlan(NamedTuple):
+    """How to walk a (possibly batched) product as ``batches`` 2D products."""
+
+    batches: int
+    rows: int
+    shared: int
+    cols: int
+    left_step: int   # flat offset between batch entries; 0 = shared matrix
+    right_step: int
+    out_shape: tuple[int, ...]
+
+
+def _matmul_plan(
+    left_shape: tuple[int, ...],
+    right_shape: tuple[int, ...],
+) -> _MatmulPlan:
+    # Vectors become matrices: a left (k,) is a row (1, k), a right (k,) is a
+    # column (k, 1). The extra axis is dropped again from the output shape.
+    left_matrix = (1, *left_shape) if len(left_shape) == 1 else left_shape
+    right_matrix = (*right_shape, 1) if len(right_shape) == 1 else right_shape
+    rows, shared = left_matrix[-2:]
+    right_shared, cols = right_matrix[-2:]
+    if shared != right_shared:
+        raise ValueError("matmul inner dimensions must match")
+
+    left_batch = left_matrix[:-2]
+    right_batch = right_matrix[:-2]
+    if not right_batch:
+        # A shared right matrix: fold every left batch axis into the rows.
+        rows = _numel(left_matrix[:-1])
+        batch_shape: tuple[int, ...] = ()
+        out_shape = (*left_matrix[:-1], cols)
+    elif not left_batch or left_batch == right_batch:
+        batch_shape = right_batch
+        out_shape = (*batch_shape, rows, cols)
+    else:
+        raise ValueError("matmul batch dimensions must match")
+
+    if len(left_shape) == 1 and len(right_shape) == 1:
+        out_shape = (1,)
+    elif len(left_shape) == 1:
+        out_shape = out_shape[:-2] + out_shape[-1:]
+    elif len(right_shape) == 1:
+        out_shape = out_shape[:-1]
+
+    return _MatmulPlan(
+        batches=_numel(batch_shape),
+        rows=rows,
+        shared=shared,
+        cols=cols,
+        left_step=rows * shared if left_batch else 0,
+        right_step=shared * cols if right_batch else 0,
+        out_shape=out_shape,
+    )
 
 
 def _accumulate(target: list[float], start: int, values: list[float]) -> None:
@@ -1150,6 +1178,8 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
     - image (H, W)       kernel (O, kh, kw)    -> (O, oh, ow)
     - image (C, H, W)    kernel (C, kh, kw)    -> (oh, ow)
     - image (C, H, W)    kernel (O, C, kh, kw) -> (O, oh, ow)
+
+    Unbatched outputs with a single filter (O = 1) drop the filter axis.
     - image (B, C, H, W) kernel (O, C, kh, kw) -> (B, O, oh, ow)
 
     Internally everything is treated as the batched 4D case (reshaping a flat
@@ -1272,7 +1302,8 @@ def _conv2d_shapes(
     out_cols = image_cols - kernel_cols + 1
     if len(image_shape) == 4:
         out_shape = (batches, filters, out_rows, out_cols)
-    elif len(kernel_shape) == len(image_shape):
+    elif filters == 1:
+        # Unbatched single-filter output drops the filter axis.
         out_shape = (out_rows, out_cols)
     else:
         out_shape = (filters, out_rows, out_cols)

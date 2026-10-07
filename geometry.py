@@ -114,7 +114,12 @@ def axis_angle_from_rotation(rotation: Matrix) -> Vector:
         best = max(range(3), key=lambda i: diagonal[i])
         axis_column = [rotation[i][best] + (1.0 if i == best else 0.0) for i in range(3)]
         length = norm(axis_column)
-        return [theta * value / length for value in axis_column]
+        axis = [value / length for value in axis_column]
+        # R + I only fixes the axis up to sign; vee = sin(theta) * axis,
+        # still tiny but nonzero here, carries the sign.
+        if sum(a * v for a, v in zip(axis, vee)) < 0.0:
+            axis = [-value for value in axis]
+        return [theta * value for value in axis]
     scale = theta / math.sin(theta)
     return [scale * value for value in vee]
 
@@ -425,39 +430,53 @@ def refine_pose(
        lambda), otherwise reject it and raise lambda
     """
 
-    history = [RefinementStep(0, reprojection_rmse(camera, pose, points, pixels), damping)]
+    def error(candidate: Pose) -> float:
+        return reprojection_rmse(camera, candidate, points, pixels)
+
+    history = [RefinementStep(0, error(pose), damping)]
     for iteration in range(1, iterations + 1):
-        delta = [Value(0.0) for _ in range(6)]
-        residuals = _reprojection_residuals(camera, pose, points, pixels, delta)
-        jacobian = [gradients(residual, delta) for residual in residuals]
-        values = [residual.data for residual in residuals]
-
-        jt_j = [
-            [sum(row[i] * row[j] for row in jacobian) for j in range(6)]
-            for i in range(6)
-        ]
-        jt_r = [sum(row[i] * r for row, r in zip(jacobian, values)) for i in range(6)]
-
+        jt_j, jt_r = _normal_equations(camera, pose, points, pixels)
         current = history[-1].rmse
-        while True:
-            damped = [
-                [jt_j[i][j] + (damping * jt_j[i][i] if i == j else 0.0) for j in range(6)]
-                for i in range(6)
-            ]
-            step = solve(damped, [-value for value in jt_r])
+
+        # Try damped steps until one lowers the error (or damping explodes).
+        while damping <= 1e12:
+            step = solve(_add_damping(jt_j, damping), [-value for value in jt_r])
             candidate = _apply_update(pose, step)
-            error = reprojection_rmse(camera, candidate, points, pixels)
-            if error < current:
+            if error(candidate) < current:
                 pose = candidate
                 damping = max(damping / 10.0, 1e-12)
                 break
             damping *= 10.0
-            if damping > 1e12:
-                break
-        history.append(RefinementStep(iteration, reprojection_rmse(camera, pose, points, pixels), damping))
+
+        history.append(RefinementStep(iteration, error(pose), damping))
         if current - history[-1].rmse < 1e-12:
             break
     return pose, history
+
+
+def _normal_equations(
+    camera: PinholeCamera,
+    pose: Pose,
+    points: Sequence[Vector],
+    pixels: Sequence[Vector],
+) -> tuple[Matrix, Vector]:
+    """J^T J and J^T r for the 6 pose-update parameters, at delta = 0."""
+
+    delta = [Value(0.0) for _ in range(6)]
+    residuals = _reprojection_residuals(camera, pose, points, pixels, delta)
+    jacobian = [gradients(residual, delta) for residual in residuals]
+    values = [residual.data for residual in residuals]
+    jacobian_t = transpose(jacobian)
+    return mat_mul(jacobian_t, jacobian), mat_vec(jacobian_t, values)
+
+
+def _add_damping(matrix: Matrix, damping: float) -> Matrix:
+    """J^T J + lambda * diag(J^T J): Marquardt's scale-aware damping."""
+
+    return [
+        [value + (damping * value if row == col else 0.0) for col, value in enumerate(values)]
+        for row, values in enumerate(matrix)
+    ]
 
 
 def _reprojection_residuals(

@@ -171,6 +171,18 @@ class GradientCheckTests(unittest.TestCase):
                     [image, kernel],
                 )
 
+    def test_single_filter_convolution_drops_filter_axis(self) -> None:
+        self.assertEqual(conv2d_valid(Tensor.zeros((4, 5)), Tensor.zeros((1, 2, 2))).shape, (3, 4))
+        self.assertEqual(conv2d_valid(Tensor.zeros((4, 5)), Tensor.zeros((2, 2, 2))).shape, (2, 3, 4))
+        self.assertEqual(
+            conv2d_valid(Tensor.zeros((2, 4, 5)), Tensor.zeros((1, 2, 2, 2))).shape,
+            (3, 4),
+        )
+        self.assertEqual(
+            conv2d_valid(Tensor.zeros((1, 2, 4, 5)), Tensor.zeros((1, 2, 2, 2))).shape,
+            (1, 1, 3, 4),
+        )
+
     def test_pooling(self) -> None:
         image = random_tensor((2, 2, 5, 6), seed=12)
 
