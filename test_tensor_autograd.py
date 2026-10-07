@@ -1325,5 +1325,21 @@ def finite_difference(tensor: Tensor, index: int, loss_fn, eps: float = 1e-6) ->
     return (plus - minus) / (2 * eps)
 
 
+
+class AccumulateTests(unittest.TestCase):
+    def test_accumulated_micro_batches_equal_one_batch(self) -> None:
+        weights = Tensor([0.5, -1.0, 2.0, 0.25, 1.5, -0.75], (3, 2), requires_grad=True)
+        first = Tensor([1.0, 2.0, 3.0, -1.0, 0.5, 2.0], (2, 3))
+        second = Tensor([0.0, 1.0, -2.0, 4.0, 1.0, 1.0], (2, 3))
+        ((first @ weights).sum() + (second @ weights).sum()).backward()
+        whole = list(weights.grad)
+        weights.zero_grad()
+        (first @ weights).sum().backward(accumulate=True)
+        (second @ weights).sum().backward(accumulate=True)
+        self.assertEqual(list(weights.grad), whole)
+        (first @ weights).sum().backward()          # the default resets again
+        self.assertNotEqual(list(weights.grad), whole)
+
+
 if __name__ == "__main__":
     unittest.main()

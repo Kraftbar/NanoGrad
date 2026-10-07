@@ -288,19 +288,19 @@ def train(args: argparse.Namespace) -> dict:
             if step == args.steps:
                 break
 
-            xs, ys = random_batch(
-                splits["train"],
-                batch_size=args.batch_size,
-                context_size=args.context_size,
-                rng=data_rng,
-            )
             optimizer.lr = schedule(step)
             optimizer.zero_grad()
             if parallel is not None:
+                xs, ys = random_batch(splits["train"], batch_size=args.batch_size,
+                                      context_size=args.context_size, rng=data_rng)
                 parallel.loss_and_gradients(xs, ys)
             else:
+                # --grad-accum N: N micro-batches, gradients added up, one step.
                 model.train()
-                sequence_loss(model, xs, ys).backward()
+                for _ in range(args.grad_accum):
+                    xs, ys = random_batch(splits["train"], batch_size=args.batch_size,
+                                          context_size=args.context_size, rng=data_rng)
+                    (sequence_loss(model, xs, ys) * (1.0 / args.grad_accum)).backward(accumulate=True)
             optimizer.step()
 
     if _char_checkpoint(args):
@@ -374,6 +374,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-every", type=int, default=250)
     parser.add_argument("--eval-batches", type=int, default=20)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--grad-accum", type=int, default=1,
+                        help="micro-batches per optimizer step (single process)")
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--out-dir")
     parser.add_argument("--resume", action="store_true")

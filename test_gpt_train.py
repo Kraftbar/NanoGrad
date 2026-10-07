@@ -124,5 +124,20 @@ class GptTrainTests(unittest.TestCase):
             model.load(out_dir / "model.json")
 
 
+    def test_gradient_accumulation_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            text_path = Path(directory) / "text.txt"
+            text_path.write_text(TEXT)
+            args = parse_args([
+                "--text-file", str(text_path), "--preset", "mini", "--layers", "1",
+                "--embedding-dim", "16", "--context-size", "8", "--steps", "6",
+                "--eval-every", "6", "--eval-batches", "1", "--grad-accum", "3",
+                "--generate", "3", "--num-samples", "1",
+            ])
+            with redirect_stdout(StringIO()):
+                result = train(args)
+            self.assertLess(result["log"][-1]["train_loss"], result["log"][0]["train_loss"])
+
+
 if __name__ == "__main__":
     unittest.main()

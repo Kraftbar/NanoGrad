@@ -266,11 +266,15 @@ class Tensor:
         grad: Tensor | Sequence[Number] | None = None,
         *,
         retain_graph: bool = False,
+        accumulate: bool = False,
     ) -> None:
         """Fill ``.grad`` on every tensor this one was computed from.
 
         Gradients are reset before the pass, so the leaves end up with this
-        output's gradient rather than an accumulation over calls.
+        output's gradient rather than an accumulation over calls. With
+        ``accumulate=True`` the leaves keep their gradients and this pass
+        adds to them (as PyTorch always does): run backward on several
+        micro-batches, then take one optimizer step.
 
         Afterwards the graph is freed (as in PyTorch): each intermediate
         result drops its backward function and its links to its inputs.
@@ -283,7 +287,7 @@ class Tensor:
 
         # Start every gradient empty; the first _add_grad adopts its list.
         for node in topo:
-            if node.requires_grad:
+            if node.requires_grad and (node._prev or not accumulate):
                 node.grad = None
 
         _add_grad(self, _seed_grad(self, grad))
