@@ -288,7 +288,7 @@ void conv_forward(const real *image, const long *index, const real *kernel, real
     if (panel == NULL) {
         abort();
     }
-    int full_cols = n >= TILE_COLS ? n - n % TILE_COLS : 0;
+    int full_cols = n;          /* every column, the last panel zero-padded */
 #else
     int full_cols = 0;
 #endif
@@ -297,20 +297,18 @@ void conv_forward(const real *image, const long *index, const real *kernel, real
         real *C = out + batch * (long)m * n;
 #ifdef VECTOR_WIDTH
         for (int j = 0; j < full_cols; j += TILE_COLS) {
+            int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
             for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
                 int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
+                if (cols < TILE_COLS) memset(panel, 0, sizeof(real) * K_BLOCK * TILE_COLS);
                 for (int p = 0; p < kb; p++)                   /* pack through the index */
-                    for (int jj = 0; jj < TILE_COLS; jj++)
+                    for (int jj = 0; jj < cols; jj++)
                         panel[(long)p * TILE_COLS + jj] = img[index[(long)(j + jj) * k + p0 + p]];
-                int i = 0;
-                for (; i + TILE_ROWS <= m; i += TILE_ROWS)
-                    tile(A + (long)i * k + p0, k, 1, C + (long)i * n + j, n, panel, kb, TILE_ROWS, TILE_COLS);
-                if (i < m)
-                    tile(A + (long)i * k + p0, k, 1, C + (long)i * n + j, n, panel, kb, m - i, TILE_COLS);
+                row_tiles(A + p0, k, 1, (long)TILE_ROWS * k, C + j, n, panel, kb, m, cols);
             }
         }
 #endif
-        for (int i = 0; i < m; i++) {                          /* leftover (or all) columns */
+        for (int i = 0; i < m; i++) {                          /* without the vector path: every column */
             for (int j = full_cols; j < n; j++) {
                 double total = 0.0;
                 const long *cells = index + (long)j * k;
@@ -342,7 +340,7 @@ void conv_kernel_grad(const real *image, const long *index, const real *grad, re
     if (panel == NULL) {
         abort();
     }
-    int full_cols = n >= TILE_COLS ? n - n % TILE_COLS : 0;
+    int full_cols = n;          /* every column, the last panel zero-padded */
 #else
     int full_cols = 0;
 #endif
@@ -351,22 +349,20 @@ void conv_kernel_grad(const real *image, const long *index, const real *grad, re
         const real *A = grad + batch * (long)m * k;
 #ifdef VECTOR_WIDTH
         for (int j = 0; j < full_cols; j += TILE_COLS) {
+            int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
             for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
                 int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
+                if (cols < TILE_COLS) memset(panel, 0, sizeof(real) * K_BLOCK * TILE_COLS);
                 for (int p = 0; p < kb; p++) {                 /* pack patch rows */
                     const long *cells = index + (long)(p0 + p) * n + j;
-                    for (int jj = 0; jj < TILE_COLS; jj++)
+                    for (int jj = 0; jj < cols; jj++)
                         panel[(long)p * TILE_COLS + jj] = img[cells[jj]];
                 }
-                int i = 0;
-                for (; i + TILE_ROWS <= m; i += TILE_ROWS)
-                    tile(A + (long)i * k + p0, k, 1, dkernel + (long)i * n + j, n, panel, kb, TILE_ROWS, TILE_COLS);
-                if (i < m)
-                    tile(A + (long)i * k + p0, k, 1, dkernel + (long)i * n + j, n, panel, kb, m - i, TILE_COLS);
+                row_tiles(A + p0, k, 1, (long)TILE_ROWS * k, dkernel + j, n, panel, kb, m, cols);
             }
         }
 #endif
-        for (int i = 0; i < m; i++) {                          /* leftover (or all) columns */
+        for (int i = 0; i < m; i++) {                          /* without the vector path: every column */
             for (int q = full_cols; q < n; q++) {
                 double total = 0.0;
                 for (int p = 0; p < k; p++) total += A_AT(i, p) * img[index[(long)p * n + q]];
@@ -404,7 +400,7 @@ void conv_input_grad(const real *grad, const real *kernel, const long *index, re
     if (panel == NULL) {
         abort();
     }
-    int full_cols = n >= TILE_COLS ? n - n % TILE_COLS : 0;
+    int full_cols = n;          /* every column, the last panel zero-padded */
 #else
     int full_cols = 0;
 #endif
@@ -416,16 +412,21 @@ void conv_input_grad(const real *grad, const real *kernel, const long *index, re
             memset(block, 0, sizeof(real) * rows * n);
 #ifdef VECTOR_WIDTH
             for (int j = 0; j < full_cols; j += TILE_COLS) {
+                int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
                 for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
                     int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
+                    if (cols < TILE_COLS) memset(panel, 0, sizeof(real) * K_BLOCK * TILE_COLS);
                     for (int p = 0; p < kb; p++)
-                        memcpy(panel + (long)p * TILE_COLS, kernel + (long)(p0 + p) * n + j, sizeof(real) * TILE_COLS);
+                        memcpy(panel + (long)p * TILE_COLS, kernel + (long)(p0 + p) * n + j, sizeof(real) * cols);
                     /* A + i: rows i.. of grad_b^T become the tile's rows 0.. */
-                    tile(A + i + (long)p0 * m, 1, m, block + j, n, panel, kb, rows, TILE_COLS);
+                    if (cols == TILE_COLS)
+                        tile(A + i + (long)p0 * m, 1, m, block + j, n, panel, kb, rows, TILE_COLS);
+                    else
+                        tile(A + i + (long)p0 * m, 1, m, block + j, n, panel, kb, rows, cols);
                 }
             }
 #endif
-            for (int r = 0; r < rows; r++) {                   /* leftover (or all) columns */
+            for (int r = 0; r < rows; r++) {                   /* without the vector path: every column */
                 for (int q = full_cols; q < n; q++) {
                     double total = 0.0;
                     for (int p = 0; p < k; p++) total += A[(long)p * m + i + r] * kernel[(long)p * n + q];
