@@ -1105,12 +1105,15 @@ class TensorTests(unittest.TestCase):
                 ],
             ])
 
+        # Fewer indices than axes select a sub-tensor...
+        self.assertEqual(Tensor.from_list([[[1], [2]]])[0, 1].tolist(), [2.0])
+        # ...but an index past the end is still an error.
         with self.assertRaises(IndexError):
             Tensor.from_list([
                 [
                     [1],
                 ],
-            ])[0, 0]
+            ])[0, 1]
 
         with self.assertRaises(ValueError):
             Tensor([1], ())
@@ -1295,6 +1298,26 @@ class StorageEdgeCaseTests(unittest.TestCase):
         t = Tensor([0.0] * 3, (3,))
         t.data = array("l", [1, 2, 3])
         self.assertEqual(list((t * 2.0).data), [2.0, 4.0, 6.0])
+
+
+
+class SlicingTests(unittest.TestCase):
+    def test_numpy_style_slices(self) -> None:
+        x = Tensor([float(i) for i in range(24)], (2, 3, 4))
+        self.assertEqual(x[1].shape, (3, 4))
+        self.assertEqual(x[1].tolist()[0], [12.0, 13.0, 14.0, 15.0])
+        self.assertEqual(x[:, 1].tolist(), [[4.0, 5.0, 6.0, 7.0], [16.0, 17.0, 18.0, 19.0]])
+        self.assertEqual(x[..., -1].tolist(), [[3.0, 7.0, 11.0], [15.0, 19.0, 23.0]])
+        self.assertEqual(x[0, 1:3, ::2].tolist(), [[4.0, 6.0], [8.0, 10.0]])
+        self.assertEqual(x[1, 2, 3], 23.0)
+        for bad in ((0, 0, 0, 0), (Ellipsis, Ellipsis), (slice(3, 3),), ("a",)):
+            with self.subTest(key=bad), self.assertRaises(IndexError):
+                x[bad]
+
+    def test_slice_gradient_lands_in_place(self) -> None:
+        x = Tensor([float(i) for i in range(12)], (3, 4), requires_grad=True)
+        (x[1:, ::3] * Tensor([1.0, 2.0, 3.0, 4.0], (2, 2))).sum().backward()
+        self.assertEqual(list(x.grad), [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 3.0, 0.0, 0.0, 4.0])
 
 
 if __name__ == "__main__":

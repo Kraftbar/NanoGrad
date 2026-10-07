@@ -109,16 +109,19 @@ class Tensor:
     def numel(self) -> int:
         return len(self.data)
 
-    def __getitem__(self, index: int | tuple[int, ...]) -> float:
-        if len(self.shape) == 1:
-            if not isinstance(index, int):
-                raise IndexError("1D tensors use one integer index")
-            return self.data[_normalize_index(index, self.shape[0])]
+    def __getitem__(self, key) -> "float | Tensor":
+        """``x[i, j, k]`` with one integer per axis is that number (a float).
 
-        if not isinstance(index, tuple) or len(index) != len(self.shape):
-            raise IndexError("tensor indices must match tensor dimensions")
+        Anything else (fewer integers, slices like ``1:3`` or ``::2``, ``...``)
+        selects a sub-tensor and returns it as a new Tensor that gradients
+        flow back through; see ``take_slices``.
+        """
 
-        return self.data[_flat_index(index, self.shape)]
+        if isinstance(key, int) and self.ndim == 1:
+            return self.data[_normalize_index(key, self.shape[0])]
+        if isinstance(key, tuple) and len(key) == self.ndim and all(isinstance(k, int) for k in key):
+            return self.data[_flat_index(key, self.shape)]
+        return take_slices(self, key)
 
     def item(self) -> float:
         if len(self.data) != 1:
@@ -995,6 +998,68 @@ def flatten(tensor: Tensor, start_axis: int = 0) -> Tensor:
     leading_shape = tensor.shape[:start_axis]
     flattened = _numel(tensor.shape[start_axis:])
     return reshape(tensor, (*leading_shape, flattened))
+
+
+def take_slices(tensor: Tensor, key) -> Tensor:
+    """NumPy-style basic indexing: integers, slices and one ``...``.
+
+    An integer picks one position and drops that axis; a slice keeps the
+    axis with the chosen positions. Which input values land in the output
+    is a fixed list of flat offsets, so this is a gather through an index
+    table, and the backward pass scatters the gradient back.
+    """
+
+    shape, chosen = _slice_plan(tensor.shape, key)
+    index = _slice_index(tensor.shape, chosen)
+    sizes = dict(batches=1, image_size=tensor.numel)
+    out = _op_result(kernels.gather_indexed(tensor.data, index, **sizes), shape, (tensor,), "slice")
+
+    def _backward() -> None:
+        _add_grad(tensor, kernels.scatter_add_indexed(_grad_data(out), index, **sizes))
+
+    _set_backward(out, _backward)
+    return out
+
+
+def _slice_plan(shape: tuple[int, ...], key) -> tuple[tuple[int, ...], tuple]:
+    """(output shape, per axis: an int position or a tuple of positions)."""
+
+    key = key if isinstance(key, tuple) else (key,)
+    if key.count(Ellipsis) > 1:
+        raise IndexError("an index can only have one ...")
+    if Ellipsis in key:
+        at = key.index(Ellipsis)
+        fill = len(shape) - (len(key) - 1)
+        key = key[:at] + (slice(None),) * fill + key[at + 1 :]
+    if len(key) > len(shape):
+        raise IndexError("too many indices for tensor")
+    key = key + (slice(None),) * (len(shape) - len(key))
+
+    out_shape, chosen = [], []
+    for item, size in zip(key, shape):
+        if isinstance(item, int):
+            chosen.append(_normalize_index(item, size))
+        elif isinstance(item, slice):
+            positions = tuple(range(*item.indices(size)))
+            if not positions:
+                raise IndexError("a slice may not be empty")
+            chosen.append(positions)
+            out_shape.append(len(positions))
+        else:
+            raise IndexError("tensor indices must be integers, slices or ...")
+    if not out_shape:
+        out_shape = [1]                     # every axis picked by an integer
+    return tuple(out_shape), tuple(chosen)
+
+
+@lru_cache(maxsize=256)
+def _slice_index(shape: tuple[int, ...], chosen: tuple):
+    strides = _strides(shape)
+    offsets = [0]
+    for item, stride in zip(chosen, strides):
+        steps = [item * stride] if isinstance(item, int) else [position * stride for position in item]
+        offsets = [base + step for base in offsets for step in steps]
+    return kernels.index_table(offsets)
 
 
 def permute(tensor: Tensor, axes: tuple[int, ...]) -> Tensor:
