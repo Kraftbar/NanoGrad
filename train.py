@@ -19,7 +19,7 @@ from metrics import (
 )
 from nn import Module
 from optim import SGD, TensorAdam, TensorSGD
-from tensor import Tensor
+from tensor import Tensor, no_grad
 from datasets import TinyDataset
 
 
@@ -548,24 +548,26 @@ def evaluate_tensor_sequence_multiclass_dataset(
     total_count = 0
     confusion_matrix: list[list[int]] | None = None
 
-    for xs, ys in dataset.batches(batch_size, shuffle=False):
-        inputs = Tensor.from_list(xs)
-        targets = Tensor.from_list(ys)
-        logits = _sequence_logits(model, inputs)
-        flat_logits = _flatten_sequence_logits(logits)
-        flat_targets = _flatten_sequence_targets(targets)
-        loss = softmax_cross_entropy(flat_logits, flat_targets)
-        batch_count = flat_targets.numel
+    # Evaluation never calls backward, so skip building the graph.
+    with no_grad():
+        for xs, ys in dataset.batches(batch_size, shuffle=False):
+            inputs = Tensor.from_list(xs)
+            targets = Tensor.from_list(ys)
+            logits = _sequence_logits(model, inputs)
+            flat_logits = _flatten_sequence_logits(logits)
+            flat_targets = _flatten_sequence_targets(targets)
+            loss = softmax_cross_entropy(flat_logits, flat_targets)
+            batch_count = flat_targets.numel
 
-        total_loss += loss[0] * batch_count
-        total_correct += (
-            tensor_multiclass_accuracy(flat_logits, flat_targets) * batch_count
-        )
-        confusion_matrix = _add_confusion_matrices(
-            confusion_matrix,
-            tensor_multiclass_confusion_matrix(flat_logits, flat_targets),
-        )
-        total_count += batch_count
+            total_loss += loss[0] * batch_count
+            total_correct += (
+                tensor_multiclass_accuracy(flat_logits, flat_targets) * batch_count
+            )
+            confusion_matrix = _add_confusion_matrices(
+                confusion_matrix,
+                tensor_multiclass_confusion_matrix(flat_logits, flat_targets),
+            )
+            total_count += batch_count
 
     return EvaluationSummary(
         loss=total_loss / total_count,
@@ -590,20 +592,22 @@ def evaluate_tensor_multiclass_dataset(
     total_count = 0
     confusion_matrix: list[list[int]] | None = None
 
-    for xs, ys in dataset.batches(batch_size, shuffle=False):
-        inputs = Tensor.from_list(xs)
-        targets = Tensor.from_list(ys)
-        logits = model(inputs)
-        loss = softmax_cross_entropy(logits, targets)
-        batch_count = len(ys)
+    # Evaluation never calls backward, so skip building the graph.
+    with no_grad():
+        for xs, ys in dataset.batches(batch_size, shuffle=False):
+            inputs = Tensor.from_list(xs)
+            targets = Tensor.from_list(ys)
+            logits = model(inputs)
+            loss = softmax_cross_entropy(logits, targets)
+            batch_count = len(ys)
 
-        total_loss += loss[0] * batch_count
-        total_correct += tensor_multiclass_accuracy(logits, targets) * batch_count
-        confusion_matrix = _add_confusion_matrices(
-            confusion_matrix,
-            tensor_multiclass_confusion_matrix(logits, targets),
-        )
-        total_count += batch_count
+            total_loss += loss[0] * batch_count
+            total_correct += tensor_multiclass_accuracy(logits, targets) * batch_count
+            confusion_matrix = _add_confusion_matrices(
+                confusion_matrix,
+                tensor_multiclass_confusion_matrix(logits, targets),
+            )
+            total_count += batch_count
 
     return EvaluationSummary(
         loss=total_loss / total_count,

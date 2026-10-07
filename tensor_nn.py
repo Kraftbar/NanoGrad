@@ -8,7 +8,15 @@ import math
 from collections.abc import Sequence
 from pathlib import Path
 
-from tensor import Tensor, conv2d_valid, matmul
+from tensor import (
+    Tensor,
+    _add_grad,
+    _grad_data,
+    _op_result,
+    conv2d_valid,
+    gather_rows,
+    matmul,
+)
 
 
 class TensorModule:
@@ -157,8 +165,9 @@ class TensorEmbedding(TensorModule):
 
     def __call__(self, indices) -> Tensor:
         index_shape, flat_indices = _index_shape_and_flat(indices)
-        one_hot = _one_hot_indices(flat_indices, self.vocab_size)
-        embedded = matmul(one_hot, self.weight)
+        embedded = gather_rows(self.weight, flat_indices)
+        if len(index_shape) == 1:
+            return embedded
         return embedded.reshape((*index_shape, self.embedding_dim))
 
     def parameters(self) -> list[Tensor]:
@@ -214,13 +223,7 @@ class TensorLayerNorm(TensorModule):
     def __call__(self, inputs: Tensor) -> Tensor:
         if inputs.shape[-1] != self.normalized_shape:
             raise ValueError("input last dimension must match normalized_shape")
-
-        mean = _restore_last_axis(inputs.mean(axis=-1), inputs.shape)
-        centered = inputs - mean
-        squared = centered * centered
-        variance = _restore_last_axis(squared.mean(axis=-1), inputs.shape)
-        std = ((variance + self.eps).log() * 0.5).exp()
-        return (centered / std) * self.weight + self.bias
+        return layer_norm(inputs, self.weight, self.bias, eps=self.eps)
 
     def parameters(self) -> list[Tensor]:
         return [self.weight, self.bias]
@@ -399,11 +402,12 @@ def embedding_uniform(
 
 
 def linear(inputs: Tensor, weight: Tensor, bias: Tensor) -> Tensor:
-    """Apply a dense linear layer.
+    """Apply a dense linear layer: y = x @ W^T + b.
 
     Shapes:
     - vector input: inputs=(in,), weight=(out, in), bias=(out,) -> (out,)
-    - batch input: inputs=(batch, in), weight=(out, in), bias=(out,) -> (batch, out)
+    - batch input: inputs=(..., in), weight=(out, in), bias=(out,) -> (..., out)
+      Any leading axes (batch, time, ...) are treated as extra rows.
     """
 
     _require_matrix("weight", weight)
@@ -415,13 +419,93 @@ def linear(inputs: Tensor, weight: Tensor, bias: Tensor) -> Tensor:
             raise ValueError("bias shape must match linear output shape")
         return outputs + bias
 
-    if len(inputs.shape) == 2:
-        outputs = matmul(inputs, weight.T)
-        if outputs.shape[1] != bias.shape[0]:
-            raise ValueError("bias shape must match linear output columns")
-        return outputs + bias
+    if inputs.shape[-1] != weight.shape[1]:
+        raise ValueError("linear input features must match weight columns")
+    if weight.shape[0] != bias.shape[0]:
+        raise ValueError("bias shape must match linear output columns")
+    return matmul(inputs, weight.T) + bias
 
-    raise ValueError("linear expects 1D or 2D inputs")
+
+def layer_norm(
+    inputs: Tensor,
+    weight: Tensor,
+    bias: Tensor,
+    *,
+    eps: float = 1e-5,
+) -> Tensor:
+    """Normalize each last-axis row to zero mean and unit variance.
+
+    Per row x of width n:
+
+        mean    = sum(x) / n
+        var     = sum((x - mean)^2) / n
+        inv_std = 1 / sqrt(var + eps)
+        x_hat   = (x - mean) * inv_std
+        y       = x_hat * weight + bias
+
+    Backward, with g = dy * weight for the row:
+
+        dx      = inv_std * (g - mean(g) - x_hat * mean(g * x_hat))
+        dweight = sum over rows of dy * x_hat
+        dbias   = sum over rows of dy
+
+    This is one fused op instead of ~10 small ones; test_tensor_nn checks it
+    against the composed version.
+    """
+
+    width = inputs.shape[-1]
+    if weight.shape != (width,) or bias.shape != (width,):
+        raise ValueError("layer_norm weight and bias must match the last axis")
+
+    x_hats: list[list[float]] = []
+    inv_stds: list[float] = []
+    data: list[float] = []
+    for start in range(0, inputs.numel, width):
+        row = inputs.data[start : start + width]
+        mean = sum(row) / width
+        centered = [value - mean for value in row]
+        variance = sum(value * value for value in centered) / width
+        inv_std = 1.0 / math.sqrt(variance + eps)
+        x_hat = [value * inv_std for value in centered]
+        x_hats.append(x_hat)
+        inv_stds.append(inv_std)
+        data.extend([
+            value * scale + shift
+            for value, scale, shift in zip(x_hat, weight.data, bias.data)
+        ])
+
+    out = _op_result(data, inputs.shape, (inputs, weight, bias), "layer_norm")
+
+    def _backward() -> None:
+        grad = _grad_data(out)
+        input_grad: list[float] = []
+        weight_grad = [0.0] * width
+        bias_grad = [0.0] * width
+        for row_index, (x_hat, inv_std) in enumerate(zip(x_hats, inv_stds)):
+            d_y = grad[row_index * width : (row_index + 1) * width]
+            weight_grad = [
+                total + dy * xh
+                for total, dy, xh in zip(weight_grad, d_y, x_hat)
+            ]
+            bias_grad = [total + dy for total, dy in zip(bias_grad, d_y)]
+            if inputs.requires_grad:
+                g = [dy * scale for dy, scale in zip(d_y, weight.data)]
+                mean_g = sum(g) / width
+                mean_g_x_hat = sum(gi * xh for gi, xh in zip(g, x_hat)) / width
+                input_grad.extend([
+                    inv_std * (gi - mean_g - xh * mean_g_x_hat)
+                    for gi, xh in zip(g, x_hat)
+                ])
+
+        if inputs.requires_grad:
+            _add_grad(inputs, input_grad)
+        if weight.requires_grad:
+            _add_grad(weight, weight_grad)
+        if bias.requires_grad:
+            _add_grad(bias, bias_grad)
+
+    out._backward = _backward
+    return out
 
 
 def _index_shape_and_flat(indices) -> tuple[tuple[int, ...], list[int]]:
@@ -469,23 +553,6 @@ def _integer_indices(values: Sequence[float]) -> list[int]:
             raise ValueError("embedding indices must be integers")
         indices.append(index)
     return indices
-
-
-def _one_hot_indices(indices: list[int], vocab_size: int) -> Tensor:
-    if not indices:
-        raise ValueError("embedding indices must not be empty")
-    data = [0.0] * (len(indices) * vocab_size)
-    for row, index in enumerate(indices):
-        if index < 0 or index >= vocab_size:
-            raise ValueError("embedding index out of range")
-        data[row * vocab_size + index] = 1.0
-    return Tensor(data, (len(indices), vocab_size))
-
-
-def _restore_last_axis(tensor: Tensor, source_shape: tuple[int, ...]) -> Tensor:
-    if len(source_shape) == 1:
-        return tensor
-    return tensor.reshape((*source_shape[:-1], 1))
 
 
 def _is_sequence(value) -> bool:

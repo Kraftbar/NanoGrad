@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from tensor import Tensor, _add_grad, _grad_data, matmul
+from tensor import Tensor, _add_grad, _grad_data, _op_result, concat, matmul
 from tensor_nn import TensorEmbedding, TensorLayerNorm, TensorLinear, TensorModule
 
 
@@ -202,7 +202,7 @@ class CausalSelfAttention(TensorModule):
         self.context_size = context_size
         self.num_heads = num_heads
         self.head_dim = embedding_dim // num_heads
-        self._mask_cache: dict[tuple[int, int], Tensor] = {}
+        self._mask_cache: dict[int, Tensor] = {}
         self.queries = [
             TensorLinear(embedding_dim, self.head_dim, seed=seed + head * 3)
             for head in range(num_heads)
@@ -225,37 +225,37 @@ class CausalSelfAttention(TensorModule):
         if inputs.ndim != 3:
             raise ValueError("CausalSelfAttention expects (batch, context, embedding)")
 
-        batch_size, context_size, embedding_dim = inputs.shape
+        _, context_size, embedding_dim = inputs.shape
         if context_size != self.context_size:
             raise ValueError("input context dimension must match context_size")
         if embedding_dim != self.embedding_dim:
             raise ValueError("input embedding dimension must match embedding_dim")
 
-        flat_inputs = inputs.reshape((batch_size * context_size, embedding_dim))
-        mask = self._causal_mask(batch_size, context_size)
+        # Attention runs per sequence: scores are (batch, context, context),
+        # so a token only ever looks at tokens from its own row.
+        mask = self._causal_mask(context_size)
+        scale = 1 / math.sqrt(self.head_dim)
         head_outputs = []
         for query_layer, key_layer, value_layer in zip(
             self.queries,
             self.keys,
             self.values,
         ):
-            query = query_layer(flat_inputs)
-            key = key_layer(flat_inputs)
-            value = value_layer(flat_inputs)
-            scores = matmul(query, key.T) * (1 / math.sqrt(self.head_dim))
-            masked_scores = scores + mask
-            weights = masked_scores.softmax(axis=1)
-            head_outputs.append(matmul(weights, value))
+            query = query_layer(inputs)                      # (B, T, D)
+            key = key_layer(inputs)                          # (B, T, D)
+            value = value_layer(inputs)                      # (B, T, D)
+            key_t = key.permute((0, 2, 1))                   # (B, D, T)
+            scores = matmul(query, key_t) * scale            # (B, T, T)
+            weights = (scores + mask).softmax(axis=-1)       # (B, T, T)
+            head_outputs.append(matmul(weights, value))      # (B, T, D)
 
-        attended = _concat_feature_tensors(head_outputs)
-        output = self.projection(attended)
-        return output.reshape((batch_size, context_size, embedding_dim))
+        attended = concat(head_outputs, axis=-1)             # (B, T, C)
+        return self.projection(attended)
 
-    def _causal_mask(self, batch_size: int, context_size: int) -> Tensor:
-        key = (batch_size, context_size)
-        if key not in self._mask_cache:
-            self._mask_cache[key] = _causal_attention_mask(batch_size, context_size)
-        return self._mask_cache[key]
+    def _causal_mask(self, context_size: int) -> Tensor:
+        if context_size not in self._mask_cache:
+            self._mask_cache[context_size] = _causal_attention_mask(context_size)
+        return self._mask_cache[context_size]
 
     def parameters(self) -> list[Tensor]:
         return [
@@ -310,77 +310,22 @@ class CausalSelfAttention(TensorModule):
         self.projection.load_state_dict(state["projection"])
 
 
-def _causal_attention_mask(batch_size: int, context_size: int) -> Tensor:
-    total_tokens = batch_size * context_size
-    data = []
-    for query_index in range(total_tokens):
-        query_batch = query_index // context_size
-        query_position = query_index % context_size
-        for key_index in range(total_tokens):
-            key_batch = key_index // context_size
-            key_position = key_index % context_size
-            can_attend = (
-                query_batch == key_batch
-                and key_position <= query_position
-            )
-            data.append(0.0 if can_attend else -1e9)
-    return Tensor(data, (total_tokens, total_tokens))
+def _causal_attention_mask(context_size: int) -> Tensor:
+    """(T, T) additive mask: 0 where a query may look, -1e9 at future keys.
 
+    Example for T = 3 (rows are queries, columns are keys):
 
-def _concat_feature_tensors(tensors: list[Tensor]) -> Tensor:
-    if not tensors:
-        raise ValueError("feature concatenation needs at least one tensor")
-    if len(tensors) == 1:
-        return tensors[0]
-    if any(tensor.ndim != 2 for tensor in tensors):
-        raise ValueError("feature concatenation expects 2D tensors")
+        [   0, -1e9, -1e9]
+        [   0,    0, -1e9]
+        [   0,    0,    0]
+    """
 
-    rows = tensors[0].shape[0]
-    if any(tensor.shape[0] != rows for tensor in tensors):
-        raise ValueError("feature tensors must have the same row count")
-
-    widths = [
-        tensor.shape[1]
-        for tensor in tensors
+    data = [
+        0.0 if key_position <= query_position else -1e9
+        for query_position in range(context_size)
+        for key_position in range(context_size)
     ]
-    out_width = sum(widths)
-    data = []
-    for row in range(rows):
-        for tensor, width in zip(tensors, widths):
-            start = row * width
-            data.extend(tensor.data[start : start + width])
-
-    out = Tensor(
-        data,
-        (rows, out_width),
-        requires_grad=any(tensor.requires_grad for tensor in tensors),
-        _children=tuple(tensors),
-        _op="concat_features",
-    )
-
-    def _backward() -> None:
-        grad = _grad_data(out)
-        tensor_grads = [
-            [0.0] * tensor.numel
-            for tensor in tensors
-        ]
-        for row in range(rows):
-            out_offset = row * out_width
-            width_offset = 0
-            for tensor_index, width in enumerate(widths):
-                tensor_offset = row * width
-                for col in range(width):
-                    tensor_grads[tensor_index][tensor_offset + col] += (
-                        grad[out_offset + width_offset + col]
-                    )
-                width_offset += width
-
-        for tensor, tensor_grad in zip(tensors, tensor_grads):
-            if tensor.requires_grad:
-                _add_grad(tensor, tensor_grad)
-
-    out._backward = _backward
-    return out
+    return Tensor(data, (context_size, context_size))
 
 
 def _load_layer_list(layers: list[TensorLinear], state, name: str) -> None:
@@ -442,22 +387,21 @@ class TransformerBlock(TensorModule):
         if inputs.ndim != 3:
             raise ValueError("TransformerBlock expects (batch, context, embedding)")
 
-        batch_size, context_size, embedding_dim = inputs.shape
+        _, context_size, embedding_dim = inputs.shape
         if context_size != self.context_size:
             raise ValueError("input context dimension must match context_size")
         if embedding_dim != self.embedding_dim:
             raise ValueError("input embedding dimension must match embedding_dim")
 
+        # x = x + attention(norm1(x))
+        # x = x + feed_forward(norm2(x))
         attended = self.attention(self.norm1(inputs))
         residual = inputs + attended
-        normalized = self.norm2(residual)
-        flat = normalized.reshape((batch_size * context_size, embedding_dim))
         hidden = _feed_forward_activation(
-            self.feed_forward_in(flat),
+            self.feed_forward_in(self.norm2(residual)),
             self.feed_forward_activation,
         )
         update = self.feed_forward_out(hidden)
-        update = update.reshape((batch_size, context_size, embedding_dim))
         return residual + update
 
     def parameters(self) -> list[Tensor]:
@@ -578,12 +522,7 @@ class CharTransformerModel(TensorModule):
         hidden = self.embedding(inputs)
         for block in self.blocks:
             hidden = block(hidden)
-        hidden = self.norm(hidden)
-        batch_size, context_size, embedding_dim = hidden.shape
-        logits = self.projection(
-            hidden.reshape((batch_size * context_size, embedding_dim)),
-        )
-        return logits.reshape((batch_size, context_size, self.vocab_size))
+        return self.projection(self.norm(hidden))
 
     def parameters(self) -> list[Tensor]:
         block_parameters = [
@@ -662,18 +601,9 @@ def _last_time_step(sequence: Tensor) -> Tensor:
         start = (batch * context_size + context_size - 1) * width
         data.extend(sequence.data[start : start + width])
 
-    out = Tensor(
-        data,
-        (batch_size, width),
-        requires_grad=sequence.requires_grad,
-        _children=(sequence,),
-        _op="last_time_step",
-    )
+    out = _op_result(data, (batch_size, width), (sequence,), "last_time_step")
 
     def _backward() -> None:
-        if not sequence.requires_grad:
-            return
-
         grad = _grad_data(out)
         sequence_grad = [0.0] * sequence.numel
         for batch in range(batch_size):

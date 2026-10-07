@@ -12,7 +12,7 @@ from pathlib import Path
 
 from language import CharBigramModel, CharEmbeddingModel, CharTransformerModel
 from metrics import perplexity
-from tensor import Tensor
+from tensor import Tensor, no_grad
 from tensor_nn import TensorModule
 from text import (
     CharVocab,
@@ -675,7 +675,8 @@ def generate_text(
     text = seed_text
     for _ in range(length):
         context = vocab.encode(text[-context_size:])
-        logits = model(_generation_inputs(context, vocab, input_mode=input_mode))
+        with no_grad():
+            logits = model(_generation_inputs(context, vocab, input_mode=input_mode))
         next_index = _select_next_index(
             logits.data[: len(vocab)],
             sample_mode=sample_mode,

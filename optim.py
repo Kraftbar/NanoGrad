@@ -62,10 +62,13 @@ class TensorSGD:
                 self.weight_decay,
                 self.weight_decay_min_ndim,
             )
-            for i, grad in enumerate(parameter.grad):
-                if use_weight_decay:
-                    parameter.data[i] *= 1.0 - self.lr * self.weight_decay
-                parameter.data[i] -= self.lr * grad * grad_scale
+            # w <- w * (1 - lr * weight_decay) - lr * clipped_grad
+            decay = 1.0 - self.lr * self.weight_decay if use_weight_decay else 1.0
+            step = self.lr * grad_scale
+            parameter.data = [
+                value * decay - step * grad
+                for value, grad in zip(parameter.data, parameter.grad)
+            ]
 
 
 class TensorAdam:
@@ -137,25 +140,32 @@ class TensorAdam:
                 self.weight_decay,
                 self.weight_decay_min_ndim,
             )
-            for i, grad in enumerate(parameter.grad):
-                if use_weight_decay:
-                    parameter.data[i] *= 1.0 - self.lr * self.weight_decay
-                scaled_grad = grad * grad_scale
-                first_moment[i] = (
-                    self.beta1 * first_moment[i]
-                    + (1.0 - self.beta1) * scaled_grad
-                )
-                second_moment[i] = (
-                    self.beta2 * second_moment[i]
-                    + (1.0 - self.beta2) * scaled_grad * scaled_grad
-                )
-                corrected_first = first_moment[i] / beta1_correction
-                corrected_second = second_moment[i] / beta2_correction
-                parameter.data[i] -= (
-                    self.lr
-                    * corrected_first
-                    / (math.sqrt(corrected_second) + self.eps)
-                )
+            # m <- beta1 * m + (1 - beta1) * g          (running mean)
+            # v <- beta2 * v + (1 - beta2) * g^2        (running mean of g^2)
+            # w <- w * (1 - lr * weight_decay) - lr * m_hat / (sqrt(v_hat) + eps)
+            # with bias corrections m_hat = m / (1 - beta1^t), v_hat = v / (1 - beta2^t)
+            beta1 = self.beta1
+            beta2 = self.beta2
+            grads = [grad * grad_scale for grad in parameter.grad]
+            first_moment = [
+                beta1 * m + (1.0 - beta1) * g
+                for m, g in zip(first_moment, grads)
+            ]
+            second_moment = [
+                beta2 * v + (1.0 - beta2) * g * g
+                for v, g in zip(second_moment, grads)
+            ]
+            self._m[parameter_index] = first_moment
+            self._v[parameter_index] = second_moment
+
+            decay = 1.0 - self.lr * self.weight_decay if use_weight_decay else 1.0
+            step_size = self.lr / beta1_correction
+            sqrt_correction = math.sqrt(beta2_correction)
+            parameter.data = [
+                value * decay
+                - step_size * m / (math.sqrt(v) / sqrt_correction + self.eps)
+                for value, m, v in zip(parameter.data, first_moment, second_moment)
+            ]
 
 
 def _global_grad_scale(
@@ -169,7 +179,7 @@ def _global_grad_scale(
     for parameter in parameters:
         if parameter.grad is None:
             continue
-        grad_norm_sq += sum(grad * grad for grad in parameter.grad)
+        grad_norm_sq += math.fsum(grad * grad for grad in parameter.grad)
 
     grad_norm = math.sqrt(grad_norm_sq)
     if grad_norm == 0.0 or grad_norm <= max_grad_norm:

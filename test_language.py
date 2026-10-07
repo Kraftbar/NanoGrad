@@ -12,16 +12,27 @@ from tensor import Tensor
 
 
 class LanguageModuleTests(unittest.TestCase):
-    def test_causal_attention_mask_blocks_future_and_cross_batch_tokens(self) -> None:
-        mask = _causal_attention_mask(batch_size=2, context_size=3)
+    def test_causal_attention_mask_blocks_future_tokens(self) -> None:
+        mask = _causal_attention_mask(context_size=3)
 
-        self.assertEqual(mask.shape, (6, 6))
+        self.assertEqual(mask.shape, (3, 3))
         self.assertEqual(mask[0, 0], 0.0)
         self.assertEqual(mask[0, 1], -1e9)
         self.assertEqual(mask[1, 0], 0.0)
         self.assertEqual(mask[1, 2], -1e9)
-        self.assertEqual(mask[3, 3], 0.0)
-        self.assertEqual(mask[3, 0], -1e9)
+        self.assertEqual(mask[2, 0], 0.0)
+        self.assertEqual(mask[2, 2], 0.0)
+
+    def test_causal_self_attention_keeps_batch_rows_independent(self) -> None:
+        attention = CausalSelfAttention(embedding_dim=2, context_size=2, seed=0)
+        first = [[1.0, 0.0], [0.5, -0.5]]
+        other = [[-2.0, 3.0], [0.25, 0.75]]
+
+        alone = attention(Tensor.from_list([first]))
+        batched = attention(Tensor.from_list([first, other]))
+
+        for expected, actual in zip(alone.data, batched.data[:4]):
+            self.assertAlmostEqual(expected, actual)
 
     def test_causal_self_attention_forward_shape(self) -> None:
         attention = CausalSelfAttention(embedding_dim=2, context_size=3, seed=0)
@@ -48,10 +59,10 @@ class LanguageModuleTests(unittest.TestCase):
         inputs = Tensor.zeros((2, 3, 2))
 
         attention(inputs)
-        first_mask = attention._mask_cache[(2, 3)]
+        first_mask = attention._mask_cache[3]
         attention(inputs)
 
-        self.assertIs(attention._mask_cache[(2, 3)], first_mask)
+        self.assertIs(attention._mask_cache[3], first_mask)
 
     def test_causal_self_attention_supports_multiple_heads(self) -> None:
         attention = CausalSelfAttention(

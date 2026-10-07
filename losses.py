@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from tensor import Tensor, _add_grad, _grad_data
+from tensor import Tensor, _add_grad, _grad_data, _op_result
 
 
 def mse_loss(predictions: Tensor, targets: Tensor) -> Tensor:
@@ -59,18 +59,10 @@ def softmax_cross_entropy(logits: Tensor, targets: Tensor | list[int]) -> Tensor
         probabilities.extend(row_probabilities)
         losses.append(-math.log(row_probabilities[classes[row]]))
 
-    out = Tensor(
-        [sum(losses) / rows],
-        (1,),
-        requires_grad=logits.requires_grad,
-        _children=(logits,),
-        _op="softmax_cross_entropy",
-    )
+    out = _op_result([sum(losses) / rows], (1,), (logits,), "softmax_cross_entropy")
 
     def _backward() -> None:
-        if not logits.requires_grad:
-            return
-
+        # d(loss)/d(logits) = (softmax - one_hot(target)) / rows
         scale = _grad_data(out)[0] / rows
         grad = probabilities[:]
         for row, target in enumerate(classes):
