@@ -182,3 +182,26 @@ the LLaMA-style baby model over the whole validation text:
 8 bits cost nothing measurable; 4 bits cost 0.6% at a sixth of the size;
 at 3 bits the error starts to show. (Smarter schemes such as GPTQ or AWQ
 choose the rounding to keep the layer outputs, not the weights, close.)
+
+## Pretraining, Fine-Tuning, Probing And LoRA
+
+`bert_finetune.py` pretrains the BERT-style encoder (2 layers, 64 wide)
+for 4,000 steps of masked-character modeling on Tiny Shakespeare, then
+trains it to tell which of 8 characters speaks a 64-character window
+(chance: 12.5%), and compares against the same classifier on an untrained
+encoder. Three ways to adapt the encoder, 1,500 steps each, accuracy on
+held-out speeches:
+
+| how the encoder is adapted | trains | pretrained encoder | untrained encoder |
+| --- | ---: | ---: | ---: |
+| full fine-tuning | every weight | 17.9% | 18.1% |
+| LoRA, rank 4 (`--lora 4`) | 5,640 numbers | 16.2% | 17.0% |
+| linear probe, encoder frozen (`--probe`) | the classifier | **22.6%** | 19.2% |
+
+Only the probe shows what pretraining learned: its features make the
+speaker 3.4 points easier to tell apart. Training the encoder (fully or
+through LoRA) on just 1,085 labelled speeches overfits them: training
+loss falls to about 1.1 while held-out accuracy stays near 17%, with or
+without pretraining. At this scale the honest result is that pretrained
+features help a little and fine-tuning needs more labelled data than this
+task has.
