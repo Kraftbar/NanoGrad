@@ -236,8 +236,8 @@ def run(args: argparse.Namespace) -> dict:
     data_dir = Path(args.data_dir or default_dir)
     train_images, train_labels = load_split(args.dataset, data_dir, "train", args.train_limit)
     test_images, test_labels = load_split(args.dataset, data_dir, "test", args.test_limit)
-    print(f"{args.dataset}: train {len(train_labels)} images, test {len(test_labels)} images, "
-          f"batch {args.batch_size}")
+    print(f"{args.dataset} ({data_dir}): train {len(train_labels)} images, "
+          f"test {len(test_labels)} images, batch {args.batch_size}")
 
     model = build_nanograd(args.seed, args.model, image_shape)
     print(f"model {args.model}, {model.num_parameters()} parameters")
