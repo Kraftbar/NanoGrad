@@ -186,6 +186,12 @@ class KernelBackendTests(unittest.TestCase):
         python, c = self.run_both(lambda: kernels.sigmoid_backward(python, grad))
         self.assertListsClose(python, c)
 
+    def test_bce_with_logits_sum_agrees(self) -> None:
+        x = [value * 40.0 for value in values(30, 37)]       # large |x| must stay stable
+        t = [abs(value) for value in values(30, 38)]
+        python, c = self.run_both(lambda: kernels.bce_with_logits_sum(x, t))
+        self.assertAlmostEqual(python, c, places=9)
+
     def test_relu_agrees(self) -> None:
         x, grad = values(40, 25), values(40, 26)
         python, c = self.run_both(lambda: kernels.relu(x))

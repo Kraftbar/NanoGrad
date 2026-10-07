@@ -277,6 +277,12 @@ def sigmoid_backward(y: list[float], grad: list[float]) -> list[float]:
     return (kernels_c.sigmoid_backward if BACKEND == "c" else reference.sigmoid_backward)(y, grad)
 
 
+def bce_with_logits_sum(x: list[float], t: list[float]) -> float:
+    """Summed binary cross entropy of logits x against targets t (see losses.py)."""
+
+    return (kernels_c.bce_with_logits_sum if BACKEND == "c" else reference.bce_with_logits_sum)(x, t)
+
+
 def relu(x: list[float]) -> list[float]:
     return (kernels_c.relu if BACKEND == "c" else reference.relu)(x)
 

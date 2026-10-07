@@ -36,6 +36,37 @@ def binary_cross_entropy(
     return losses.mean()
 
 
+def binary_cross_entropy_with_logits(logits: Tensor, targets: Tensor, *, reduction: str = "mean") -> Tensor:
+    """Binary cross entropy on raw scores x (logits), targets t in [0, 1].
+
+    With p = sigmoid(x), -[t log p + (1 - t) log(1 - p)] simplifies to
+
+        max(x, 0) - x * t + log(1 + e^-|x|)
+
+    which never takes the log of 0 or overflows e^x, unlike computing p
+    first. The gradient is simply sigmoid(x) - t. ``reduction`` is "mean"
+    (over all values) or "sum".
+    """
+
+    _require_same_shape(logits, targets)
+    if reduction not in ("mean", "sum"):
+        raise ValueError("reduction must be 'mean' or 'sum'")
+    total = kernels.bce_with_logits_sum(logits.data, targets.data)
+    scale = 1.0 / logits.numel if reduction == "mean" else 1.0
+    out = _op_result([total * scale], (1,), (logits, targets), "bce_with_logits")
+
+    def _backward() -> None:
+        g = _grad_data(out)[0] * scale
+        difference = kernels.add(kernels.sigmoid(logits.data), kernels.scale(targets.data, -1.0))
+        if logits.requires_grad:
+            _add_grad(logits, kernels.scale(difference, g))
+        if targets.requires_grad:   # d/dt = -x
+            _add_grad(targets, kernels.scale(logits.data, -g))
+
+    _set_backward(out, _backward)
+    return out
+
+
 def softmax_cross_entropy(logits: Tensor, targets: Tensor | list[int]) -> Tensor:
     """Mean softmax cross entropy for 2D class logits."""
 

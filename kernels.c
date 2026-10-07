@@ -597,3 +597,18 @@ void sigmoid_backward(const real *y, const real *grad, real *dx, long count)
 {
     for (long i = 0; i < count; i++) dx[i] = grad[i] * y[i] * (1.0 - y[i]);
 }
+
+/*
+ * Binary cross entropy on logits, summed:
+ *     sum of max(x, 0) - x * t + log(1 + e^-|x|)
+ * (the stable form of -[t log p + (1 - t) log(1 - p)] with p = sigmoid(x)).
+ */
+double bce_with_logits_sum(const real *x, const real *t, long count)
+{
+    double total = 0.0;
+    for (long i = 0; i < count; i++) {
+        double value = x[i];
+        total += (value > 0.0 ? value : 0.0) - value * t[i] + log1p(exp(-fabs(value)));
+    }
+    return total;
+}

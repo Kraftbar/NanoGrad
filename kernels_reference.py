@@ -275,6 +275,10 @@ def sum_repeated(x: list[float], outer: int, size: int, inner: int) -> list[floa
     ]
 
 
+def bce_with_logits_sum(x: list[float], t: list[float]) -> float:
+    return math.fsum(max(v, 0.0) - v * target + math.log1p(math.exp(-abs(v))) for v, target in zip(x, t))
+
+
 def relu(x: list[float]) -> list[float]:
     return [value if value > 0.0 else 0.0 for value in x]
 

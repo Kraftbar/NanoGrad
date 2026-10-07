@@ -174,6 +174,8 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.adam_update.argtypes = [pointer] * 5 + [count] + [ctypes.c_double] * 7
     library.tanh_forward.argtypes = [pointer, pointer, count]
     library.relu_forward.argtypes = [pointer, pointer, count]
+    library.bce_with_logits_sum.argtypes = [pointer, pointer, count]
+    library.bce_with_logits_sum.restype = ctypes.c_double
     library.sigmoid_forward.argtypes = [pointer, pointer, count]
     library.sigmoid_backward.argtypes = [pointer, pointer, pointer, count]
     library.batch_norm_channels.argtypes = [pointer] * 8 + [count] * 3 + [ctypes.c_double]
@@ -398,6 +400,13 @@ def sigmoid_backward(y: list[float], grad: list[float]) -> array:
     y_buffer, grad_buffer, dx = _reals(y), _reals(grad), zeros(len(y))
     library.sigmoid_backward(_buffer(y_buffer), _buffer(grad_buffer), _buffer(dx), len(y))
     return dx
+
+
+def bce_with_logits_sum(x: list[float], t: list[float]) -> float:
+    if len(x) != len(t):
+        raise ValueError("bce_with_logits_sum needs equal lengths")
+    x_buffer, t_buffer = _reals(x), _reals(t)
+    return library.bce_with_logits_sum(_buffer(x_buffer), _buffer(t_buffer), len(x))
 
 
 def relu(x: list[float]) -> array:
