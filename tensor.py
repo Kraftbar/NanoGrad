@@ -581,12 +581,42 @@ def _broadcast_index_map(
     return _strided_indices(out_shape, strides)
 
 
+def _repeated_block(
+    out_shape: tuple[int, ...],
+    source_shape: tuple[int, ...],
+) -> tuple[int, int] | None:
+    """``(outer, inner)`` if broadcasting is one block of the source repeated.
+
+    The common broadcasts look like this: a bias (F,) over (N, F), or a conv
+    bias (F, 1, 1) over (B, F, H, W). The source's non-1 axes are one
+    contiguous run matching ``out_shape``, so the output is
+
+        outer copies of [each source value repeated inner times]
+
+    which list repetition builds at C speed. Other patterns return None.
+    """
+
+    padded = (1,) * (len(out_shape) - len(source_shape)) + source_shape
+    kept = [axis for axis, dim in enumerate(padded) if dim != 1]
+    if not kept or kept != list(range(kept[0], kept[-1] + 1)):
+        return None
+    if any(padded[axis] != out_shape[axis] for axis in kept):
+        return None
+    return _numel(out_shape[: kept[0]]), _numel(out_shape[kept[-1] + 1 :])
+
+
 def _expand(tensor: Tensor, out_shape: tuple[int, ...]) -> list[float]:
     """Values of ``tensor`` laid out over ``out_shape`` (no copy if equal)."""
 
     if tensor.shape == out_shape:
         return tensor.data
     data = tensor.data
+    block = _repeated_block(out_shape, tensor.shape)
+    if block is not None:
+        outer, inner = block
+        if inner == 1:
+            return data * outer
+        return [value for value in data for _ in range(inner)] * outer
     return [data[index] for index in _broadcast_index_map(out_shape, tensor.shape)]
 
 
@@ -599,6 +629,17 @@ def _reduce_to_shape(
 
     if out_shape == source_shape:
         return grad
+    block = _repeated_block(out_shape, source_shape)
+    if block is not None:
+        # Source value s received grad at positions (o * size + s) * inner + i.
+        outer, inner = block
+        size = _numel(source_shape)
+        if inner == 1:
+            return [sum(grad[s::size]) for s in range(size)]
+        return [
+            sum(sum(grad[(o * size + s) * inner : (o * size + s + 1) * inner]) for o in range(outer))
+            for s in range(size)
+        ]
     source_grad = [0.0] * _numel(source_shape)
     for index, value in zip(_broadcast_index_map(out_shape, source_shape), grad):
         source_grad[index] += value
@@ -700,11 +741,11 @@ def _sigmoid(value: float) -> float:
 def tensor_tanh(tensor: Tensor) -> Tensor:
     """Elementwise hyperbolic tangent: dy/dx = 1 - y^2."""
 
-    out_data = [math.tanh(value) for value in tensor.data]
+    out_data = kernels.tanh(tensor.data)
     return _unary(
         tensor,
         out_data,
-        lambda grad: [g * (1.0 - y * y) for g, y in zip(grad, out_data)],
+        lambda grad: kernels.tanh_backward(out_data, grad),
         "tanh",
     )
 
@@ -1260,7 +1301,10 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
     image_size = channels * image_rows * image_cols
 
     # im2col: every image becomes a (P x K) matrix of patches.
-    patches = kernels.gather_indexed(image.data, patch_index, batches=batches, image_size=image_size)
+    # (scratch: patches only ever feed other kernels, so they can stay in C.)
+    patches = kernels.gather_indexed(
+        image.data, patch_index, batches=batches, image_size=image_size, scratch=True,
+    )
     sizes = dict(batches=batches, m=filters, k=patch_size, n=positions)
 
     # out_b = kernels (O x K) @ patches_b^T  ->  (O x P) per image
@@ -1284,7 +1328,7 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
             d_patches = kernels.gemm(
                 grad, kernel.data, batches=batches, m=positions, k=filters, n=patch_size,
                 a_step=filters * positions, b_step=0, c_step=positions * patch_size,
-                trans_a=True,
+                trans_a=True, scratch=True,
             )
             _add_grad(image, kernels.scatter_add_indexed(
                 d_patches, patch_index, batches=batches, image_size=image_size,
@@ -1384,56 +1428,25 @@ def avg_pool2d(
 ) -> Tensor:
     """Average-pool a 2D tensor or each channel in a 3D/4D tensor.
 
-    Written as a sum of shifted images: for every offset (dr, dc) inside the
-    window, add the input sampled at (stride * out + offset). Each term is a
-    strided slice of one input row, so the work happens in list slices
-    rather than per-pixel Python loops:
+    Like convolution, pooling reads the image through an index table that
+    lists every window's pixels (see ``_pool2d_window_index``):
 
-        out[r, c] = (1 / n) * sum over (dr, dc) of image[sr*r + dr, sc*c + dc]
+        out[plane, w] = (1 / n) * sum of the n pixels in window w
+
+    and the backward pass hands each pixel 1/n of its window's gradient.
     """
 
-    planes, out_shape, (stride_rows, stride_cols) = _pool2d_setup(
-        "avg_pool2d", image, window, stride
+    planes, out_shape, stride = _pool2d_setup("avg_pool2d", image, window, stride)
+    sizes = dict(
+        planes=planes,
+        plane_size=image.shape[-2] * image.shape[-1],
+        window_size=window[0] * window[1],
     )
-    image_cols = image.shape[-1]
-    out_rows, out_cols = out_shape[-2:]
-    plane_size = image.shape[-2] * image_cols
-    window_rows, window_cols = window
-    scale = 1 / (window_rows * window_cols)
-    source = image.data
-
-    def row_slice(plane: int, out_row: int, d_row: int, d_col: int) -> slice:
-        start = plane * plane_size + (out_row * stride_rows + d_row) * image_cols + d_col
-        return slice(start, start + (out_cols - 1) * stride_cols + 1, stride_cols)
-
-    data: list[float] = []
-    for plane in range(planes):
-        for out_row in range(out_rows):
-            total = [0.0] * out_cols
-            for d_row in range(window_rows):
-                for d_col in range(window_cols):
-                    shifted = source[row_slice(plane, out_row, d_row, d_col)]
-                    total = [a + b for a, b in zip(total, shifted)]
-            data.extend([value * scale for value in total])
-
-    out = _op_result(data, out_shape, (image,), "avg_pool2d")
+    index = _pool2d_window_index(image.shape[-2:], window, stride)
+    out = _op_result(kernels.window_mean(image.data, index, **sizes), out_shape, (image,), "avg_pool2d")
 
     def _backward() -> None:
-        # Every pixel in a window gets an equal share of that window's grad,
-        # i.e. the same shifted slices, now scattered back.
-        grad = _grad_data(out)
-        image_grad = [0.0] * image.numel
-        for plane in range(planes):
-            for out_row in range(out_rows):
-                start = (plane * out_rows + out_row) * out_cols
-                share = [value * scale for value in grad[start : start + out_cols]]
-                for d_row in range(window_rows):
-                    for d_col in range(window_cols):
-                        target = row_slice(plane, out_row, d_row, d_col)
-                        image_grad[target] = [
-                            a + b for a, b in zip(image_grad[target], share)
-                        ]
-        _add_grad(image, image_grad)
+        _add_grad(image, kernels.window_mean_backward(_grad_data(out), index, **sizes))
 
     _set_backward(out, _backward)
     return out
@@ -1451,33 +1464,14 @@ def max_pool2d(
     maximum in row-major order.
     """
 
-    planes, out_shape, (stride_rows, stride_cols) = _pool2d_setup(
-        "max_pool2d", image, window, stride
+    planes, out_shape, stride = _pool2d_setup("max_pool2d", image, window, stride)
+    index = _pool2d_window_index(image.shape[-2:], window, stride)
+    data, max_indices = kernels.window_max(
+        image.data, index,
+        planes=planes,
+        plane_size=image.shape[-2] * image.shape[-1],
+        window_size=window[0] * window[1],
     )
-    plane_size = image.shape[-2] * image.shape[-1]
-    windows = _pool2d_windows(
-        image.shape[-1],
-        window[0],
-        window[1],
-        stride_rows,
-        stride_cols,
-        out_shape[-2],
-        out_shape[-1],
-    )
-    source = image.data
-
-    data: list[float] = []
-    max_indices: list[int] = []
-    for plane in range(planes):
-        offset = plane * plane_size
-        for indices in windows:
-            best_index = offset + indices[0]
-            for index in indices[1:]:
-                if source[offset + index] > source[best_index]:
-                    best_index = offset + index
-            data.append(source[best_index])
-            max_indices.append(best_index)
-
     out = _op_result(data, out_shape, (image,), "max_pool2d")
 
     def _backward() -> None:
@@ -1525,25 +1519,23 @@ def _pool2d_setup(
 
 
 @lru_cache(maxsize=64)
-def _pool2d_windows(
-    image_cols: int,
-    window_rows: int,
-    window_cols: int,
-    stride_rows: int,
-    stride_cols: int,
-    out_rows: int,
-    out_cols: int,
-) -> tuple[tuple[int, ...], ...]:
-    """For every output position, the flat indices of its window in a plane."""
+@lru_cache(maxsize=64)
+def _pool2d_window_index(
+    image_shape: tuple[int, int],
+    window: tuple[int, int],
+    stride: tuple[int, int],
+) -> tuple[int, ...]:
+    """Flat plane offsets of every window's pixels, window after window."""
 
+    image_rows, image_cols = image_shape
+    window_rows, window_cols = window
+    stride_rows, stride_cols = stride
     return tuple(
-        tuple(
-            (out_row * stride_rows + row) * image_cols + out_col * stride_cols + col
-            for row in range(window_rows)
-            for col in range(window_cols)
-        )
-        for out_row in range(out_rows)
-        for out_col in range(out_cols)
+        (out_row * stride_rows + row) * image_cols + out_col * stride_cols + col
+        for out_row in range((image_rows - window_rows) // stride_rows + 1)
+        for out_col in range((image_cols - window_cols) // stride_cols + 1)
+        for row in range(window_rows)
+        for col in range(window_cols)
     )
 
 

@@ -1253,5 +1253,34 @@ class TensorTests(unittest.TestCase):
             Tensor.from_list([1, 2, 3]) / 0
 
 
+
+class BroadcastFastPathTests(unittest.TestCase):
+    def test_repeated_block_matches_index_map(self) -> None:
+        import tensor as tensor_module
+
+        cases = [
+            ((4, 3), (3,)),             # row bias
+            ((2, 3, 4, 5), (3, 1, 1)),  # conv bias
+            ((2, 3, 4), (2, 3, 1)),     # trailing repeat only
+            ((2, 3, 4), (1, 3, 4)),     # leading repeat only
+            ((2, 3, 4), (2, 1, 4)),     # not one block: generic path
+            ((2, 3), (1,)),             # scalar-like: generic path
+        ]
+        for out_shape, source_shape in cases:
+            with self.subTest(out_shape=out_shape, source_shape=source_shape):
+                count = tensor_module._numel(source_shape)
+                source = Tensor([float(i + 1) for i in range(count)], source_shape)
+                index_map = tensor_module._broadcast_index_map(out_shape, source_shape)
+                self.assertEqual(
+                    tensor_module._expand(source, out_shape),
+                    [source.data[i] for i in index_map],
+                )
+                grad = [float(i % 7) for i in range(len(index_map))]
+                expected = [0.0] * count
+                for i, value in zip(index_map, grad):
+                    expected[i] += value
+                self.assertEqual(tensor_module._reduce_to_shape(grad, out_shape, source_shape), expected)
+
+
 if __name__ == "__main__":
     unittest.main()

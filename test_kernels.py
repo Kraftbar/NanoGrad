@@ -106,6 +106,44 @@ class KernelBackendTests(unittest.TestCase):
         self.assertListsClose(python, c)
         self.assertAlmostEqual(python[5], grad[1] + grad[2])   # index 5 appears twice
 
+    def test_scratch_results_feed_other_kernels(self) -> None:
+        image = values(2 * 12, 14)
+        index = [0, 5, 5, 11]
+        scratch = kernels.gather_indexed(image, index, batches=2, image_size=12, scratch=True)
+        product = kernels.gemm(scratch, [1.0] * 4, batches=2, m=1, k=4, n=1, a_step=4, b_step=0, c_step=1)
+        self.assertIsInstance(product, list)
+        self.assertAlmostEqual(product[1], sum(image[12 + i] for i in index))
+
+    def test_tanh_agrees(self) -> None:
+        x = values(50, 15)
+        grad = values(50, 16)
+        python, c = self.run_both(lambda: kernels.tanh(x))
+        self.assertListsClose(python, c)
+        python_dx, c_dx = self.run_both(lambda: kernels.tanh_backward(python, grad))
+        self.assertListsClose(python_dx, c_dx)
+
+    def test_window_pooling_agrees(self) -> None:
+        # Two 3x4 planes; 2x2 windows with stride 1 overlap, so pixels get
+        # gradient from several windows. Ties pick the first maximum.
+        image = values(2 * 12, 17)
+        image[1] = image[0] = 5.0
+        index = [0, 1, 4, 5, 1, 2, 5, 6, 6, 7, 10, 11]
+        sizes = dict(planes=2, plane_size=12, window_size=4)
+        grad = values(2 * 3, 18)
+
+        python, c = self.run_both(lambda: kernels.window_mean(image, index, **sizes))
+        self.assertListsClose(python, c)
+        self.assertAlmostEqual(python[0], sum(image[i] for i in (0, 1, 4, 5)) / 4)
+        python, c = self.run_both(lambda: kernels.window_mean_backward(grad, index, **sizes))
+        self.assertListsClose(python, c)
+        self.assertAlmostEqual(python[1], (grad[0] + grad[1]) / 4)
+
+        (python_max, python_at), (c_max, c_at) = self.run_both(lambda: kernels.window_max(image, index, **sizes))
+        self.assertListsClose(python_max, c_max)
+        self.assertEqual(python_at, c_at)
+        self.assertEqual(python_at[0], 0)
+        self.assertEqual(python_at[3], 12 + max((0, 1, 4, 5), key=lambda i: image[12 + i]))
+
     def test_unknown_backend(self) -> None:
         with self.assertRaises(ValueError):
             kernels.use_backend("cuda")

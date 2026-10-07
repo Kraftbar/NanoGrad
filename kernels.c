@@ -198,3 +198,65 @@ void scatter_add_indexed(const double *grad, const long *index, double *image_gr
         for (long i = 0; i < count; i++) o[index[i]] += g[i];
     }
 }
+
+/*
+ * tanh, elementwise:  y = tanh(x),  dx = dy * (1 - y^2)
+ */
+void tanh_forward(const double *x, double *y, long count)
+{
+    for (long i = 0; i < count; i++) y[i] = tanh(x[i]);
+}
+
+void tanh_backward(const double *y, const double *grad, double *dx, long count)
+{
+    for (long i = 0; i < count; i++) dx[i] = grad[i] * (1.0 - y[i] * y[i]);
+}
+
+/*
+ * Pooling over windows given by an index table: window w of a plane reads
+ * the plane offsets index[w * window_size ... (w + 1) * window_size - 1].
+ *     mean:  out[p, w] = (1 / window_size) * sum_j plane_p[index[w, j]]
+ *     max:   out[p, w] = max_j plane_p[index[w, j]], and argmax[p, w] is the
+ *            winning pixel's offset in the whole input (first one on ties)
+ */
+void window_mean(const double *image, const long *index, double *out,
+                 long planes, long plane_size, long windows, long window_size)
+{
+    for (long p = 0; p < planes; p++) {
+        const double *in = image + p * plane_size;
+        for (long w = 0; w < windows; w++) {
+            const long *cells = index + w * window_size;
+            double total = 0.0;
+            for (long j = 0; j < window_size; j++) total += in[cells[j]];
+            out[p * windows + w] = total / window_size;
+        }
+    }
+}
+
+void window_mean_backward(const double *grad, const long *index, double *image_grad,
+                          long planes, long plane_size, long windows, long window_size)
+{
+    for (long p = 0; p < planes; p++) {
+        double *g = image_grad + p * plane_size;
+        for (long w = 0; w < windows; w++) {
+            const long *cells = index + w * window_size;
+            double share = grad[p * windows + w] / window_size;
+            for (long j = 0; j < window_size; j++) g[cells[j]] += share;
+        }
+    }
+}
+
+void window_max(const double *image, const long *index, double *out, long *argmax,
+                long planes, long plane_size, long windows, long window_size)
+{
+    for (long p = 0; p < planes; p++) {
+        const double *in = image + p * plane_size;
+        for (long w = 0; w < windows; w++) {
+            const long *cells = index + w * window_size;
+            long best = cells[0];
+            for (long j = 1; j < window_size; j++) if (in[cells[j]] > in[best]) best = cells[j];
+            out[p * windows + w] = in[best];
+            argmax[p * windows + w] = p * plane_size + best;
+        }
+    }
+}
