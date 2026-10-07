@@ -353,8 +353,8 @@ def _op_result(
     pass trusted float lists, so no validation or copy happens here.
 
     A custom op is three steps: compute ``data``, call ``_op_result``, then
-    set ``out._backward`` to a function that reads ``out.grad`` and calls
-    ``_add_grad`` on each parent that requires grad.
+    pass a function that reads ``out.grad`` and calls ``_add_grad`` on each
+    parent that requires grad to ``_set_backward(out, function)``.
     """
 
     out = Tensor.__new__(Tensor)
@@ -368,6 +368,21 @@ def _op_result(
     out._op = op
     out._backward = _no_backward
     return out
+
+
+def _set_backward(out: Tensor, backward: Callable[[], None]) -> None:
+    """Record how to backpropagate through ``out``, if it needs gradients.
+
+    The backward function is a closure that refers back to ``out``. That
+    reference cycle is harmless during training (backward() breaks it), but
+    under ``no_grad`` or for results nobody differentiates it would keep
+    every activation alive until Python's cycle collector happened to run.
+    That collector counts objects, not bytes, so a few big activation lists
+    can pile up into gigabytes first.
+    """
+
+    if out.requires_grad:
+        out._backward = backward
 
 
 def _seed_grad(
@@ -434,7 +449,7 @@ def add(left: Tensor, right: Number | Tensor) -> Tensor:
         def _backward_scalar() -> None:
             _add_grad(left, _grad_data(out))
 
-        out._backward = _backward_scalar
+        _set_backward(out, _backward_scalar)
         return out
 
     out_shape = _broadcast_shape(left.shape, right.shape)
@@ -454,7 +469,7 @@ def add(left: Tensor, right: Number | Tensor) -> Tensor:
         if right.requires_grad:
             _add_grad(right, _reduce_to_shape(grad, out_shape, right.shape))
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -479,7 +494,7 @@ def subtract(left: Tensor, right: Tensor) -> Tensor:
             negated = [-value for value in grad]
             _add_grad(right, _reduce_to_shape(negated, out_shape, right.shape))
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -500,7 +515,7 @@ def multiply(left: Tensor, right: Number | Tensor) -> Tensor:
         def _backward_scalar() -> None:
             _add_grad(left, [right * grad for grad in _grad_data(out)])
 
-        out._backward = _backward_scalar
+        _set_backward(out, _backward_scalar)
         return out
 
     out_shape = _broadcast_shape(left.shape, right.shape)
@@ -522,7 +537,7 @@ def multiply(left: Tensor, right: Number | Tensor) -> Tensor:
             right_grad = [g * a for g, a in zip(grad, left_values)]
             _add_grad(right, _reduce_to_shape(right_grad, out_shape, right.shape))
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -604,7 +619,7 @@ def _unary(
     def _backward() -> None:
         _add_grad(tensor, input_grad(_grad_data(out)))
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -827,7 +842,7 @@ def matmul(left: Tensor, right: Tensor) -> Tensor:
                 trans_a=True,
             ))
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -912,7 +927,7 @@ def reshape(tensor: Tensor, shape: tuple[int, ...]) -> Tensor:
     def _backward() -> None:
         _add_grad(tensor, _grad_data(out))
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -946,7 +961,7 @@ def permute(tensor: Tensor, axes: tuple[int, ...]) -> Tensor:
             tensor_grad[index] = value
         _add_grad(tensor, tensor_grad)
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -1045,7 +1060,7 @@ def _join_chunks(
             if tensor.requires_grad:
                 _add_grad(tensor, tensor_grad)
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -1076,7 +1091,7 @@ def dropout(tensor: Tensor, p: float, rng: random.Random) -> Tensor:
     def _backward() -> None:
         _add_grad(tensor, [g * scale for g, scale in zip(_grad_data(out), mask)])
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -1115,7 +1130,7 @@ def gather_rows(table: Tensor, indices: Sequence[int]) -> Tensor:
             )
         _add_grad(table, table_grad)
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -1133,7 +1148,7 @@ def tensor_sum(tensor: Tensor, axis: int | None = None) -> Tensor:
         def _backward_all() -> None:
             _add_grad(tensor, [_grad_data(out)[0]] * len(tensor.data))
 
-        out._backward = _backward_all
+        _set_backward(out, _backward_all)
         return out
 
     axis = _normalize_axis(axis, len(tensor.shape))
@@ -1154,7 +1169,7 @@ def tensor_sum(tensor: Tensor, axis: int | None = None) -> Tensor:
             tensor_grad[lane] = [value] * size
         _add_grad(tensor, tensor_grad)
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -1201,7 +1216,7 @@ def tensor_softmax(tensor: Tensor, axis: int = -1) -> Tensor:
             ]
         _add_grad(tensor, tensor_grad)
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -1316,7 +1331,7 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
         if image_grad is not None:
             _add_grad(image, image_grad)
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -1460,7 +1475,7 @@ def avg_pool2d(
                         ]
         _add_grad(image, image_grad)
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
@@ -1512,7 +1527,7 @@ def max_pool2d(
             image_grad[image_index] += out_grad
         _add_grad(image, image_grad)
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 

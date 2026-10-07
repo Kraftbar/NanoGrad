@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import random
 
-from tensor import Tensor, _add_grad, _grad_data, _op_result, concat, matmul
+from tensor import Tensor, _add_grad, _grad_data, _op_result, _set_backward, concat, matmul
 from tensor_nn import (
     TensorDropout,
     TensorEmbedding,
@@ -671,7 +671,7 @@ def _last_time_step(sequence: Tensor) -> Tensor:
                 sequence_grad[source_start + offset] += grad[grad_start + offset]
         _add_grad(sequence, sequence_grad)
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 

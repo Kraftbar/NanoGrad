@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from tensor import (
+    _set_backward,
     Tensor,
     _add_grad,
     _grad_data,
@@ -547,7 +548,7 @@ def layer_norm(
         if bias.requires_grad:
             _add_grad(bias, bias_grad)
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 

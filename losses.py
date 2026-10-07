@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from tensor import Tensor, _add_grad, _grad_data, _op_result
+from tensor import Tensor, _add_grad, _grad_data, _op_result, _set_backward
 
 
 def mse_loss(predictions: Tensor, targets: Tensor) -> Tensor:
@@ -69,7 +69,7 @@ def softmax_cross_entropy(logits: Tensor, targets: Tensor | list[int]) -> Tensor
             grad[row * cols + target] -= 1.0
         _add_grad(logits, [value * scale for value in grad])
 
-    out._backward = _backward
+    _set_backward(out, _backward)
     return out
 
 
