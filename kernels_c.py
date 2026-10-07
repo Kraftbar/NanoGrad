@@ -174,6 +174,9 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.add_vectors.argtypes = [pointer, pointer, pointer, count]
     library.multiply_vectors.argtypes = [pointer, pointer, pointer, count]
     library.scale_vector.argtypes = [pointer, ctypes.c_double, pointer, count]
+    library.add_scaled.argtypes = [pointer, pointer, ctypes.c_double, pointer, count]
+    library.sum_of_squares.argtypes = [pointer, count]
+    library.sum_of_squares.restype = ctypes.c_double
     library.adam_update.argtypes = [pointer] * 5 + [count] + [ctypes.c_double] * 7
     library.tanh_forward.argtypes = [pointer, pointer, count]
     library.relu_forward.argtypes = [pointer, pointer, count]
@@ -404,6 +407,18 @@ def scale(x: list[float], factor: float) -> array:
     x_buffer, out = _reals(x), zeros(len(x))
     library.scale_vector(_buffer(x_buffer), factor, _buffer(out), len(x))
     return out
+
+
+def add_scaled(x: list[float], y: list[float], factor: float) -> array:
+    if len(x) != len(y):
+        raise ValueError("add_scaled needs equal lengths")
+    x_buffer, y_buffer, out = _reals(x), _reals(y), zeros(len(x))
+    library.add_scaled(_buffer(x_buffer), _buffer(y_buffer), factor, _buffer(out), len(x))
+    return out
+
+
+def sum_of_squares(x: list[float]) -> float:
+    return library.sum_of_squares(_buffer(_reals(x)), len(x))
 
 
 def adam_update(w, grad, m, v, *hyperparameters) -> tuple[array, array, array]:

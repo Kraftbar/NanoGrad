@@ -603,6 +603,20 @@ void scale_vector(const real *x, double factor, real *out, long count)
     for (long i = 0; i < count; i++) out[i] = x[i] * factor;
 }
 
+/* out = x + factor * y: an SGD step without a temporary for factor * y */
+void add_scaled(const real *x, const real *y, double factor, real *out, long count)
+{
+    for (long i = 0; i < count; i++) out[i] = x[i] + factor * y[i];
+}
+
+/* sum of x[i]^2, accumulated in double (for gradient norms) */
+double sum_of_squares(const real *x, long count)
+{
+    double total = 0.0;
+    for (long i = 0; i < count; i++) total += (double) x[i] * x[i];
+    return total;
+}
+
 /*
  * One Adam step for one parameter tensor, in the same arithmetic order as
  * the Python reference in kernels.py:

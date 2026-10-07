@@ -306,6 +306,14 @@ def scale(x: list[float], factor: float) -> list[float]:
     return [value * factor for value in x]
 
 
+def add_scaled(x: list[float], y: list[float], factor: float) -> list[float]:
+    return [a + factor * b for a, b in zip(x, y)]
+
+
+def sum_of_squares(x: list[float]) -> float:
+    return math.fsum(value * value for value in x)
+
+
 def adam_update(
     w: list[float], grad: list[float], m: list[float], v: list[float],
     grad_scale: float, beta1: float, beta2: float, decay: float,

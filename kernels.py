@@ -283,6 +283,18 @@ def scale(x: list[float], factor: float) -> list[float]:
     return (kernels_c.scale if BACKEND == "c" else reference.scale)(x, factor)
 
 
+def add_scaled(x: list[float], y: list[float], factor: float) -> list[float]:
+    """``x + factor * y``, elementwise (one pass, no temporary)."""
+
+    return (kernels_c.add_scaled if BACKEND == "c" else reference.add_scaled)(x, y, factor)
+
+
+def sum_of_squares(x: list[float]) -> float:
+    """The sum of every value squared (a squared norm)."""
+
+    return (kernels_c.sum_of_squares if BACKEND == "c" else reference.sum_of_squares)(x)
+
+
 def adam_update(
     w: list[float], grad: list[float], m: list[float], v: list[float], *,
     grad_scale: float, beta1: float, beta2: float, decay: float,

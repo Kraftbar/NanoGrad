@@ -19,8 +19,8 @@ class OptimizerTests(unittest.TestCase):
 
         TensorSGD([parameter], lr=1.0, max_grad_norm=1.0).step()
 
-        self.assertAlmostEqual(parameter.data[0], 0.4)
-        self.assertAlmostEqual(parameter.data[1], 0.2)
+        self.assertAlmostEqual(parameter.data[0], 0.4, places=6)        # scale 1 / (5 + 1e-6), as in PyTorch
+        self.assertAlmostEqual(parameter.data[1], 0.2, places=6)
 
     def test_tensor_sgd_skips_clipping_small_gradient_norm(self) -> None:
         parameter = Tensor.from_list([1.0, 1.0], requires_grad=True)

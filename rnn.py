@@ -36,7 +36,7 @@ import math
 import random
 
 from tensor import Tensor, concat, matmul
-from tensor_nn import TensorEmbedding, TensorLinear, TensorModule
+from tensor_nn import TensorDropout, TensorEmbedding, TensorLinear, TensorModule
 
 
 class LSTM(TensorModule):
@@ -57,7 +57,15 @@ class LSTM(TensorModule):
         self.hidden_weight = uniform((4 * hidden, hidden))    # W_h: previous h -> gates
         self.bias = uniform((4 * hidden,))
 
-    def __call__(self, inputs: Tensor) -> Tensor:
+    def __call__(self, inputs: Tensor, state: tuple[Tensor, Tensor] | None = None) -> Tensor:
+        return self.run(inputs, state)[0]
+
+    def run(self, inputs: Tensor, state: tuple[Tensor, Tensor] | None = None):
+        """Outputs (B, T, H) and the final state (h, c), starting from
+        ``state`` (zeros when None). Feeding the final state, detached, into
+        the next call continues a long text across batches: truncated
+        backpropagation through time."""
+
         batch, length, _ = inputs.shape
         hidden_size = self.hidden
         # The input part of every gate, for all time steps in one product.
@@ -65,8 +73,9 @@ class LSTM(TensorModule):
         steps = input_gates.split([1] * length, axis=1)
 
         hidden_weight_t = self.hidden_weight.T            # transpose once, not every step
-        h = Tensor.zeros((batch, hidden_size))
-        c = Tensor.zeros((batch, hidden_size))
+        if state is None:
+            state = (Tensor.zeros((batch, hidden_size)), Tensor.zeros((batch, hidden_size)))
+        h, c = state
         outputs = []
         for step in steps:
             gates = step.reshape((batch, 4 * hidden_size)) + matmul(h, hidden_weight_t)
@@ -74,7 +83,7 @@ class LSTM(TensorModule):
             c = f.sigmoid() * c + i.sigmoid() * g.tanh()
             h = o.sigmoid() * c.tanh()
             outputs.append(h.reshape((batch, 1, hidden_size)))
-        return concat(outputs, axis=1)
+        return concat(outputs, axis=1), (h, c)
 
     def parameters(self) -> list[Tensor]:
         return [self.input_weight, self.hidden_weight, self.bias]
@@ -116,13 +125,18 @@ class GRU(TensorModule):
         self.input_bias = uniform((3 * hidden,))
         self.hidden_bias = uniform((3 * hidden,))
 
-    def __call__(self, inputs: Tensor) -> Tensor:
+    def __call__(self, inputs: Tensor, state: Tensor | None = None) -> Tensor:
+        return self.run(inputs, state)[0]
+
+    def run(self, inputs: Tensor, state: Tensor | None = None):
+        """Outputs (B, T, H) and the final h, starting from ``state`` (or zeros)."""
+
         batch, length, _ = inputs.shape
         size = self.hidden
         input_parts = matmul(inputs, self.input_weight.T) + self.input_bias      # (B, T, 3H)
         steps = input_parts.split([1] * length, axis=1)
         hidden_weight_t = self.hidden_weight.T
-        h = Tensor.zeros((batch, size))
+        h = Tensor.zeros((batch, size)) if state is None else state
         outputs = []
         for step in steps:
             x_r, x_z, x_n = step.reshape((batch, 3 * size)).split([size] * 3, axis=-1)
@@ -132,7 +146,7 @@ class GRU(TensorModule):
             n = (x_n + r * h_n).tanh()
             h = (1.0 - z) * n + z * h
             outputs.append(h.reshape((batch, 1, size)))
-        return concat(outputs, axis=1)
+        return concat(outputs, axis=1), h
 
     def parameters(self) -> list[Tensor]:
         return [self.input_weight, self.hidden_weight, self.input_bias, self.hidden_bias]
@@ -211,3 +225,79 @@ class CharLSTMModel(TensorModule):
         for layer, layer_state in zip(self.layers, state["layers"], strict=True):
             layer.load_state_dict(layer_state)
         self.head.load_state_dict(state["head"])
+
+
+class WordRNNModel(TensorModule):
+    """PyTorch's ``word_language_model`` example, layer for layer:
+
+        embedding -> dropout -> stacked LSTM/GRU (dropout between layers)
+                  -> dropout -> linear decoder -> next-word scores
+
+    The recurrent state is passed in and returned, so a long text can be
+    read in consecutive windows (truncated backpropagation through time).
+    ``tied=True`` shares the embedding table with the decoder (Press & Wolf,
+    2016), which needs embedding_dim == hidden.
+    """
+
+    def __init__(
+        self,
+        vocab_size: int,
+        *,
+        embedding_dim: int = 200,
+        hidden: int = 200,
+        num_layers: int = 2,
+        cell: str = "lstm",
+        dropout: float = 0.2,
+        tied: bool = False,
+        seed: int = 0,
+    ) -> None:
+        if cell not in ("lstm", "gru"):
+            raise ValueError("cell must be 'lstm' or 'gru'")
+        if tied and embedding_dim != hidden:
+            raise ValueError("tied weights need embedding_dim == hidden")
+        layer_type = LSTM if cell == "lstm" else GRU
+        rng = random.Random(seed)
+
+        def uniform(shape: tuple[int, ...], bound: float = 0.1) -> Tensor:      # the example's init
+            return Tensor([rng.uniform(-bound, bound) for _ in range(math.prod(shape))], shape, requires_grad=True)
+
+        self.vocab_size = vocab_size
+        self.tied = tied
+        self.embedding = TensorEmbedding(vocab_size, embedding_dim, weight=uniform((vocab_size, embedding_dim)))
+        self.layers = [
+            layer_type(embedding_dim if index == 0 else hidden, hidden, seed=seed + 1 + index)
+            for index in range(num_layers)
+        ]
+        self.decoder = TensorLinear(
+            hidden, vocab_size,
+            weight=self.embedding.weight if tied else uniform((vocab_size, hidden)),
+        )
+        self.dropouts = [TensorDropout(dropout, seed=seed + 100 + index) for index in range(num_layers + 1)]
+
+    def __call__(self, indices, state: list | None = None):
+        """Scores (batch, time, vocab) and the new per-layer states."""
+
+        state = state or [None] * len(self.layers)
+        hidden = self.dropouts[0](self.embedding(indices))
+        new_state = []
+        for index, layer in enumerate(self.layers):
+            hidden, layer_state = layer.run(hidden, state[index])
+            new_state.append(layer_state)
+            hidden = self.dropouts[index + 1](hidden)     # between layers, and before the decoder
+        return self.decoder(hidden), new_state
+
+    def parameters(self) -> list[Tensor]:
+        decoder = [self.decoder.bias] if self.tied else self.decoder.parameters()
+        return [
+            *self.embedding.parameters(),
+            *[parameter for layer in self.layers for parameter in layer.parameters()],
+            *decoder,
+        ]
+
+
+def detach_state(state):
+    """Cut a recurrent state off from the graph that produced it."""
+
+    if isinstance(state, Tensor):
+        return state.detach()
+    return type(state)(detach_state(part) for part in state) if state is not None else None

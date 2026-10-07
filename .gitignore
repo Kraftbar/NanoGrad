@@ -34,3 +34,6 @@ data/tinyshakespeare/input.txt
 
 # Training runs and benchmark logs (results are summarized in docs/)
 runs/
+
+# WikiText-2 (pytorch/examples word_language_model data)
+data/wikitext-2/

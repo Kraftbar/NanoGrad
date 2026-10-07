@@ -341,19 +341,10 @@ class NanoGPTRunner:
         return logits[0, -1].tolist()
 
     def _clip_gradients(self) -> None:
-        """Global-norm clipping written exactly like NanoGrad's optimizer.
+        """torch's own global-norm clipping (NanoGrad's optimizer uses the same rule)."""
 
-        (torch's clip_grad_norm_ divides by norm + 1e-6, a tiny difference
-        that would otherwise show up in the shared-init curves.)
-        """
-
-        if self.max_grad_norm is None:
-            return
-        grads = [p.grad for p in self.parameters if p.grad is not None]
-        norm = math.sqrt(sum(float((grad * grad).sum()) for grad in grads))
-        if norm > self.max_grad_norm:
-            for grad in grads:
-                grad.mul_(self.max_grad_norm / norm)
+        if self.max_grad_norm is not None:
+            self.torch.nn.utils.clip_grad_norm_([p for p in self.parameters if p.grad is not None], self.max_grad_norm)
 
 
 # ---------------------------------------------------------------------------

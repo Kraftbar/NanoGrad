@@ -76,16 +76,20 @@ class TensorSGD:
         for index, parameter in enumerate(self.parameters):
             if parameter.grad is None:
                 continue
-            g = kernels.scale(parameter.grad, grad_scale)
-            if _uses_weight_decay(parameter, self.weight_decay, self.weight_decay_min_ndim):
-                g = kernels.add(g, kernels.scale(parameter.data, self.weight_decay))
+            decays = _uses_weight_decay(parameter, self.weight_decay, self.weight_decay_min_ndim)
+            if not self.momentum and not decays:        # plain SGD: w - lr * scale * grad, in one pass
+                parameter.data = kernels.add_scaled(parameter.data, parameter.grad, -self.lr * grad_scale)
+                continue
+            g = parameter.grad if grad_scale == 1.0 else kernels.scale(parameter.grad, grad_scale)
+            if decays:
+                g = kernels.add_scaled(g, parameter.data, self.weight_decay)
             direction = g
             if self.momentum:
                 buffer = self._buffers[index]
-                buffer = g if buffer is None else kernels.add(kernels.scale(buffer, self.momentum), g)
+                buffer = g if buffer is None else kernels.add_scaled(g, buffer, self.momentum)
                 self._buffers[index] = buffer
-                direction = kernels.add(g, kernels.scale(buffer, self.momentum)) if self.nesterov else buffer
-            parameter.data = kernels.add(parameter.data, kernels.scale(direction, -self.lr))
+                direction = kernels.add_scaled(g, buffer, self.momentum) if self.nesterov else buffer
+            parameter.data = kernels.add_scaled(parameter.data, direction, -self.lr)
 
 
 class TensorAdam:
@@ -189,12 +193,10 @@ def _global_grad_scale(
     for parameter in parameters:
         if parameter.grad is None:
             continue
-        grad_norm_sq += math.fsum(kernels.multiply(parameter.grad, parameter.grad))
+        grad_norm_sq += kernels.sum_of_squares(parameter.grad)
 
-    grad_norm = math.sqrt(grad_norm_sq)
-    if grad_norm == 0.0 or grad_norm <= max_grad_norm:
-        return 1.0
-    return max_grad_norm / grad_norm
+    # PyTorch's clip_grad_norm_ rule (with its 1e-6), so runs can be compared.
+    return min(1.0, max_grad_norm / (math.sqrt(grad_norm_sq) + 1e-6))
 
 
 def _uses_weight_decay(
