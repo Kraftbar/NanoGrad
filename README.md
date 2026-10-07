@@ -83,7 +83,8 @@ modules should prove that the core works on increasingly realistic checks.
   ([how today's pieces map onto them](./docs/camera_geometry.md#how-this-maps-to-the-reference-points))
 - [x] [Two-view bundle adjustment and RANSAC on the synthetic scene](./docs/camera_geometry.md#results-synthetic-matches-pose_demopy)
 - [x] [Corner detection and matching on a rendered image pair](./docs/camera_geometry.md#results-rendered-image-pair-image_pair_demopy)
-- [ ] Track points into a third view (PnP) to reject epipolar-consistent mismatches
+- [x] [Track points into a third view (PnP) to reject epipolar-consistent mismatches](./docs/camera_geometry.md#results-a-third-view-three_view_demopy)
+- [ ] Chain frames into a small visual-odometry loop (PnP + sliding-window BA)
 - [ ] Corner detection and matching on real camera images
 
 NanoGrad does not aim to maximize benchmark scores by hiding complexity,
@@ -153,10 +154,11 @@ language_benchmark.py # tiny transformer timing check
 linalg.py        # small list-of-lists linear algebra (solve, eigen, SVD)
 geometry.py      # pinhole camera, rotations, triangulation, PnP, essential matrix
 ransac.py        # robust estimation: RANSAC for PnP and two-view geometry
-bundle_adjustment.py # two-view bundle adjustment (Schur complement, Huber)
+bundle_adjustment.py # multi-view bundle adjustment (Schur complement, Huber)
 features.py      # Harris corners, patch descriptors, matching, PGM files
 pose_demo.py     # synthetic-scene camera pose estimation demo
 image_pair_demo.py # rendered image pair -> corners -> matches -> pose
+three_view_demo.py # third view: tracks, PnP, three-view bundle adjustment
 ```
 
 ## Reference Implementations
@@ -187,6 +189,7 @@ python3 char_compare.py
 python3 language_benchmark.py --repeat 1
 python3 pose_demo.py --outliers 0.3
 python3 image_pair_demo.py
+python3 three_view_demo.py
 ```
 
 The core has no third-party dependencies. Only `nanogpt_compare.py` needs

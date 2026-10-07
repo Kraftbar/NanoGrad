@@ -28,10 +28,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bundle_adjustment import two_view_bundle_adjustment
-from features import Corner, harris_corners, match_descriptors, patch_descriptor, save_pgm
+from features import Corner, Match, harris_corners, match_descriptors, patch_descriptor, save_pgm
 from geometry import PinholeCamera, Pose, rotation_angle_degrees, triangulate_matches
 from linalg import Vector, dot, norm, normalize, transpose
-from ransac import ransac_relative_pose
+from ransac import RansacResult, ransac_relative_pose
 from tensor import Tensor
 
 
@@ -179,36 +179,51 @@ def true_point(planes: list[TiledPlane], camera: PinholeCamera, pixel: Vector) -
 # ---------------------------------------------------------------------------
 
 
-def run_pipeline(
+@dataclass(frozen=True)
+class Features:
+    """Corners of one image and their patch descriptors (None near borders)."""
+
+    corners: list[Corner]
+    descriptors: list[list[float] | None]
+
+
+@dataclass(frozen=True)
+class TwoViewReconstruction:
+    """Relative pose and 3D points from matched pixels in two images."""
+
+    ransac_pose: Pose            # RANSAC eight-point estimate
+    ransac: RansacResult         # its inliers (indices into the matches)
+    pose: Pose                   # after bundle adjustment
+    points: list[Vector]         # one per kept match, first camera at the origin
+    kept: list[int]              # indices into the matches
+    triangulated: int            # RANSAC inliers in front of both cameras
+    rmse_px: float
+
+
+def detect(image: Tensor, *, max_corners: int = 250, patch_radius: int = 7) -> Features:
+    corners = harris_corners(image, max_corners=max_corners)
+    return Features(corners, [patch_descriptor(image, corner, radius=patch_radius) for corner in corners])
+
+
+def match_features(first: Features, second: Features) -> tuple[list[Match], list[Vector], list[Vector]]:
+    """Matches plus the matched pixel positions in each image."""
+
+    matches = match_descriptors(first.descriptors, second.descriptors)
+    first_pixels = [pixel_center(first.corners[m.first]) for m in matches]
+    second_pixels = [pixel_center(second.corners[m.second]) for m in matches]
+    return matches, first_pixels, second_pixels
+
+
+def reconstruct_two_view(
+    camera: PinholeCamera,
+    first_pixels: list[Vector],
+    second_pixels: list[Vector],
     *,
-    camera: PinholeCamera = CAMERA,
-    max_corners: int = 250,
-    patch_radius: int = 7,
     threshold_px: float = 1.5,
     huber_px: float = 0.5,
     seed: int = 0,
-    output_dir: Path | None = None,
-) -> dict:
-    planes = default_scene()
-    first_image = render(camera, Pose.identity(), planes, seed=seed)
-    second_image = render(camera, SECOND_POSE, planes, seed=seed + 1)
-
-    first_corners = harris_corners(first_image, max_corners=max_corners)
-    second_corners = harris_corners(second_image, max_corners=max_corners)
-    matches = match_descriptors(
-        [patch_descriptor(first_image, corner, radius=patch_radius) for corner in first_corners],
-        [patch_descriptor(second_image, corner, radius=patch_radius) for corner in second_corners],
-    )
-    first_pixels = [pixel_center(first_corners[m.first]) for m in matches]
-    second_pixels = [pixel_center(second_corners[m.second]) for m in matches]
-
-    # Grade matches with ground truth: project the true 3D point seen at the
-    # first corner into the second image and measure the distance.
-    match_errors = []
-    for first, second in zip(first_pixels, second_pixels):
-        projected = camera.project(SECOND_POSE.apply(true_point(planes, camera, first)))
-        match_errors.append(math.dist(projected, second) if projected else math.inf)
-    correct = [error < 2.0 for error in match_errors]
+) -> TwoViewReconstruction:
+    """RANSAC relative pose -> triangulation -> robust bundle adjustment."""
 
     first_normalized = [camera.normalize(pixel) for pixel in first_pixels]
     second_normalized = [camera.normalize(pixel) for pixel in second_pixels]
@@ -233,14 +248,79 @@ def run_pipeline(
         huber_px=huber_px,
         reject_px=threshold_px,
     )
-    inliers = [inliers[k] for k in adjusted.kept]
+    return TwoViewReconstruction(
+        ransac_pose=relative,
+        ransac=robust,
+        pose=adjusted.pose,
+        points=adjusted.points,
+        kept=[inliers[k] for k in adjusted.kept],
+        triangulated=len(triangulated),
+        rmse_px=adjusted.history[-1].rmse,
+    )
+
+
+def direction_error_degrees(estimate: Vector, truth: Vector) -> float:
+    cosine = dot(normalize(estimate), normalize(truth))
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+
+
+def match_is_correct(
+    camera: PinholeCamera,
+    planes: list[TiledPlane],
+    pose: Pose,
+    first_pixel: Vector,
+    second_pixel: Vector,
+    *,
+    tolerance_px: float = 2.0,
+) -> bool:
+    """Ground truth: does the first pixel's 3D point land on the second pixel?
+
+    ``first_pixel`` is in the first camera's image (the world origin);
+    ``pose`` is the second camera's true pose.
+    """
+
+    projected = camera.project(pose.apply(true_point(planes, camera, first_pixel)))
+    return projected is not None and math.dist(projected, second_pixel) < tolerance_px
+
+
+def run_pipeline(
+    *,
+    camera: PinholeCamera = CAMERA,
+    max_corners: int = 250,
+    patch_radius: int = 7,
+    threshold_px: float = 1.5,
+    huber_px: float = 0.5,
+    seed: int = 0,
+    output_dir: Path | None = None,
+) -> dict:
+    planes = default_scene()
+    first_image = render(camera, Pose.identity(), planes, seed=seed)
+    second_image = render(camera, SECOND_POSE, planes, seed=seed + 1)
+
+    first = detect(first_image, max_corners=max_corners, patch_radius=patch_radius)
+    second = detect(second_image, max_corners=max_corners, patch_radius=patch_radius)
+    matches, first_pixels, second_pixels = match_features(first, second)
+    correct = [
+        match_is_correct(camera, planes, SECOND_POSE, a, b)
+        for a, b in zip(first_pixels, second_pixels)
+    ]
+
+    result = reconstruct_two_view(
+        camera,
+        first_pixels,
+        second_pixels,
+        threshold_px=threshold_px,
+        huber_px=huber_px,
+        seed=seed,
+    )
+    inliers = result.kept
 
     # Depth check: scale the reconstruction by the true baseline length.
     scale = norm(SECOND_POSE.translation)
     depth_errors = sorted(
         abs(scale * point[2] - true_point(planes, camera, first_pixels[i])[2])
         / true_point(planes, camera, first_pixels[i])[2]
-        for point, i in zip(adjusted.points, inliers)
+        for point, i in zip(result.points, inliers)
     )
 
     if output_dir is not None:
@@ -250,25 +330,22 @@ def run_pipeline(
         save_pgm(output_dir / "first_inliers.pgm", _mark(first_image, [first_pixels[i] for i in inliers]))
         save_pgm(output_dir / "second_inliers.pgm", _mark(second_image, [second_pixels[i] for i in inliers]))
 
-    def direction_error(estimate: Pose) -> float:
-        cosine = dot(normalize(estimate.translation), normalize(SECOND_POSE.translation))
-        return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
-
+    truth = SECOND_POSE
     return {
-        "corners": (len(first_corners), len(second_corners)),
+        "corners": (len(first.corners), len(second.corners)),
         "matches": len(matches),
         "correct_matches": sum(correct),
-        "inliers": len(robust.inliers),
-        "correct_inliers": sum(correct[i] for i in robust.inliers),
-        "triangulated": len(triangulated),
+        "inliers": len(result.ransac.inliers),
+        "correct_inliers": sum(correct[i] for i in result.ransac.inliers),
+        "triangulated": result.triangulated,
         "kept_after_ba": len(inliers),
         "correct_after_ba": sum(correct[i] for i in inliers),
-        "ransac_iterations": robust.iterations,
-        "ransac_rotation_error_deg": rotation_angle_degrees(relative.rotation, SECOND_POSE.rotation),
-        "ransac_direction_error_deg": direction_error(relative),
-        "ba_rotation_error_deg": rotation_angle_degrees(adjusted.pose.rotation, SECOND_POSE.rotation),
-        "ba_direction_error_deg": direction_error(adjusted.pose),
-        "ba_rmse_px": adjusted.history[-1].rmse,
+        "ransac_iterations": result.ransac.iterations,
+        "ransac_rotation_error_deg": rotation_angle_degrees(result.ransac_pose.rotation, truth.rotation),
+        "ransac_direction_error_deg": direction_error_degrees(result.ransac_pose.translation, truth.translation),
+        "ba_rotation_error_deg": rotation_angle_degrees(result.pose.rotation, truth.rotation),
+        "ba_direction_error_deg": direction_error_degrees(result.pose.translation, truth.translation),
+        "ba_rmse_px": result.rmse_px,
         "median_depth_error": depth_errors[len(depth_errors) // 2],
     }
 

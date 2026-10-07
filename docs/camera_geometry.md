@@ -10,7 +10,8 @@ python3 pose_demo.py                    # synthetic matches, known 3D points
 python3 pose_demo.py --outliers 0.3     # 30% wrong matches
 python3 image_pair_demo.py              # rendered images -> corners -> pose
 python3 image_pair_demo.py --output-dir /tmp/pair   # also writes PGM images
-python3 -m unittest test_linalg test_geometry test_ransac test_bundle_adjustment test_features
+python3 three_view_demo.py              # add a third camera: tracks + PnP + 3-view BA
+python3 -m unittest test_linalg test_geometry test_ransac test_bundle_adjustment test_features test_three_view
 ```
 
 ## Files
@@ -20,10 +21,11 @@ python3 -m unittest test_linalg test_geometry test_ransac test_bundle_adjustment
 | `linalg.py` | list-of-lists matrices: Gaussian elimination, inverse, Jacobi eigen solver, 3x3 SVD, nearest rotation |
 | `geometry.py` | rotations (Rodrigues), `Pose`, `PinholeCamera`, triangulation, linear PnP, eight-point epipolar/essential matrices, LM pose refinement |
 | `ransac.py` | generic LO-RANSAC, robust PnP, robust two-view geometry with the Sampson distance |
-| `bundle_adjustment.py` | two-view bundle adjustment: Schur complement, gauge fixing, Huber kernel, outlier rejection |
+| `bundle_adjustment.py` | bundle adjustment over any number of views: Schur complement, gauge fixing, Huber kernel, per-observation outlier rejection |
 | `features.py` | Harris corners (built on `conv2d_valid` / `avg_pool2d`), NCC patch descriptors, mutual + ratio-test matching, PGM files |
 | `pose_demo.py` | synthetic two-camera scene with optional wrong matches |
-| `image_pair_demo.py` | ray-cast renderer for a textured scene, plus the full image pipeline |
+| `image_pair_demo.py` | ray-cast renderer for a textured scene, plus the full two-image pipeline |
+| `three_view_demo.py` | tracks through a third image, PnP for the third camera, three-view bundle adjustment |
 | `engine.py` | scalar autograd, with `sin`, `cos`, `sqrt`, and `gradients()` for Jacobians |
 
 ## Conventions
@@ -97,20 +99,25 @@ work reliably:
   low-parallax models enough to lose a third of the real inliers. The
   essential constraint is enforced once, at the end.
 
-**Two-view bundle adjustment.** Refines the second pose *and* every 3D point
-to minimize pixel error in both images. Three ideas:
+**Bundle adjustment.** Refines every camera pose except the first *and*
+every 3D point to minimize the pixel error of every observation (point `i`
+seen at a pixel in view `v`). Three ideas:
 
-- *Schur complement.* Each residual touches the pose and one point, so the
-  normal equations have an arrow shape: a 6x6 pose block, a block-diagonal
+- *Schur complement.* Each residual touches one camera and one point, so
+  the normal equations have an arrow shape: a camera block, a block-diagonal
   3x3-per-point block, and the coupling between them. Eliminating the points
-  leaves a 6x6 system, and then each point update is its own 3x3 solve. A
-  test checks this against the dense `(6 + 3N)`-sized solve.
+  leaves a `6 (V - 1)`-sized system, and then each point update is its own
+  3x3 solve. A point couples every pair of cameras that saw it. Tests check
+  this against the dense solve for two and three views.
 - *Gauge.* Scaling the whole scene changes nothing in the images, so after
-  every step the scene is rescaled to keep the baseline length fixed.
+  every step the scene is rescaled to keep camera 1's distance from
+  camera 0 fixed.
 - *Huber kernel and rejection.* Errors above `delta` count linearly, not
   quadratically, solved by reweighting each observation by
-  `min(1, delta / error)`. Points still above a threshold after a round are
-  dropped and the rest are adjusted again.
+  `min(1, delta / error)`. After each round every point drops its *worst*
+  observation if it exceeds a threshold, and the rest are adjusted again.
+  Only the worst one is dropped, because one bad observation drags its point
+  so far that the point's good observations look bad too.
 
 **Corners and matching.** Harris builds the structure tensor from Sobel
 gradients (`conv2d_valid`) summed over a 5x5 window (`avg_pool2d`) and scores
@@ -204,10 +211,50 @@ Three lessons from getting this to work:
    two-view test can catch it. With a short baseline, the translation
    direction is so weakly constrained that four such matches moved it by 24
    degrees. The Huber kernel limits their pull (back to 0.3 degrees in that
-   case). The 4.5-degree seed above is one remaining wrong match. Real
-   systems settle this with a third view.
+   case). The 4.5-degree seed above is one remaining wrong match; the third
+   view (next section) catches it.
 3. **Harris corners sit slightly inside sharp corners** (about 1.4 px for
    an L corner). The bias is the same in both views, so matches still agree.
+
+## Results: A Third View (`three_view_demo.py`)
+
+A third camera (1.2 sideways, turned about 14 degrees) is rendered too.
+Matches from image 2 to image 3 extend the 1-2 matches into tracks, RANSAC
+PnP places camera 3 against the two-view points, and every track whose
+third observation disagrees with that pose is dropped. Then all three
+cameras and all points are bundle adjusted together.
+
+```text
+images 1-2: 114 matches -> 92 reconstructed points (1 from wrong matches)
+  two-view pose 2:  rotation err 0.054 deg, translation direction err 0.37 deg
+images 2-3: 107 matches -> 43 tracks through all three images
+PnP for camera 3: 39 of 43 tracks agree; 4 dropped (0 were wrong 1-2 matches)
+three-view BA: 88 points (1 from wrong matches), reprojection 0.132 px
+  pose 2:  rotation err 0.031 deg, translation direction err 0.10 deg
+  pose 3:  rotation err 0.044 deg, translation err 0.5% (same scale as pose 2)
+  depth:   median error 0.8%
+```
+
+Over render seeds 0 to 3:
+
+| seed | two-view pose 2 direction | three-view pose 2 direction | pose 3 rotation | pose 3 translation | depth |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 0.37 deg | 0.10 deg | 0.044 deg | 0.5% | 0.8% |
+| 1 | 0.07 deg | 0.01 deg | 0.045 deg | 0.5% | 0.6% |
+| 2 | 4.47 deg | 0.41 deg | 0.148 deg | 1.3% | 0.7% |
+| 3 | 0.12 deg | 0.28 deg | 0.127 deg | 1.1% | 0.9% |
+
+Seed 2 is the case two views could not fix: its one wrong 1-2 match lay on
+its epipolar line. It was tracked into image 3, disagreed with PnP, and was
+dropped. That cut the translation-direction error tenfold. On the other
+seeds the single remaining wrong match was not tracked into image 3 (only
+about 45% of points are), so the third view could not test it. It also did
+little harm there.
+
+Pose 3's translation error is a full 3D error, not just a direction. Camera
+3 is placed against points whose scale was set by cameras 1 and 2, so all
+three cameras share one scale. Measuring that scale once, from camera 2's
+true baseline, puts camera 3 within about 1% of its true position.
 
 ## How This Maps To The Reference Points
 
@@ -219,16 +266,19 @@ no loop closure. But the pieces above are their core.
 | pinhole projection, `Pose` | camera models, `Sophus::SE3` poses | same, as tensors |
 | features and matching | ORB corners + binary descriptors | none: dense learned correlation |
 | two-view initialization | essential/homography + RANSAC + cheirality | learned flow, no explicit E |
-| frame tracking | PnP + motion-only BA (`refine_pose`) | dense BA layer on flow |
+| frame tracking | PnP + motion-only BA (`refine_pose`, `three_view_demo.py`) | dense BA layer on flow |
 | robust cost | Huber kernel + chi-square outlier rejection in g2o | learned per-pixel confidence weights |
 | Jacobians | hand-derived in g2o | autograd through a differentiable BA |
 | bundle adjustment | local/global BA with Schur complement | differentiable dense BA with Schur complement |
 
 ## Next Gaps
 
-- A third view: track points into a third image and estimate its pose with
-  PnP. This is the natural way to reject epipolar-consistent wrong matches
-  and fix the scale between frame pairs.
+- Longer tracks: only about 45% of points survive into the third image,
+  because each pair is matched independently. Searching for a track's next
+  position near its predicted projection (as ORB-SLAM3's tracking does)
+  would keep many more.
+- A small visual-odometry loop: keep adding frames with PnP, triangulate new
+  points as old ones leave the view, and bundle adjust a sliding window.
 - Homography model for planar scenes. The eight-point algorithm is
   degenerate when every match lies on one plane, which is why the demo
   scene has three.
