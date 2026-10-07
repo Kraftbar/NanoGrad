@@ -1,128 +1,111 @@
 # Benchmarks Against PyTorch
 
-Two benchmarks compare NanoGrad with PyTorch:
+Every model family in NanoGrad is run on standard benchmarks next to
+PyTorch. Each comparison works the same way: PyTorch builds the same
+architecture (by hand, or with `torch_twin.py`, which walks the NanoGrad
+model and runs each layer with PyTorch's functions), copies NanoGrad's
+initial weights, and trains on the same batches in the same order. In
+float64 the two then compute the same thing, so a comparison checks
+correctness (the weights at the end agree to rounding) and measures
+speed on identical work.
 
-1. a whole model, the classic LeNet CNN on MNIST
-2. individual ops (matmul, conv, LayerNorm, ...) at the shapes real models
-   use, like Baidu's DeepBench
+All runs are on one 4-core Intel Xeon at 2.1 GHz (AVX-512), PyTorch
+2.14 for CPU. Unless a row says otherwise both frameworks use one core
+and float64, and NanoGrad uses its C kernels.
 
-Both check that the numbers are the same before timing anything. All runs
-are on the same 4-core Intel Xeon (2.1 GHz). PyTorch is 2.14 (CPU).
+## Results At A Glance
 
-## LeNet On MNIST
+| benchmark | model | result (NanoGrad = PyTorch) | for reference |
+| --- | --- | --- | --- |
+| MNIST | LeNet-5, 5K parameters, 3 epochs | **98.00%** test accuracy | LeNet-5 paper (1998): 99.05%, 20 epochs |
+| MNIST | small ResNet, 1 epoch | 97.84% | |
+| CIFAR-10 | ResNet-8 (MLPerf Tiny's shape), 78K parameters, 3 epochs | **68.57%** | MLPerf Tiny target: 85% (after much longer training) |
+| CIFAR-10, Fashion-MNIST | LeNet, ResNet, ViT, 2 epochs | [table below](#model-families) | |
+| Penn Treebank | Zaremba et al.'s small LSTM, 13 epochs | running | paper: test perplexity 114.5 |
+| WikiText-2 | PyTorch's `word_language_model` LSTM, 6 epochs | running | |
+| WikiText-2 | 2-layer GPT, same recipe | running | |
+| Tiny Shakespeare | nanoGPT's baby GPT, 2,000 steps | val loss **1.921** | nanoGPT, same recipe: 1.886 |
+| Tiny Shakespeare | BERT-style encoder, masked characters | identical in both | |
+| MNIST | VAE, 3 epochs | **117.3** nats per image (negative ELBO) | |
 
-```bash
-.venv/bin/python mnist_compare.py --epochs 3              # NanoGrad and PyTorch
-python3 mnist_compare.py --frameworks nanograd --workers 4 # NanoGrad on 4 processes
-```
+The Tiny Shakespeare GPT is compared against nanoGPT itself (a separate
+implementation, so the curves agree statistically, not to rounding); see
+[shakespeare_gpt.md](./shakespeare_gpt.md) and
+[llm_gears.md](./llm_gears.md) for its variants (LLaMA parts, BPE, LSTM,
+mixture of experts).
 
-The model is LeNet-5 scaled to 28x28 inputs: conv 6@5x5, tanh, 2x2 average
-pool, conv 16@5x5, tanh, 2x2 average pool, linear 256 -> 10 (5,142
-parameters). Training uses Adam (lr 1e-3), batch 32, and the full 60,000
-training images. Test accuracy is on all 10,000 test images.
-
-PyTorch starts from NanoGrad's initial weights and sees the same batches in
-the same order. In float64 the two runs then compute the same thing:
-
-| epoch | train loss | test accuracy | NanoGrad and PyTorch |
-| ---: | ---: | ---: | --- |
-| 1 | 0.3531 | 95.37% | identical |
-| 2 | 0.1256 | 97.32% | identical |
-| 3 | 0.0818 | **98.06%** | identical |
-
-After all 5,625 Adam steps the largest weight difference between the two
-is 2e-15. NanoGrad's pure-Python backend prints the same epoch-1 loss and
-accuracy as well.
-
-### Speed
-
-Time per training step (batch 32, forward + backward + Adam), full epoch:
-
-| | ms / step | one epoch | vs PyTorch float64 |
-| --- | ---: | ---: | ---: |
-| PyTorch, float32, 4 threads | 5.1 | 10 s | 0.7x |
-| PyTorch, float64, 1 thread | 7.4 | 14 s | 1x |
-| NanoGrad, C kernels, 1 process | 17.8 | 33 s | 2.4x |
-| NanoGrad, pure Python | 401 | 12.5 min | 55x |
-
-So NanoGrad trains LeNet to 98% on MNIST in under two minutes on one core.
-At the start of this work the C path took 176 ms per step; the history is
-below. Four worker processes (`--workers 4`) no longer help here: LeNet is
-now so small that sending weights and images to the workers costs as much
-as the computation they save. They still pay off for the GPT.
-
-## Op By Op
+## Model Families
 
 ```bash
-python3 benchmark.py                      # NanoGrad's C and Python backends
-.venv/bin/python benchmark.py --torch     # plus PyTorch and an agreement check
+.venv/bin/python mnist_compare.py --dataset cifar10 --model resnet --epochs 2
+.venv/bin/python benchmark_suite.py        # every comparison, short, one table
 ```
 
-Each row is one forward + backward pass with a fixed random output
-gradient. Shapes come from the two models NanoGrad trains: the baby GPT
-(batch 12 x context 64 = 768 rows, width 128, 4 heads) and LeNet (batch 32).
-Times are medians of 5 runs, in milliseconds. PyTorch is float64 on one
-thread. "max diff" is the largest difference from PyTorch in any output or
-input gradient.
+`mnist_compare.py` trains LeNet-5 (two 5x5 convolutions with tanh and
+average pooling), a small ResNet (3x3 convolutions, batch norm, residual
+blocks, 20K parameters) and a tiny vision transformer (4x4 patches, 2
+blocks, 28K parameters), all with Adam at lr 1e-3, batch 32, on the full
+training sets; accuracy is on the full test sets.
 
-| op | model | NanoGrad C | NanoGrad Python | PyTorch | C / PyTorch | max diff |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| matmul 768x128 @ 128x512 | GPT | 56.1 | 2125 | 7.7 | 7.3x | 9e-14 |
-| linear 768x128 -> 512 | GPT | 63.2 | 2284 | 7.1 | 9.0x | 9e-14 |
-| layer_norm 768x128 | GPT | 3.6 | 56.4 | 0.80 | 4.6x | 2e-14 |
-| gelu 768x512 | GPT | 16.9 | 116 | 4.0 | 4.2x | 2e-16 |
-| softmax 12x4x64x64 | GPT | 6.8 | 42.8 | 1.4 | 5.0x | 4e-17 |
-| cross_entropy 768x65 | GPT | 0.84 | 8.4 | 0.64 | 1.3x | 1e-19 |
-| conv2d 32x1x28x28 * 6x1x5x5 | LeNet | 11.0 | 252 | 2.4 | 4.6x | 7e-13 |
-| conv2d 32x6x12x12 * 16x6x5x5 | LeNet | 6.1 | 277 | 3.0 | 2.0x | 2e-13 |
-| tanh 32x6x24x24 | LeNet | 6.2 | 17.3 | 0.71 | 8.7x | 4e-16 |
-| avg_pool 2x2 32x6x24x24 | LeNet | 1.6 | 30.5 | 0.66 | 2.4x | 0 |
-| max_pool 2x2 32x6x24x24 | LeNet | 1.9 | 19.6 | 1.1 | 1.8x | 0 |
+| dataset | model | epochs | test accuracy | largest weight difference |
+| --- | --- | ---: | ---: | ---: |
+| MNIST | LeNet | 3 | 98.00% | 1e-15 |
+| MNIST | ResNet | 1 | 97.84% | 8e-15 |
+| MNIST | ViT | 1 | running | |
+| Fashion-MNIST | LeNet / ResNet / ViT | 2 | running | |
+| CIFAR-10 | LeNet / ResNet / ViT | 2 | running | |
+| CIFAR-10 | ResNet-8 | 3 | 68.57% | 1.5e-12 |
+
+"Largest weight difference" is between the NanoGrad and PyTorch weights
+after the whole run: thousands of Adam steps later they still agree to
+rounding error.
+
+## Speed
+
+running
 
 ## How The Gap Closed
 
 The first measurements had NanoGrad's C path 9x behind PyTorch on LeNet,
-and 6x to 35x behind op by op. Profiling showed two separate problems.
+and 6x to 35x behind op by op. Three separate problems were in the way.
 
 **Copying, not computing.** Tensors stored Python lists of floats, and C
-needs packed arrays of doubles, so every kernel call copied its inputs into
-arrays and its outputs back. That cost about 20 ns per number each way. For
-tanh, about 70% of the time went to copying and about 15% to computing
-tanh. The fix was one layer down, in storage: with the C kernels on, a
-tensor's `data` and `grad` are C arrays (`array("d")`), so values go from
-kernel to kernel with no copies. Python code still sees a flat sequence of
-floats that indexes, slices and iterates like a list. With storage fixed,
-the elementwise work moved into small kernels too: add, multiply, scale,
-tanh, pooling, the cross-entropy softmax, and a fused Adam update.
+needs packed arrays, so every kernel call copied its inputs into arrays
+and its outputs back: about 20 ns per number each way. For tanh, about
+70% of the time went to copying. The fix was one layer down, in storage:
+with the C kernels on, a tensor's `data` and `grad` are C arrays
+(`array("d")`, or `array("f")` in float32), so values go from kernel to
+kernel with no copies. Python code still sees a flat sequence of floats.
 
-**Matrix products: a plain C loop vs. a tuned BLAS.** On its own,
-NanoGrad's C `gemm` runs at about 8 GFLOP/s, or about 13 with
-`NANOGRAD_CFLAGS=-march=native`. PyTorch's BLAS reaches about 60 GFLOP/s on
-one core of this machine. The kernel uses one simple trick: it computes
-four rows of C per pass, so each loaded row of B is used four times.
-Closing the rest of the gap needs packed panels and hand-written SIMD
-micro-kernels: worth studying (see the BLIS papers), but not code for a
-learning repo. Larger matrix products, as in the GPT, are now mostly gemm
-time.
+**Python per element.** Elementwise math, losses, the Adam and SGD
+updates, dropout masks, embedding lookups and the LSTM cell all moved into
+small C kernels, each with a Python twin in `kernels_reference.py` that
+the tests check it against.
 
-| LeNet step, C backend, 1 process | ms |
+**Matrix products.** A plain C loop runs a matrix product at about 8
+GFLOP/s; PyTorch's BLAS reaches about 60 in float64 on one core of this CPU. `gemm` in `kernels.c` now
+uses the ideas of every fast BLAS, in about 150 lines:
+
+- a register tile: an 8 x 32 block of C (float32; 8 x 16 in float64)
+  stays in 16 vector registers while the sum runs over k
+- packing: the columns of B a tile needs, and blocks of A, are copied
+  into small contiguous buffers so the inner loop reads memory in order
+- cache blocking: 256-deep slices of k and blocks of A of about 64K
+  numbers, so each block is reused from cache by every column panel
+- partial tiles at the edges with zero padding, instead of scalar loops
+
+It reaches 40-47 GFLOP/s in float64 and 90-100 in float32 on one core.
+Convolutions use the same micro-kernel without building the patch matrix
+("implicit GEMM": the panel is packed straight from the image through an
+index table), and softmax uses a vectorizable exp (range reduction plus a
+Taylor polynomial, within 1 ulp of the C library's).
+
+| LeNet step, batch 32, 1 process | ms |
 | --- | ---: |
 | first measurement | 176 |
 | tanh and pooling kernels, fewer copies around conv | 63 |
 | tensors stored as C arrays | 27 |
 | elementwise and loss kernels | 20 |
 | fused Adam, cached index tables | 18 |
-
-The same work took the baby GPT on Tiny Shakespeare from about 2 hours to
-11 minutes ([shakespeare_gpt.md](./shakespeare_gpt.md)).
-
-## Bigger Benchmarks
-
-The standard lists (ImageNet/ResNet-50, COCO, GLUE/SQuAD, MLPerf) are built
-from the same building blocks NanoGrad has, plus a few it does not yet have
-(padded and strided convolution, batch norm, residual blocks). But they need
-GPU-class compute: ResNet-50 is about 4 GFLOPs per image, on 1.2 million
-images per epoch. At this scale the comparable steps are LeNet on MNIST
-(above), a small CNN on CIFAR-10 (`cifar_cnn_demo.py` reads the binary
-batches once they are placed in `data/cifar10/`), and the baby GPT on Tiny
-Shakespeare ([shakespeare_gpt.md](./shakespeare_gpt.md)).
+| tiled gemm, implicit-GEMM convolution | 7.1 |
+| PyTorch, float64, 1 thread | 6.7 |
