@@ -1,12 +1,23 @@
 # NanoGrad
 
-NanoGrad is a small-scale machine learning research framework for exploring
-automatic differentiation, tensor operations, small neural networks, and later
-language and vision experiments from the ground up.
+NanoGrad is a deep-learning framework written to be read: tensors and
+autograd in plain Python, with every heavy loop also written in C (and
+checked against the Python version). On top of that one core sit the
+model families from the standard benchmarks:
 
-The project starts with a minimal autograd core and builds small, visible
-learning checks on top of it before moving toward MNIST, LeNet-style vision,
-and tiny language models.
+- **vision**: LeNet, a ResNet (MLPerf Tiny's ResNet-8 shape), a vision
+  transformer; on MNIST, Fashion-MNIST and CIFAR-10
+- **language**: a GPT (nanoGPT's recipe, with GPT-2 or LLaMA parts, BPE or
+  characters), a BERT-style encoder with pretraining and fine-tuning, LSTM
+  and GRU char-rnns; on Tiny Shakespeare
+- **generative**: a variational autoencoder and a diffusion model on MNIST
+
+Every family is checked against PyTorch running the same architecture from
+the same weights: in float64 the two train to the same numbers (weights
+equal to about 1e-12 after thousands of steps). With the C kernels NanoGrad
+runs within about 1-2x of single-threaded PyTorch on these models (see
+[docs/benchmarks.md](./docs/benchmarks.md)), and it needs nothing but
+Python and a C compiler; PyTorch is only used for the comparisons.
 
 ## Architecture
 
@@ -19,7 +30,7 @@ and each can be read on its own:
 | gpt_train | mnist_compare | bert_compare | nanogpt_compare | bench  |
 +---------------------------------------------------------------------+
 | Model families                                                      |
-| lenet | resnet | vit | GPT | bert | rnn (LSTM, GRU) | vae           |
+| lenet | resnet | vit | GPT | bert | lstm / gru | vae | diffusion    |
 +---------------------------------------------------------------------+
 | Layers, losses, optimizers, training                                |
 | tensor_nn | losses | optim | schedules | train | parallel           |
@@ -36,10 +47,11 @@ The bottom split keeps the code readable without giving up speed:
 
 - `tensor.py` says what an op computes and how its gradient flows.
 - The kernels are the loops that do the heavy work (matrix products,
-  im2col, pooling, softmax, LayerNorm, GELU, tanh, elementwise math, the
-  Adam update). Each one is written twice: a short Python version to read
-  (`kernels_reference.py`) and a C version to run (`kernels.c`).
-  `kernels.py` picks one, and `test_kernels.py` checks that they agree.
+  convolution, pooling, softmax, LayerNorm, RMSNorm, batch norm, GELU,
+  tanh, sigmoid, elementwise math, the Adam update). Each one is written
+  twice: a short Python version to read (`kernels_reference.py`) and a C
+  version to run (`kernels.c`, in float64 or float32). `kernels.py` picks
+  one, and `test_kernels.py` checks that they agree.
 - With the C kernels on, tensors keep their values in C arrays, so data
   goes from one kernel to the next without being copied through Python.
 
