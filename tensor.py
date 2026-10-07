@@ -1,13 +1,44 @@
-"""Small tensor container, shape-checked math helpers, and tensor autograd."""
+"""Small tensor container, shape-checked math helpers, and tensor autograd.
+
+Everything here is plain Python lists of floats in row-major order. The file
+reads top to bottom as:
+
+1. ``Tensor``: the container and the backward pass
+2. Recording ops: ``no_grad`` and ``_op_result``, the helper every op uses
+3. Elementwise math with broadcasting
+4. Matrix multiplication
+5. Shape ops: reshape, permute, stack, concat, row gathers
+6. Reductions: sum, mean, softmax
+7. Convolution and pooling
+8. Small index helpers
+
+Performance notes, kept deliberately simple:
+
+- Broadcasting and permutes precompute one flat "index map" per shape pair
+  (cached), so the per-element work is a single list lookup.
+- Every matrix product is a table of dot products computed by one helper,
+  ``_dot_table``. Backward passes reuse the same helper:
+  ``dA = dC @ B^T`` and ``dB = A^T @ dC``.
+- Convolution is "im2col": gather every image patch into a row, then do one
+  dot-product table against the flattened kernels.
+"""
 
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from functools import lru_cache
+from operator import mul
 from typing import Callable
 
 
 Number = int | float
+
+
+# ---------------------------------------------------------------------------
+# Tensor
+# ---------------------------------------------------------------------------
 
 
 class Tensor:
@@ -30,7 +61,7 @@ class Tensor:
             raise ValueError("data length does not match shape")
 
         self.data = [float(value) for value in data]
-        self.shape = shape
+        self.shape = tuple(shape)
         self.requires_grad = requires_grad
         self.grad: list[float] | None = (
             [0.0] * len(self.data)
@@ -40,7 +71,7 @@ class Tensor:
 
         self._prev = set(_children)
         self._op = _op
-        self._backward: Callable[[], None] = lambda: None
+        self._backward: Callable[[], None] = _no_backward
 
     def __repr__(self) -> str:
         return f"Tensor(shape={self.shape}, data={self.tolist()})"
@@ -67,8 +98,18 @@ class Tensor:
 
         return self.data[_flat_index(index, self.shape)]
 
+    def item(self) -> float:
+        if len(self.data) != 1:
+            raise ValueError("item() needs a tensor with exactly one value")
+        return self.data[0]
+
     def tolist(self) -> list:
         return _nested_list(self.data, self.shape)
+
+    def detach(self) -> "Tensor":
+        """Same values, cut off from the autograd graph."""
+
+        return Tensor(self.data, self.shape)
 
     @classmethod
     def zeros(cls, shape: tuple[int, ...], *, requires_grad: bool = False) -> "Tensor":
@@ -95,7 +136,9 @@ class Tensor:
         return add(self, other)
 
     def __sub__(self, other: Number | "Tensor") -> "Tensor":
-        return add(self, -other if isinstance(other, (int, float)) else other * -1)
+        if isinstance(other, (int, float)):
+            return add(self, -other)
+        return subtract(self, other)
 
     def __rsub__(self, other: Number | "Tensor") -> "Tensor":
         return add(-self, other)
@@ -120,6 +163,9 @@ class Tensor:
         if isinstance(other, (int, float)):
             return tensor_reciprocal(self) * other
         return other / self
+
+    def __matmul__(self, other: "Tensor") -> "Tensor":
+        return matmul(self, other)
 
     def reshape(self, shape: tuple[int, ...]) -> "Tensor":
         return reshape(self, shape)
@@ -188,326 +234,622 @@ class Tensor:
             self.grad = [0.0] * len(self.data)
 
     def backward(self, grad: Tensor | Sequence[Number] | None = None) -> None:
-        topo: list[Tensor] = []
-        visited: set[Tensor] = set()
+        """Fill ``.grad`` on every tensor this one was computed from.
 
-        def build(node: Tensor) -> None:
-            if node in visited:
-                return
-            visited.add(node)
-            for child in node._prev:
-                build(child)
-            topo.append(node)
+        Gradients are reset before the pass, so calling backward twice gives
+        the same result rather than accumulating.
+        """
 
-        build(self)
+        topo = _topological_order(self)
 
         if self.grad is None:
             self.grad = [0.0] * len(self.data)
         for node in topo:
-            if node.requires_grad:
+            if not node.requires_grad:
+                continue
+            if node._prev:
+                # Intermediate results start empty; _add_grad fills them.
+                node.grad = None
+            else:
                 node.zero_grad()
 
-        seed = _seed_grad(self, grad)
-        for i, value in enumerate(seed):
-            self.grad[i] += value
+        _add_grad(self, _seed_grad(self, grad))
 
         for node in reversed(topo):
-            node._backward()
+            if node.requires_grad:
+                node._backward()
+
+
+def _no_backward() -> None:
+    return None
+
+
+def _topological_order(root: Tensor) -> list[Tensor]:
+    """Children-before-parents order, without Python recursion limits."""
+
+    order: list[Tensor] = []
+    visited: set[Tensor] = set()
+    pending: list[tuple[Tensor, bool]] = [(root, False)]
+
+    while pending:
+        node, children_done = pending.pop()
+        if children_done:
+            order.append(node)
+            continue
+        if node in visited:
+            continue
+        visited.add(node)
+        pending.append((node, True))
+        for child in node._prev:
+            if child not in visited:
+                pending.append((child, False))
+
+    return order
+
+
+# ---------------------------------------------------------------------------
+# Recording ops
+# ---------------------------------------------------------------------------
+
+
+_grad_enabled = True
+
+
+@contextmanager
+def no_grad() -> Iterator[None]:
+    """Run ops without recording the graph, e.g. for evaluation or sampling."""
+
+    global _grad_enabled
+    previous = _grad_enabled
+    _grad_enabled = False
+    try:
+        yield
+    finally:
+        _grad_enabled = previous
+
+
+def is_grad_enabled() -> bool:
+    return _grad_enabled
+
+
+def _op_result(
+    data: list[float],
+    shape: tuple[int, ...],
+    parents: tuple[Tensor, ...],
+    op: str,
+) -> Tensor:
+    """Wrap the output of an op.
+
+    This is the one place that decides whether an op joins the autograd
+    graph: only when gradients are enabled and some parent needs them. Ops
+    pass trusted float lists, so no validation or copy happens here.
+
+    A custom op is three steps: compute ``data``, call ``_op_result``, then
+    set ``out._backward`` to a function that reads ``out.grad`` and calls
+    ``_add_grad`` on each parent that requires grad.
+    """
+
+    out = Tensor.__new__(Tensor)
+    out.data = data
+    out.shape = shape
+    out.requires_grad = _grad_enabled and any(
+        parent.requires_grad for parent in parents
+    )
+    out.grad = None
+    out._prev = set(parents) if out.requires_grad else set()
+    out._op = op
+    out._backward = _no_backward
+    return out
+
+
+def _seed_grad(
+    tensor: Tensor,
+    grad: Tensor | Sequence[Number] | None,
+) -> list[float]:
+    if grad is None:
+        if tensor.shape != (1,):
+            raise ValueError("non-scalar tensor backward requires an explicit gradient")
+        return [1.0]
+
+    if isinstance(grad, Tensor):
+        if grad.shape != tensor.shape:
+            raise ValueError("backward gradient shape must match tensor shape")
+        return grad.data[:]
+
+    if len(grad) != len(tensor.data):
+        raise ValueError("backward gradient length must match tensor data")
+    return [float(value) for value in grad]
+
+
+def _grad_data(tensor: Tensor) -> list[float]:
+    if tensor.grad is None:
+        return [0.0] * len(tensor.data)
+    return tensor.grad
+
+
+def _add_grad(tensor: Tensor, grad: Sequence[Number]) -> None:
+    """Accumulate ``grad`` into ``tensor.grad`` (gradients add up over uses)."""
+
+    if len(grad) != len(tensor.data):
+        raise ValueError("gradient length does not match tensor data")
+    if tensor.grad is None:
+        tensor.grad = [float(value) for value in grad]
+        return
+    tensor.grad = [
+        current + value
+        for current, value in zip(tensor.grad, grad)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Elementwise math with broadcasting
+# ---------------------------------------------------------------------------
 
 
 def add(left: Tensor, right: Number | Tensor) -> Tensor:
-    """Elementwise addition with scalar and row-vector broadcasting."""
+    """Elementwise ``left + right`` with numpy-style broadcasting.
+
+    d(out)/d(left) = 1 and d(out)/d(right) = 1, so both sides receive the
+    output gradient, summed back over any broadcast axes.
+    """
 
     if isinstance(right, (int, float)):
-        out = Tensor(
+        out = _op_result(
             [value + right for value in left.data],
             left.shape,
-            requires_grad=left.requires_grad,
-            _children=(left,),
-            _op="+",
+            (left,),
+            "+",
         )
 
-        def _backward() -> None:
-            if left.requires_grad:
-                _add_grad(left, _grad_data(out))
+        def _backward_scalar() -> None:
+            _add_grad(left, _grad_data(out))
 
-        out._backward = _backward
+        out._backward = _backward_scalar
         return out
 
     out_shape = _broadcast_shape(left.shape, right.shape)
-    out = Tensor(
-        [
-            left.data[_broadcast_data_index(index, out_shape, left.shape)]
-            + right.data[_broadcast_data_index(index, out_shape, right.shape)]
-            for index in range(_numel(out_shape))
-        ],
+    left_values = _expand(left, out_shape)
+    right_values = _expand(right, out_shape)
+    out = _op_result(
+        [a + b for a, b in zip(left_values, right_values)],
         out_shape,
-        requires_grad=left.requires_grad or right.requires_grad,
-        _children=(left, right),
-        _op="+",
+        (left, right),
+        "+",
     )
 
     def _backward() -> None:
         grad = _grad_data(out)
         if left.requires_grad:
-            _add_grad(left, _sum_broadcast_grad(grad, out_shape, left.shape))
+            _add_grad(left, _reduce_to_shape(grad, out_shape, left.shape))
         if right.requires_grad:
-            _add_grad(right, _sum_broadcast_grad(grad, out_shape, right.shape))
+            _add_grad(right, _reduce_to_shape(grad, out_shape, right.shape))
+
+    out._backward = _backward
+    return out
+
+
+def subtract(left: Tensor, right: Tensor) -> Tensor:
+    """Elementwise ``left - right`` with numpy-style broadcasting."""
+
+    out_shape = _broadcast_shape(left.shape, right.shape)
+    left_values = _expand(left, out_shape)
+    right_values = _expand(right, out_shape)
+    out = _op_result(
+        [a - b for a, b in zip(left_values, right_values)],
+        out_shape,
+        (left, right),
+        "-",
+    )
+
+    def _backward() -> None:
+        grad = _grad_data(out)
+        if left.requires_grad:
+            _add_grad(left, _reduce_to_shape(grad, out_shape, left.shape))
+        if right.requires_grad:
+            negated = [-value for value in grad]
+            _add_grad(right, _reduce_to_shape(negated, out_shape, right.shape))
 
     out._backward = _backward
     return out
 
 
 def multiply(left: Tensor, right: Number | Tensor) -> Tensor:
-    """Elementwise multiplication with scalar and row-vector broadcasting."""
+    """Elementwise ``left * right`` with numpy-style broadcasting.
+
+    d(out)/d(left) = right and d(out)/d(right) = left.
+    """
 
     if isinstance(right, (int, float)):
-        out = Tensor(
+        out = _op_result(
             [value * right for value in left.data],
             left.shape,
-            requires_grad=left.requires_grad,
-            _children=(left,),
-            _op="*",
+            (left,),
+            "*",
         )
 
-        def _backward() -> None:
-            if left.requires_grad:
-                _add_grad(left, [right * grad for grad in _grad_data(out)])
+        def _backward_scalar() -> None:
+            _add_grad(left, [right * grad for grad in _grad_data(out)])
 
-        out._backward = _backward
+        out._backward = _backward_scalar
         return out
 
     out_shape = _broadcast_shape(left.shape, right.shape)
-    out = Tensor(
-        [
-            left.data[_broadcast_data_index(index, out_shape, left.shape)]
-            * right.data[_broadcast_data_index(index, out_shape, right.shape)]
-            for index in range(_numel(out_shape))
-        ],
+    left_values = _expand(left, out_shape)
+    right_values = _expand(right, out_shape)
+    out = _op_result(
+        [a * b for a, b in zip(left_values, right_values)],
         out_shape,
-        requires_grad=left.requires_grad or right.requires_grad,
-        _children=(left, right),
-        _op="*",
+        (left, right),
+        "*",
     )
 
     def _backward() -> None:
         grad = _grad_data(out)
         if left.requires_grad:
-            left_grad = [0.0] * left.numel
-            for index, out_grad in enumerate(grad):
-                left_index = _broadcast_data_index(index, out_shape, left.shape)
-                right_index = _broadcast_data_index(index, out_shape, right.shape)
-                left_grad[left_index] += right.data[right_index] * out_grad
-            _add_grad(left, left_grad)
+            left_grad = [g * b for g, b in zip(grad, right_values)]
+            _add_grad(left, _reduce_to_shape(left_grad, out_shape, left.shape))
         if right.requires_grad:
-            right_grad = [0.0] * right.numel
-            for index, out_grad in enumerate(grad):
-                left_index = _broadcast_data_index(index, out_shape, left.shape)
-                right_index = _broadcast_data_index(index, out_shape, right.shape)
-                right_grad[right_index] += left.data[left_index] * out_grad
+            right_grad = [g * a for g, a in zip(grad, left_values)]
+            _add_grad(right, _reduce_to_shape(right_grad, out_shape, right.shape))
+
+    out._backward = _backward
+    return out
+
+
+def _broadcast_shape(
+    left_shape: tuple[int, ...],
+    right_shape: tuple[int, ...],
+) -> tuple[int, ...]:
+    shape = []
+    max_ndim = max(len(left_shape), len(right_shape))
+    padded_left = (1,) * (max_ndim - len(left_shape)) + left_shape
+    padded_right = (1,) * (max_ndim - len(right_shape)) + right_shape
+
+    for left_dim, right_dim in zip(padded_left, padded_right):
+        if left_dim == right_dim:
+            shape.append(left_dim)
+        elif left_dim == 1:
+            shape.append(right_dim)
+        elif right_dim == 1:
+            shape.append(left_dim)
+        else:
+            raise ValueError("tensor shapes cannot be broadcast")
+    return tuple(shape)
+
+
+@lru_cache(maxsize=256)
+def _broadcast_index_map(
+    out_shape: tuple[int, ...],
+    source_shape: tuple[int, ...],
+) -> tuple[int, ...]:
+    """For each flat output position, the flat source position it reads.
+
+    A broadcast axis is just an axis with stride 0: walking along it keeps
+    reading the same source value.
+    """
+
+    padded_shape = (1,) * (len(out_shape) - len(source_shape)) + source_shape
+    source_strides = _strides(padded_shape)
+    strides = tuple(
+        0 if source_dim == 1 else stride
+        for source_dim, stride in zip(padded_shape, source_strides)
+    )
+    return _strided_indices(out_shape, strides)
+
+
+def _expand(tensor: Tensor, out_shape: tuple[int, ...]) -> list[float]:
+    """Values of ``tensor`` laid out over ``out_shape`` (no copy if equal)."""
+
+    if tensor.shape == out_shape:
+        return tensor.data
+    data = tensor.data
+    return [data[index] for index in _broadcast_index_map(out_shape, tensor.shape)]
+
+
+def _reduce_to_shape(
+    grad: list[float],
+    out_shape: tuple[int, ...],
+    source_shape: tuple[int, ...],
+) -> list[float]:
+    """Sum a broadcast gradient back down to the source tensor's shape."""
+
+    if out_shape == source_shape:
+        return grad
+    source_grad = [0.0] * _numel(source_shape)
+    for index, value in zip(_broadcast_index_map(out_shape, source_shape), grad):
+        source_grad[index] += value
+    return source_grad
+
+
+def _unary(
+    tensor: Tensor,
+    out_data: list[float],
+    input_grad: Callable[[list[float]], list[float]],
+    op: str,
+) -> Tensor:
+    """Wrap an elementwise op whose backward maps out.grad -> tensor grad."""
+
+    out = _op_result(out_data, tensor.shape, (tensor,), op)
+
+    def _backward() -> None:
+        _add_grad(tensor, input_grad(_grad_data(out)))
+
+    out._backward = _backward
+    return out
+
+
+def tensor_exp(tensor: Tensor) -> Tensor:
+    """Elementwise exponential: y = e^x, dy/dx = y."""
+
+    out_data = [math.exp(value) for value in tensor.data]
+    return _unary(
+        tensor,
+        out_data,
+        lambda grad: [g * y for g, y in zip(grad, out_data)],
+        "exp",
+    )
+
+
+def tensor_log(tensor: Tensor) -> Tensor:
+    """Elementwise natural logarithm: y = ln x, dy/dx = 1 / x."""
+
+    if any(value <= 0 for value in tensor.data):
+        raise ValueError("log is only defined for positive values")
+    inputs = tensor.data
+    return _unary(
+        tensor,
+        [math.log(value) for value in inputs],
+        lambda grad: [g / x for g, x in zip(grad, inputs)],
+        "log",
+    )
+
+
+def tensor_relu(tensor: Tensor) -> Tensor:
+    """Elementwise rectified linear unit: y = max(0, x)."""
+
+    inputs = tensor.data
+    return _unary(
+        tensor,
+        [value if value > 0.0 else 0.0 for value in inputs],
+        lambda grad: [g if x > 0.0 else 0.0 for g, x in zip(grad, inputs)],
+        "relu",
+    )
+
+
+def tensor_gelu(tensor: Tensor) -> Tensor:
+    """Elementwise Gaussian error linear unit (exact erf form).
+
+    y  = x * Phi(x)                 Phi = standard normal CDF
+    dy = Phi(x) + x * phi(x)        phi = standard normal PDF
+    """
+
+    sqrt_two = math.sqrt(2.0)
+    sqrt_two_pi = math.sqrt(2.0 * math.pi)
+    inputs = tensor.data
+    cdf = [0.5 * (1.0 + math.erf(x / sqrt_two)) for x in inputs]
+
+    def input_grad(grad: list[float]) -> list[float]:
+        return [
+            g * (phi + x * math.exp(-0.5 * x * x) / sqrt_two_pi)
+            for g, x, phi in zip(grad, inputs, cdf)
+        ]
+
+    return _unary(
+        tensor,
+        [x * phi for x, phi in zip(inputs, cdf)],
+        input_grad,
+        "gelu",
+    )
+
+
+def tensor_sigmoid(tensor: Tensor) -> Tensor:
+    """Elementwise sigmoid: y = 1 / (1 + e^-x), dy/dx = y (1 - y)."""
+
+    out_data = [_sigmoid(value) for value in tensor.data]
+    return _unary(
+        tensor,
+        out_data,
+        lambda grad: [g * y * (1.0 - y) for g, y in zip(grad, out_data)],
+        "sigmoid",
+    )
+
+
+def _sigmoid(value: float) -> float:
+    # Two algebraically equal forms; each avoids overflow on its own side.
+    if value >= 0.0:
+        return 1.0 / (1.0 + math.exp(-value))
+    exp_value = math.exp(value)
+    return exp_value / (1.0 + exp_value)
+
+
+def tensor_tanh(tensor: Tensor) -> Tensor:
+    """Elementwise hyperbolic tangent: dy/dx = 1 - y^2."""
+
+    out_data = [math.tanh(value) for value in tensor.data]
+    return _unary(
+        tensor,
+        out_data,
+        lambda grad: [g * (1.0 - y * y) for g, y in zip(grad, out_data)],
+        "tanh",
+    )
+
+
+def tensor_reciprocal(tensor: Tensor) -> Tensor:
+    """Elementwise reciprocal: y = 1 / x, dy/dx = -y^2."""
+
+    if any(value == 0.0 for value in tensor.data):
+        raise ValueError("division by zero")
+    out_data = [1.0 / value for value in tensor.data]
+    return _unary(
+        tensor,
+        out_data,
+        lambda grad: [-g * y * y for g, y in zip(grad, out_data)],
+        "reciprocal",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Matrix multiplication
+# ---------------------------------------------------------------------------
+
+
+def _python_dot(left: Sequence[float], right: Sequence[float]) -> float:
+    return sum(map(mul, left, right))
+
+
+# math.sumprod (Python 3.12+) is a C-speed dot product.
+_dot: Callable[[Sequence[float], Sequence[float]], float] = getattr(
+    math,
+    "sumprod",
+    _python_dot,
+)
+
+
+def _rows(data: list[float], width: int) -> list[list[float]]:
+    """Split a flat row-major matrix into its rows."""
+
+    return [data[start : start + width] for start in range(0, len(data), width)]
+
+
+def _columns(data: list[float], width: int) -> list[list[float]]:
+    """Split a flat row-major matrix into its columns."""
+
+    return [data[col::width] for col in range(width)]
+
+
+def _dot_table(
+    row_vectors: Sequence[Sequence[float]],
+    column_vectors: Sequence[Sequence[float]],
+) -> list[float]:
+    """Flat (rows, cols) table with ``out[i, j] = row_i . column_j``.
+
+    This is the whole matrix-multiply kernel: ``A @ B`` is the dot table of
+    the rows of A against the columns of B.
+    """
+
+    out: list[float] = []
+    for row in row_vectors:
+        out.extend([_dot(row, column) for column in column_vectors])
+    return out
+
+
+def matmul(left: Tensor, right: Tensor) -> Tensor:
+    """Matrix product following numpy's ``@`` shape rules.
+
+    Shapes (``...`` is any number of leading batch axes):
+
+    - (k,)        @ (k,)        -> (1,)        dot product
+    - (n, k)      @ (k,)        -> (n,)        matrix-vector
+    - (k,)        @ (k, m)      -> (m,)        vector-matrix
+    - (..., n, k) @ (k, m)      -> (..., n, m) shared right matrix
+    - (..., n, k) @ (..., k, m) -> (..., n, m) batched, same batch axes
+    - (n, k)      @ (..., k, m) -> (..., n, m) shared left matrix
+
+    For one batch entry, with C = A @ B:
+
+        dA = dC @ B^T
+        dB = A^T @ dC
+    """
+
+    left_shape = (1, *left.shape) if left.ndim == 1 else left.shape
+    right_shape = (*right.shape, 1) if right.ndim == 1 else right.shape
+    rows, shared = left_shape[-2:]
+    right_shared, cols = right_shape[-2:]
+    if shared != right_shared:
+        raise ValueError("matmul inner dimensions must match")
+
+    left_batch = left_shape[:-2]
+    right_batch = right_shape[:-2]
+    if not right_batch:
+        # A shared right matrix: fold every left batch axis into the rows.
+        rows = _numel(left_shape[:-1])
+        batch_shape: tuple[int, ...] = ()
+        out_shape = (*left_shape[:-1], cols)
+    elif not left_batch or left_batch == right_batch:
+        batch_shape = right_batch
+        out_shape = (*batch_shape, rows, cols)
+    else:
+        raise ValueError("matmul batch dimensions must match")
+
+    if left.ndim == 1 and right.ndim == 1:
+        out_shape = (1,)
+    elif left.ndim == 1:
+        out_shape = out_shape[:-2] + out_shape[-1:]
+    elif right.ndim == 1:
+        out_shape = out_shape[:-1]
+
+    batches = _numel(batch_shape)
+    left_size = rows * shared
+    right_size = shared * cols
+    out_size = rows * cols
+    # A batch step of 0 means "reuse the same matrix for every batch entry".
+    left_step = left_size if left_batch else 0
+    right_step = right_size if right_batch else 0
+    left_data = left.data
+    right_data = right.data
+
+    data: list[float] = []
+    for batch in range(batches):
+        a = left_data[batch * left_step : batch * left_step + left_size]
+        b = right_data[batch * right_step : batch * right_step + right_size]
+        data.extend(_dot_table(_rows(a, shared), _columns(b, cols)))
+
+    out = _op_result(data, out_shape, (left, right), "matmul")
+
+    def _backward() -> None:
+        grad = _grad_data(out)
+        left_grad = [0.0] * left.numel if left.requires_grad else None
+        right_grad = [0.0] * right.numel if right.requires_grad else None
+
+        for batch in range(batches):
+            a_start = batch * left_step
+            b_start = batch * right_step
+            a = left_data[a_start : a_start + left_size]
+            b = right_data[b_start : b_start + right_size]
+            d_c = grad[batch * out_size : (batch + 1) * out_size]
+
+            if left_grad is not None:
+                # dA = dC @ B^T: rows of dC dotted with rows of B.
+                d_a = _dot_table(_rows(d_c, cols), _rows(b, cols))
+                _accumulate(left_grad, a_start, d_a)
+            if right_grad is not None:
+                # dB = A^T @ dC: columns of A dotted with columns of dC.
+                d_b = _dot_table(_columns(a, shared), _columns(d_c, cols))
+                _accumulate(right_grad, b_start, d_b)
+
+        if left_grad is not None:
+            _add_grad(left, left_grad)
+        if right_grad is not None:
             _add_grad(right, right_grad)
 
     out._backward = _backward
     return out
 
 
-def matmul(left: Tensor, right: Tensor) -> Tensor:
-    """Matrix/vector multiplication for 1D and 2D tensors."""
+def _accumulate(target: list[float], start: int, values: list[float]) -> None:
+    stop = start + len(values)
+    target[start:stop] = [
+        current + value
+        for current, value in zip(target[start:stop], values)
+    ]
 
-    if len(left.shape) == 1 and len(right.shape) == 1:
-        if left.shape[0] != right.shape[0]:
-            raise ValueError("vector dot product shapes must match")
-        total = sum(
-            a * b
-            for a, b in zip(left.data, right.data)
-        )
-        out = Tensor(
-            [total],
-            (1,),
-            requires_grad=left.requires_grad or right.requires_grad,
-            _children=(left, right),
-            _op="matmul",
-        )
 
-        def _backward() -> None:
-            grad = _grad_data(out)[0]
-            if left.requires_grad:
-                _add_grad(left, [value * grad for value in right.data])
-            if right.requires_grad:
-                _add_grad(right, [value * grad for value in left.data])
-
-        out._backward = _backward
-        return out
-
-    if len(left.shape) == 2 and len(right.shape) == 1:
-        rows, shared = left.shape
-        if shared != right.shape[0]:
-            raise ValueError("matrix-vector inner dimensions must match")
-
-        left_data = left.data
-        right_data = right.data
-        data = []
-        for row in range(rows):
-            row_offset = row * shared
-            total = 0.0
-            for col in range(shared):
-                total += left_data[row_offset + col] * right_data[col]
-            data.append(total)
-        out = Tensor(
-            data,
-            (rows,),
-            requires_grad=left.requires_grad or right.requires_grad,
-            _children=(left, right),
-            _op="matmul",
-        )
-
-        def _backward() -> None:
-            grad = _grad_data(out)
-            if left.requires_grad:
-                _add_grad(
-                    left,
-                    [
-                        grad[row] * right_data[col]
-                        for row in range(rows)
-                        for col in range(shared)
-                    ],
-                )
-            if right.requires_grad:
-                right_grad = [0.0] * shared
-                for row in range(rows):
-                    row_offset = row * shared
-                    for col in range(shared):
-                        right_grad[col] += left_data[row_offset + col] * grad[row]
-                _add_grad(right, right_grad)
-
-        out._backward = _backward
-        return out
-
-    if len(left.shape) == 1 and len(right.shape) == 2:
-        shared = left.shape[0]
-        right_rows, cols = right.shape
-        if shared != right_rows:
-            raise ValueError("vector-matrix inner dimensions must match")
-
-        left_data = left.data
-        right_data = right.data
-        data = []
-        for col in range(cols):
-            total = 0.0
-            for inner in range(shared):
-                total += left_data[inner] * right_data[inner * cols + col]
-            data.append(total)
-        out = Tensor(
-            data,
-            (cols,),
-            requires_grad=left.requires_grad or right.requires_grad,
-            _children=(left, right),
-            _op="matmul",
-        )
-
-        def _backward() -> None:
-            grad = _grad_data(out)
-            if left.requires_grad:
-                left_grad = [0.0] * shared
-                for inner in range(shared):
-                    right_offset = inner * cols
-                    for col in range(cols):
-                        left_grad[inner] += grad[col] * right_data[right_offset + col]
-                _add_grad(left, left_grad)
-            if right.requires_grad:
-                _add_grad(
-                    right,
-                    [
-                        left_data[inner] * grad[col]
-                        for inner in range(shared)
-                        for col in range(cols)
-                    ],
-                )
-
-        out._backward = _backward
-        return out
-
-    if len(left.shape) == 2 and len(right.shape) == 2:
-        rows, shared = left.shape
-        right_rows, cols = right.shape
-        if shared != right_rows:
-            raise ValueError("matrix-matrix inner dimensions must match")
-
-        left_data = left.data
-        right_data = right.data
-        data = []
-        for row in range(rows):
-            left_row_offset = row * shared
-            for col in range(cols):
-                total = 0.0
-                for inner in range(shared):
-                    total += (
-                        left_data[left_row_offset + inner]
-                        * right_data[inner * cols + col]
-                    )
-                data.append(total)
-        out = Tensor(
-            data,
-            (rows, cols),
-            requires_grad=left.requires_grad or right.requires_grad,
-            _children=(left, right),
-            _op="matmul",
-        )
-
-        def _backward() -> None:
-            grad = _grad_data(out)
-            if left.requires_grad:
-                left_grad = [0.0] * len(left.data)
-                for row in range(rows):
-                    left_row_offset = row * shared
-                    grad_row_offset = row * cols
-                    for inner in range(shared):
-                        total = 0.0
-                        right_row_offset = inner * cols
-                        for col in range(cols):
-                            total += (
-                                grad[grad_row_offset + col]
-                                * right_data[right_row_offset + col]
-                            )
-                        left_grad[left_row_offset + inner] += total
-                _add_grad(left, left_grad)
-            if right.requires_grad:
-                right_grad = [0.0] * len(right.data)
-                for inner in range(shared):
-                    right_row_offset = inner * cols
-                    for col in range(cols):
-                        total = 0.0
-                        for row in range(rows):
-                            total += (
-                                left_data[row * shared + inner]
-                                * grad[row * cols + col]
-                            )
-                        right_grad[right_row_offset + col] += total
-                _add_grad(right, right_grad)
-
-        out._backward = _backward
-        return out
-
-    raise ValueError("matmul expects 1D or 2D tensors")
+# ---------------------------------------------------------------------------
+# Shape ops
+# ---------------------------------------------------------------------------
 
 
 def reshape(tensor: Tensor, shape: tuple[int, ...]) -> Tensor:
     """Return a tensor view-shaped copy with the same flat data order."""
 
-    if _numel(shape) != len(tensor.data):
+    shape = tuple(shape)
+    if _numel(shape) != len(tensor.data) or any(dim <= 0 for dim in shape):
         raise ValueError("reshape must preserve the number of elements")
 
-    out = Tensor(
-        tensor.data[:],
-        shape,
-        requires_grad=tensor.requires_grad,
-        _children=(tensor,),
-        _op="reshape",
-    )
+    out = _op_result(tensor.data[:], shape, (tensor,), "reshape")
 
     def _backward() -> None:
-        if tensor.requires_grad:
-            _add_grad(tensor, _grad_data(out))
+        _add_grad(tensor, _grad_data(out))
 
     out._backward = _backward
     return out
@@ -520,6 +862,53 @@ def flatten(tensor: Tensor, start_axis: int = 0) -> Tensor:
     leading_shape = tensor.shape[:start_axis]
     flattened = _numel(tensor.shape[start_axis:])
     return reshape(tensor, (*leading_shape, flattened))
+
+
+def permute(tensor: Tensor, axes: tuple[int, ...]) -> Tensor:
+    """Return a tensor with axes reordered: out axis i is input axis axes[i]."""
+
+    axes = _normalize_axes(tuple(axes), tensor.ndim)
+    out_shape = tuple(tensor.shape[axis] for axis in axes)
+    source_indices = _permute_index_map(tensor.shape, axes)
+    data = tensor.data
+    out = _op_result(
+        [data[index] for index in source_indices],
+        out_shape,
+        (tensor,),
+        "permute",
+    )
+
+    def _backward() -> None:
+        # A permutation moves every value exactly once, so just move back.
+        tensor_grad = [0.0] * tensor.numel
+        for index, value in zip(source_indices, _grad_data(out)):
+            tensor_grad[index] = value
+        _add_grad(tensor, tensor_grad)
+
+    out._backward = _backward
+    return out
+
+
+@lru_cache(maxsize=256)
+def _permute_index_map(
+    shape: tuple[int, ...],
+    axes: tuple[int, ...],
+) -> tuple[int, ...]:
+    """For each flat output position, the flat input position it reads."""
+
+    strides = _strides(shape)
+    return _strided_indices(
+        tuple(shape[axis] for axis in axes),
+        tuple(strides[axis] for axis in axes),
+    )
+
+
+def transpose(tensor: Tensor) -> Tensor:
+    """Transpose a 2D tensor."""
+
+    if len(tensor.shape) != 2:
+        raise ValueError("transpose expects a 2D tensor")
+    return permute(tensor, (1, 0))
 
 
 def stack(tensors: Sequence[Tensor], axis: int = 0) -> Tensor:
@@ -535,33 +924,62 @@ def stack(tensors: Sequence[Tensor], axis: int = 0) -> Tensor:
 
     axis = _normalize_insert_axis(axis, len(base_shape))
     out_shape = base_shape[:axis] + (len(tensors),) + base_shape[axis:]
-    data = []
-    for out_flat_index in range(_numel(out_shape)):
-        out_index = _unravel_index(out_flat_index, out_shape)
-        tensor_index = out_index[axis]
-        source_index = out_index[:axis] + out_index[axis + 1 :]
-        data.append(tensors[tensor_index].data[_flat_index(source_index, base_shape)])
+    chunk = _numel(base_shape[axis:])
+    return _join_chunks(tensors, out_shape, [chunk] * len(tensors), "stack")
 
-    out = Tensor(
-        data,
-        out_shape,
-        requires_grad=any(tensor.requires_grad for tensor in tensors),
-        _children=tuple(tensors),
-        _op="stack",
-    )
+
+def concat(tensors: Sequence[Tensor], axis: int = 0) -> Tensor:
+    """Join tensors along an existing axis; other dimensions must match."""
+
+    if not tensors:
+        raise ValueError("concat expects at least one tensor")
+
+    base_shape = tensors[0].shape
+    axis = _normalize_axis(axis, len(base_shape))
+    for tensor in tensors:
+        if (
+            tensor.ndim != len(base_shape)
+            or tensor.shape[:axis] != base_shape[:axis]
+            or tensor.shape[axis + 1 :] != base_shape[axis + 1 :]
+        ):
+            raise ValueError("concat expects matching shapes off the concat axis")
+
+    joined = sum(tensor.shape[axis] for tensor in tensors)
+    out_shape = base_shape[:axis] + (joined,) + base_shape[axis + 1 :]
+    chunks = [_numel(tensor.shape[axis:]) for tensor in tensors]
+    return _join_chunks(tensors, out_shape, chunks, "concat")
+
+
+def _join_chunks(
+    tensors: Sequence[Tensor],
+    out_shape: tuple[int, ...],
+    chunks: list[int],
+    op: str,
+) -> Tensor:
+    """Interleave equal-count chunks: for every outer index, one chunk each.
+
+    Stacking or concatenating along ``axis`` means: walk the axes before
+    ``axis`` (the "outer" index), and for each one copy a contiguous chunk
+    from every input in turn.
+    """
+
+    outer = len(tensors[0].data) // chunks[0]
+    data: list[float] = []
+    for outer_index in range(outer):
+        for tensor, chunk in zip(tensors, chunks):
+            start = outer_index * chunk
+            data.extend(tensor.data[start : start + chunk])
+
+    out = _op_result(data, out_shape, tuple(tensors), op)
 
     def _backward() -> None:
         grad = _grad_data(out)
-        tensor_grads = [
-            [0.0] * tensor.numel
-            for tensor in tensors
-        ]
-        for out_flat_index, value in enumerate(grad):
-            out_index = _unravel_index(out_flat_index, out_shape)
-            tensor_index = out_index[axis]
-            source_index = out_index[:axis] + out_index[axis + 1 :]
-            tensor_grads[tensor_index][_flat_index(source_index, base_shape)] += value
-
+        tensor_grads: list[list[float]] = [[] for _ in tensors]
+        offset = 0
+        for _ in range(outer):
+            for tensor_grad, chunk in zip(tensor_grads, chunks):
+                tensor_grad.extend(grad[offset : offset + chunk])
+                offset += chunk
         for tensor, tensor_grad in zip(tensors, tensor_grads):
             if tensor.requires_grad:
                 _add_grad(tensor, tensor_grad)
@@ -570,256 +988,322 @@ def stack(tensors: Sequence[Tensor], axis: int = 0) -> Tensor:
     return out
 
 
-def permute(tensor: Tensor, axes: tuple[int, ...]) -> Tensor:
-    """Return a tensor with axes reordered."""
+def gather_rows(table: Tensor, indices: Sequence[int]) -> Tensor:
+    """Pick rows of a 2D table: out[i] = table[indices[i]].
 
-    axes = _normalize_axes(axes, tensor.ndim)
-    out_shape = tuple(tensor.shape[axis] for axis in axes)
-    data = []
-    for out_flat_index in range(_numel(out_shape)):
-        out_index = _unravel_index(out_flat_index, out_shape)
-        source_index = [0] * tensor.ndim
-        for out_axis, source_axis in enumerate(axes):
-            source_index[source_axis] = out_index[out_axis]
-        data.append(tensor[tuple(source_index)])
+    This is an embedding lookup. The backward pass adds each output-row
+    gradient into the table row it came from (repeated ids accumulate).
+    """
 
-    out = Tensor(
-        data,
-        out_shape,
-        requires_grad=tensor.requires_grad,
-        _children=(tensor,),
-        _op="permute",
+    if table.ndim != 2:
+        raise ValueError("gather_rows expects a 2D table")
+    if not indices:
+        raise ValueError("gather_rows needs at least one index")
+
+    rows, width = table.shape
+    for index in indices:
+        if index < 0 or index >= rows:
+            raise ValueError("embedding index out of range")
+
+    table_rows = _rows(table.data, width)
+    data: list[float] = []
+    for index in indices:
+        data.extend(table_rows[index])
+
+    out = _op_result(data, (len(indices), width), (table,), "gather_rows")
+
+    def _backward() -> None:
+        grad = _grad_data(out)
+        table_grad = [0.0] * table.numel
+        for position, index in enumerate(indices):
+            _accumulate(
+                table_grad,
+                index * width,
+                grad[position * width : (position + 1) * width],
+            )
+        _add_grad(table, table_grad)
+
+    out._backward = _backward
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Reductions
+# ---------------------------------------------------------------------------
+
+
+def tensor_sum(tensor: Tensor, axis: int | None = None) -> Tensor:
+    """Sum all values or reduce a tensor along one axis."""
+
+    if axis is None:
+        out = _op_result([sum(tensor.data)], (1,), (tensor,), "sum")
+
+        def _backward_all() -> None:
+            _add_grad(tensor, [_grad_data(out)[0]] * len(tensor.data))
+
+        out._backward = _backward_all
+        return out
+
+    axis = _normalize_axis(axis, len(tensor.shape))
+    lanes = _axis_lanes(tensor.shape, axis)
+    size = tensor.shape[axis]
+    data = tensor.data
+    out = _op_result(
+        [sum(data[lane]) for lane in lanes],
+        _reduced_shape(tensor.shape, axis),
+        (tensor,),
+        "sum",
     )
 
     def _backward() -> None:
-        if not tensor.requires_grad:
-            return
-        grad = _grad_data(out)
+        # Every value in a lane contributed once to that lane's sum.
         tensor_grad = [0.0] * tensor.numel
-        for out_flat_index, value in enumerate(grad):
-            out_index = _unravel_index(out_flat_index, out_shape)
-            source_index = [0] * tensor.ndim
-            for out_axis, source_axis in enumerate(axes):
-                source_index[source_axis] = out_index[out_axis]
-            tensor_grad[_flat_index(tuple(source_index), tensor.shape)] += value
+        for lane, value in zip(lanes, _grad_data(out)):
+            tensor_grad[lane] = [value] * size
         _add_grad(tensor, tensor_grad)
 
     out._backward = _backward
     return out
 
 
-def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
-    """Apply a valid convolution-style filter.
+def tensor_mean(tensor: Tensor, axis: int | None = None) -> Tensor:
+    """Mean of all values or a tensor along one axis."""
 
-    This uses the cross-correlation convention common in neural networks:
-    the kernel is slid over the image without flipping it.
+    if axis is None:
+        return tensor_sum(tensor) * (1 / len(tensor.data))
+
+    axis = _normalize_axis(axis, len(tensor.shape))
+    return tensor_sum(tensor, axis=axis) * (1 / tensor.shape[axis])
+
+
+def tensor_softmax(tensor: Tensor, axis: int = -1) -> Tensor:
+    """Softmax over one tensor axis.
+
+    For one lane:  y_i = e^(x_i - max) / sum_j e^(x_j - max)
+    Backward:      dx_i = y_i * (dy_i - sum_j dy_j * y_j)
     """
 
-    if image.ndim == 2:
-        batches = 1
-        image_has_batch_axis = False
-        input_channels = 1
-        image_rows, image_cols = image.shape
-        if kernel.ndim == 2:
-            output_channels = 1
-            kernel_has_output_axis = False
-            kernel_channels = 1
-            kernel_rows, kernel_cols = kernel.shape
-        elif kernel.ndim == 3:
-            output_channels, kernel_rows, kernel_cols = kernel.shape
-            kernel_has_output_axis = True
-            kernel_channels = 1
-        else:
-            raise ValueError("conv2d_valid kernel shape does not match image shape")
-    elif image.ndim == 3:
-        batches = 1
-        image_has_batch_axis = False
-        input_channels, image_rows, image_cols = image.shape
-        if kernel.ndim == 3:
-            output_channels = 1
-            kernel_has_output_axis = False
-            kernel_channels, kernel_rows, kernel_cols = kernel.shape
-        elif kernel.ndim == 4:
-            output_channels, kernel_channels, kernel_rows, kernel_cols = kernel.shape
-            kernel_has_output_axis = True
-        else:
-            raise ValueError("conv2d_valid kernel shape does not match image shape")
+    axis = _normalize_axis(axis, len(tensor.shape))
+    lanes = _axis_lanes(tensor.shape, axis)
+    source = tensor.data
+    data = [0.0] * tensor.numel
+    for lane in lanes:
+        values = source[lane]
+        row_max = max(values)
+        exp_values = [math.exp(value - row_max) for value in values]
+        exp_sum = sum(exp_values)
+        data[lane] = [value / exp_sum for value in exp_values]
 
-        if input_channels != kernel_channels:
-            raise ValueError("conv2d_valid image and kernel channels must match")
-    elif image.ndim == 4:
-        batches, input_channels, image_rows, image_cols = image.shape
-        image_has_batch_axis = True
-        if kernel.ndim != 4:
-            raise ValueError("conv2d_valid kernel shape does not match image shape")
-        output_channels, kernel_channels, kernel_rows, kernel_cols = kernel.shape
-        kernel_has_output_axis = True
-
-        if input_channels != kernel_channels:
-            raise ValueError("conv2d_valid image and kernel channels must match")
-    else:
-        raise ValueError("conv2d_valid expects a 2D, 3D, or 4D image tensor")
-
-    if kernel_rows > image_rows or kernel_cols > image_cols:
-        raise ValueError("conv2d_valid kernel must fit inside the image")
-
-    out_rows = image_rows - kernel_rows + 1
-    out_cols = image_cols - kernel_cols + 1
-    if image_has_batch_axis:
-        out_shape = (batches, output_channels, out_rows, out_cols)
-    elif output_channels == 1:
-        out_shape = (out_rows, out_cols)
-    else:
-        out_shape = (output_channels, out_rows, out_cols)
-
-    image_data = image.data
-    kernel_data = kernel.data
-    image_channel_stride = image_rows * image_cols
-    image_batch_stride = input_channels * image_channel_stride
-    patch_offsets_by_output = [
-        [
-            (
-                input_channel * image_channel_stride
-                + kernel_row * image_cols
-                + kernel_col,
-                _conv2d_kernel_flat_index(
-                    kernel.shape,
-                    kernel_has_output_axis,
-                    output_channel,
-                    input_channel,
-                    kernel_row,
-                    kernel_col,
-                ),
-            )
-            for input_channel in range(input_channels)
-            for kernel_row in range(kernel_rows)
-            for kernel_col in range(kernel_cols)
-        ]
-        for output_channel in range(output_channels)
-    ]
-
-    data = []
-    for batch in range(batches):
-        batch_offset = batch * image_batch_stride
-        for output_channel in range(output_channels):
-            patch_offsets = patch_offsets_by_output[output_channel]
-            for out_row in range(out_rows):
-                row_offset = batch_offset + out_row * image_cols
-                for out_col in range(out_cols):
-                    image_offset = row_offset + out_col
-                    total = 0.0
-                    for image_step, kernel_index in patch_offsets:
-                        total += (
-                            image_data[image_offset + image_step]
-                            * kernel_data[kernel_index]
-                        )
-                    data.append(total)
-
-    out = Tensor(
-        data,
-        out_shape,
-        requires_grad=image.requires_grad or kernel.requires_grad,
-        _children=(image, kernel),
-        _op="conv2d_valid",
-    )
+    out = _op_result(data, tensor.shape, (tensor,), "softmax")
 
     def _backward() -> None:
         grad = _grad_data(out)
-        image_grad = [0.0] * len(image.data) if image.requires_grad else None
-        kernel_grad = [0.0] * len(kernel.data) if kernel.requires_grad else None
-        grad_index = 0
-
-        for batch in range(batches):
-            batch_offset = batch * image_batch_stride
-            for output_channel in range(output_channels):
-                patch_offsets = patch_offsets_by_output[output_channel]
-                for out_row in range(out_rows):
-                    row_offset = batch_offset + out_row * image_cols
-                    for out_col in range(out_cols):
-                        image_offset = row_offset + out_col
-                        out_grad = grad[grad_index]
-                        grad_index += 1
-
-                        for image_step, kernel_index in patch_offsets:
-                            image_index = image_offset + image_step
-                            if image_grad is not None:
-                                image_grad[image_index] += (
-                                    out_grad * kernel_data[kernel_index]
-                                )
-                            if kernel_grad is not None:
-                                kernel_grad[kernel_index] += (
-                                    out_grad * image_data[image_index]
-                                )
-
-        if image.requires_grad:
-            assert image_grad is not None
-            _add_grad(image, image_grad)
-        if kernel.requires_grad:
-            assert kernel_grad is not None
-            _add_grad(kernel, kernel_grad)
+        tensor_grad = [0.0] * tensor.numel
+        for lane in lanes:
+            probabilities = data[lane]
+            lane_grad = grad[lane]
+            weighted_grad = _dot(lane_grad, probabilities)
+            tensor_grad[lane] = [
+                y * (g - weighted_grad)
+                for y, g in zip(probabilities, lane_grad)
+            ]
+        _add_grad(tensor, tensor_grad)
 
     out._backward = _backward
     return out
 
 
-def _conv2d_image_value(
-    tensor: Tensor,
-    has_batch_axis: bool,
-    batch: int,
-    channel: int,
-    row: int,
-    col: int,
-) -> float:
-    if has_batch_axis:
-        _, channels, rows, cols = tensor.shape
-        return tensor.data[((batch * channels + channel) * rows + row) * cols + col]
-    return _conv2d_value(tensor, channel, row, col)
+@lru_cache(maxsize=256)
+def _axis_lanes(shape: tuple[int, ...], axis: int) -> tuple[slice, ...]:
+    """One slice per "lane" along ``axis``.
+
+    A lane is every value that differs only in its ``axis`` coordinate, e.g.
+    one row when ``axis`` is the last axis. Lanes come out in row-major order
+    of the remaining axes, which is exactly the reduced output order.
+    """
+
+    size = shape[axis]
+    inner = _numel(shape[axis + 1 :])
+    outer = _numel(shape[:axis])
+    block = size * inner
+    return tuple(
+        slice(outer_index * block + inner_index, (outer_index + 1) * block, inner)
+        for outer_index in range(outer)
+        for inner_index in range(inner)
+    )
 
 
-def _conv2d_value(tensor: Tensor, channel: int, row: int, col: int) -> float:
-    if tensor.ndim == 2:
-        _, cols = tensor.shape
-        return tensor.data[row * cols + col]
-    _, rows, cols = tensor.shape
-    return tensor.data[(channel * rows + row) * cols + col]
+# ---------------------------------------------------------------------------
+# Convolution and pooling
+# ---------------------------------------------------------------------------
 
 
-def _conv2d_kernel_flat_index(
-    shape: tuple[int, ...],
-    has_output_axis: bool,
-    output_channel: int,
-    input_channel: int,
-    row: int,
-    col: int,
-) -> int:
-    if len(shape) == 2:
-        _, cols = shape
-        return row * cols + col
-    if len(shape) == 3 and has_output_axis:
-        _, rows, cols = shape
-        return (output_channel * rows + row) * cols + col
-    if len(shape) == 3:
-        _, rows, cols = shape
-        return (input_channel * rows + row) * cols + col
-    _, input_channels, rows, cols = shape
-    return ((output_channel * input_channels + input_channel) * rows + row) * cols + col
+def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
+    """Apply a valid (no padding, stride 1) convolution-style filter.
+
+    This uses the cross-correlation convention common in neural networks:
+    the kernel is slid over the image without flipping it.
+
+    Accepted shapes, with B batch, C input channels, O output filters:
+
+    - image (H, W)       kernel (kh, kw)       -> (oh, ow)
+    - image (H, W)       kernel (O, kh, kw)    -> (O, oh, ow)
+    - image (C, H, W)    kernel (C, kh, kw)    -> (oh, ow)
+    - image (C, H, W)    kernel (O, C, kh, kw) -> (O, oh, ow)
+    - image (B, C, H, W) kernel (O, C, kh, kw) -> (B, O, oh, ow)
+
+    Internally everything is treated as the batched 4D case (reshaping a flat
+    row-major list is free), using im2col:
+
+        patches[p] = the C*kh*kw image values under the kernel at position p
+        out[b, o, p] = kernel_o . patches[p]
+    """
+
+    batches, channels, image_rows, image_cols, filters, out_shape = (
+        _conv2d_shapes(image.shape, kernel.shape)
+    )
+    kernel_rows, kernel_cols = kernel.shape[-2:]
+    patch_indices = _conv2d_patch_indices(
+        channels,
+        image_rows,
+        image_cols,
+        kernel_rows,
+        kernel_cols,
+    )
+    patch_size = channels * kernel_rows * kernel_cols
+    image_size = channels * image_rows * image_cols
+    positions = len(patch_indices)
+    kernel_vectors = _rows(kernel.data, patch_size)
+
+    image_data = image.data
+    batch_patches: list[list[list[float]]] = []
+    data: list[float] = []
+    for batch in range(batches):
+        single = image_data[batch * image_size : (batch + 1) * image_size]
+        patches = [
+            [single[index] for index in indices]
+            for indices in patch_indices
+        ]
+        batch_patches.append(patches)
+        data.extend(_dot_table(kernel_vectors, patches))
+
+    out = _op_result(data, out_shape, (image, kernel), "conv2d_valid")
+
+    def _backward() -> None:
+        grad = _grad_data(out)
+        kernel_grad = [0.0] * kernel.numel if kernel.requires_grad else None
+        image_grad = [0.0] * image.numel if image.requires_grad else None
+
+        for batch, patches in enumerate(batch_patches):
+            out_start = batch * filters * positions
+            d_out = grad[out_start : out_start + filters * positions]
+
+            if kernel_grad is not None:
+                # dK = dOut @ patches: (O, P) @ (P, C*kh*kw)
+                patch_columns = list(zip(*patches))
+                d_kernel = _dot_table(_rows(d_out, positions), patch_columns)
+                _accumulate(kernel_grad, 0, d_kernel)
+
+            if image_grad is not None:
+                # dPatches = dOut^T @ K: (P, O) @ (O, C*kh*kw), then scatter
+                # each patch gradient back onto the pixels it was read from.
+                d_patches = _dot_table(
+                    _columns(d_out, positions),
+                    _columns(kernel.data, patch_size),
+                )
+                image_start = batch * image_size
+                for position, indices in enumerate(patch_indices):
+                    row_start = position * patch_size
+                    for offset, index in enumerate(indices):
+                        image_grad[image_start + index] += d_patches[row_start + offset]
+
+        if kernel_grad is not None:
+            _add_grad(kernel, kernel_grad)
+        if image_grad is not None:
+            _add_grad(image, image_grad)
+
+    out._backward = _backward
+    return out
 
 
-def _pool2d_flat_index(
-    shape: tuple[int, ...],
-    batch: int,
-    channel: int,
-    row: int,
-    col: int,
-) -> int:
-    if len(shape) == 2:
-        _, cols = shape
-        return row * cols + col
-    if len(shape) == 4:
-        _, channels, rows, cols = shape
-        return ((batch * channels + channel) * rows + row) * cols + col
-    _, rows, cols = shape
-    return (channel * rows + row) * cols + col
+def _conv2d_shapes(
+    image_shape: tuple[int, ...],
+    kernel_shape: tuple[int, ...],
+) -> tuple[int, int, int, int, int, tuple[int, ...]]:
+    """Validate shapes and return (B, C, H, W, O, output shape)."""
+
+    mismatch = "conv2d_valid kernel shape does not match image shape"
+    if len(image_shape) == 2:
+        batches, channels = 1, 1
+        image_rows, image_cols = image_shape
+        if len(kernel_shape) == 2:
+            filters = 1
+        elif len(kernel_shape) == 3:
+            filters = kernel_shape[0]
+        else:
+            raise ValueError(mismatch)
+        kernel_channels = 1
+    elif len(image_shape) == 3:
+        batches = 1
+        channels, image_rows, image_cols = image_shape
+        if len(kernel_shape) == 3:
+            filters = 1
+            kernel_channels = kernel_shape[0]
+        elif len(kernel_shape) == 4:
+            filters, kernel_channels = kernel_shape[:2]
+        else:
+            raise ValueError(mismatch)
+    elif len(image_shape) == 4:
+        batches, channels, image_rows, image_cols = image_shape
+        if len(kernel_shape) != 4:
+            raise ValueError(mismatch)
+        filters, kernel_channels = kernel_shape[:2]
+    else:
+        raise ValueError("conv2d_valid expects a 2D, 3D, or 4D image tensor")
+
+    if channels != kernel_channels:
+        raise ValueError("conv2d_valid image and kernel channels must match")
+
+    kernel_rows, kernel_cols = kernel_shape[-2:]
+    if kernel_rows > image_rows or kernel_cols > image_cols:
+        raise ValueError("conv2d_valid kernel must fit inside the image")
+
+    out_rows = image_rows - kernel_rows + 1
+    out_cols = image_cols - kernel_cols + 1
+    if len(image_shape) == 4:
+        out_shape = (batches, filters, out_rows, out_cols)
+    elif len(kernel_shape) == len(image_shape):
+        out_shape = (out_rows, out_cols)
+    else:
+        out_shape = (filters, out_rows, out_cols)
+    return batches, channels, image_rows, image_cols, filters, out_shape
+
+
+@lru_cache(maxsize=64)
+def _conv2d_patch_indices(
+    channels: int,
+    image_rows: int,
+    image_cols: int,
+    kernel_rows: int,
+    kernel_cols: int,
+) -> tuple[tuple[int, ...], ...]:
+    """For every output position, the flat image indices under the kernel.
+
+    Index order inside a patch matches a flattened (C, kh, kw) kernel.
+    """
+
+    channel_size = image_rows * image_cols
+    patch_offsets = [
+        channel * channel_size + row * image_cols + col
+        for channel in range(channels)
+        for row in range(kernel_rows)
+        for col in range(kernel_cols)
+    ]
+    return tuple(
+        tuple(out_row * image_cols + out_col + offset for offset in patch_offsets)
+        for out_row in range(image_rows - kernel_rows + 1)
+        for out_col in range(image_cols - kernel_cols + 1)
+    )
 
 
 def avg_pool2d(
@@ -830,98 +1314,33 @@ def avg_pool2d(
 ) -> Tensor:
     """Average-pool a 2D tensor or each channel in a 3D/4D tensor."""
 
-    if image.ndim == 2:
-        batches = 1
-        image_has_batch_axis = False
-        channels = 1
-        image_rows, image_cols = image.shape
-        out_shape_prefix = ()
-    elif image.ndim == 3:
-        batches = 1
-        image_has_batch_axis = False
-        channels, image_rows, image_cols = image.shape
-        out_shape_prefix = (channels,)
-    elif image.ndim == 4:
-        batches, channels, image_rows, image_cols = image.shape
-        image_has_batch_axis = True
-        out_shape_prefix = (batches, channels)
-    else:
-        raise ValueError("avg_pool2d expects a 2D, 3D, or 4D tensor")
+    planes, out_shape, windows = _pool2d_setup("avg_pool2d", image, window, stride)
+    plane_size = image.shape[-2] * image.shape[-1]
+    scale = 1 / (window[0] * window[1])
+    source = image.data
 
-    window_rows, window_cols = window
-    if window_rows <= 0 or window_cols <= 0:
-        raise ValueError("avg_pool2d window dimensions must be positive")
+    data: list[float] = []
+    for plane in range(planes):
+        offset = plane * plane_size
+        data.extend([
+            sum(source[offset + index] for index in indices) * scale
+            for indices in windows
+        ])
 
-    if stride is None:
-        stride_rows, stride_cols = window
-    else:
-        stride_rows, stride_cols = stride
-        if stride_rows <= 0 or stride_cols <= 0:
-            raise ValueError("avg_pool2d stride dimensions must be positive")
-
-    if window_rows > image_rows or window_cols > image_cols:
-        raise ValueError("avg_pool2d window must fit inside the image")
-
-    out_rows = ((image_rows - window_rows) // stride_rows) + 1
-    out_cols = ((image_cols - window_cols) // stride_cols) + 1
-    scale = 1 / (window_rows * window_cols)
-    data = []
-    for batch in range(batches):
-        for channel in range(channels):
-            for out_row in range(out_rows):
-                for out_col in range(out_cols):
-                    row_start = out_row * stride_rows
-                    col_start = out_col * stride_cols
-                    total = 0.0
-                    for window_row in range(window_rows):
-                        for window_col in range(window_cols):
-                            total += _conv2d_image_value(
-                                image,
-                                image_has_batch_axis,
-                                batch,
-                                channel,
-                                row_start + window_row,
-                                col_start + window_col,
-                            )
-                    data.append(total * scale)
-
-    out = Tensor(
-        data,
-        (*out_shape_prefix, out_rows, out_cols),
-        requires_grad=image.requires_grad,
-        _children=(image,),
-        _op="avg_pool2d",
-    )
+    out = _op_result(data, out_shape, (image,), "avg_pool2d")
 
     def _backward() -> None:
-        if not image.requires_grad:
-            return
+        # Every pixel in a window gets an equal share of that window's grad.
         grad = _grad_data(out)
-        image_grad = [0.0] * len(image.data)
-        for batch in range(batches):
-            for channel in range(channels):
-                for out_row in range(out_rows):
-                    for out_col in range(out_cols):
-                        row_start = out_row * stride_rows
-                        col_start = out_col * stride_cols
-                        out_index = _pool2d_flat_index(
-                            out.shape,
-                            batch,
-                            channel,
-                            out_row,
-                            out_col,
-                        )
-                        out_grad = grad[out_index] * scale
-                        for window_row in range(window_rows):
-                            for window_col in range(window_cols):
-                                image_index = _pool2d_flat_index(
-                                    image.shape,
-                                    batch,
-                                    channel,
-                                    row_start + window_row,
-                                    col_start + window_col,
-                                )
-                                image_grad[image_index] += out_grad
+        image_grad = [0.0] * image.numel
+        grad_index = 0
+        for plane in range(planes):
+            offset = plane * plane_size
+            for indices in windows:
+                share = grad[grad_index] * scale
+                grad_index += 1
+                for index in indices:
+                    image_grad[offset + index] += share
         _add_grad(image, image_grad)
 
     out._backward = _backward
@@ -940,77 +1359,27 @@ def max_pool2d(
     maximum in row-major order.
     """
 
-    if image.ndim == 2:
-        batches = 1
-        channels = 1
-        image_rows, image_cols = image.shape
-        out_shape_prefix = ()
-    elif image.ndim == 3:
-        batches = 1
-        channels, image_rows, image_cols = image.shape
-        out_shape_prefix = (channels,)
-    elif image.ndim == 4:
-        batches, channels, image_rows, image_cols = image.shape
-        out_shape_prefix = (batches, channels)
-    else:
-        raise ValueError("max_pool2d expects a 2D, 3D, or 4D tensor")
+    planes, out_shape, windows = _pool2d_setup("max_pool2d", image, window, stride)
+    plane_size = image.shape[-2] * image.shape[-1]
+    source = image.data
 
-    window_rows, window_cols = window
-    if window_rows <= 0 or window_cols <= 0:
-        raise ValueError("max_pool2d window dimensions must be positive")
+    data: list[float] = []
+    max_indices: list[int] = []
+    for plane in range(planes):
+        offset = plane * plane_size
+        for indices in windows:
+            best_index = offset + indices[0]
+            for index in indices[1:]:
+                if source[offset + index] > source[best_index]:
+                    best_index = offset + index
+            data.append(source[best_index])
+            max_indices.append(best_index)
 
-    if stride is None:
-        stride_rows, stride_cols = window
-    else:
-        stride_rows, stride_cols = stride
-        if stride_rows <= 0 or stride_cols <= 0:
-            raise ValueError("max_pool2d stride dimensions must be positive")
-
-    if window_rows > image_rows or window_cols > image_cols:
-        raise ValueError("max_pool2d window must fit inside the image")
-
-    out_rows = ((image_rows - window_rows) // stride_rows) + 1
-    out_cols = ((image_cols - window_cols) // stride_cols) + 1
-    data = []
-    max_indices = []
-    for batch in range(batches):
-        for channel in range(channels):
-            for out_row in range(out_rows):
-                for out_col in range(out_cols):
-                    row_start = out_row * stride_rows
-                    col_start = out_col * stride_cols
-                    max_value = None
-                    max_index = None
-                    for window_row in range(window_rows):
-                        for window_col in range(window_cols):
-                            image_index = _pool2d_flat_index(
-                                image.shape,
-                                batch,
-                                channel,
-                                row_start + window_row,
-                                col_start + window_col,
-                            )
-                            value = image.data[image_index]
-                            if max_value is None or value > max_value:
-                                max_value = value
-                                max_index = image_index
-                    assert max_value is not None
-                    assert max_index is not None
-                    data.append(max_value)
-                    max_indices.append(max_index)
-
-    out = Tensor(
-        data,
-        (*out_shape_prefix, out_rows, out_cols),
-        requires_grad=image.requires_grad,
-        _children=(image,),
-        _op="max_pool2d",
-    )
+    out = _op_result(data, out_shape, (image,), "max_pool2d")
 
     def _backward() -> None:
-        if not image.requires_grad:
-            return
-        image_grad = [0.0] * len(image.data)
+        # Only the winning pixel of each window affected the output.
+        image_grad = [0.0] * image.numel
         for out_grad, image_index in zip(_grad_data(out), max_indices):
             image_grad[image_index] += out_grad
         _add_grad(image, image_grad)
@@ -1019,208 +1388,74 @@ def max_pool2d(
     return out
 
 
-def transpose(tensor: Tensor) -> Tensor:
-    """Transpose a 2D tensor."""
+def _pool2d_setup(
+    name: str,
+    image: Tensor,
+    window: tuple[int, int],
+    stride: tuple[int, int] | None,
+) -> tuple[int, tuple[int, ...], tuple[tuple[int, ...], ...]]:
+    """Validate pooling arguments; return (planes, out shape, windows)."""
 
-    if len(tensor.shape) != 2:
-        raise ValueError("transpose expects a 2D tensor")
-    return permute(tensor, (1, 0))
+    if image.ndim not in (2, 3, 4):
+        raise ValueError(f"{name} expects a 2D, 3D, or 4D tensor")
+
+    image_rows, image_cols = image.shape[-2:]
+    window_rows, window_cols = window
+    if window_rows <= 0 or window_cols <= 0:
+        raise ValueError(f"{name} window dimensions must be positive")
+
+    if stride is None:
+        stride_rows, stride_cols = window
+    else:
+        stride_rows, stride_cols = stride
+        if stride_rows <= 0 or stride_cols <= 0:
+            raise ValueError(f"{name} stride dimensions must be positive")
+
+    if window_rows > image_rows or window_cols > image_cols:
+        raise ValueError(f"{name} window must fit inside the image")
+
+    out_rows = ((image_rows - window_rows) // stride_rows) + 1
+    out_cols = ((image_cols - window_cols) // stride_cols) + 1
+    planes = _numel(image.shape[:-2])
+    out_shape = (*image.shape[:-2], out_rows, out_cols)
+    windows = _pool2d_windows(
+        image_cols,
+        window_rows,
+        window_cols,
+        stride_rows,
+        stride_cols,
+        out_rows,
+        out_cols,
+    )
+    return planes, out_shape, windows
 
 
-def tensor_sum(tensor: Tensor, axis: int | None = None) -> Tensor:
-    """Sum all values or reduce a tensor along one axis."""
+@lru_cache(maxsize=64)
+def _pool2d_windows(
+    image_cols: int,
+    window_rows: int,
+    window_cols: int,
+    stride_rows: int,
+    stride_cols: int,
+    out_rows: int,
+    out_cols: int,
+) -> tuple[tuple[int, ...], ...]:
+    """For every output position, the flat indices of its window in a plane."""
 
-    if axis is None:
-        out = Tensor(
-            [sum(tensor.data)],
-            (1,),
-            requires_grad=tensor.requires_grad,
-            _children=(tensor,),
-            _op="sum",
+    return tuple(
+        tuple(
+            (out_row * stride_rows + row) * image_cols + out_col * stride_cols + col
+            for row in range(window_rows)
+            for col in range(window_cols)
         )
-
-        def _backward() -> None:
-            if tensor.requires_grad:
-                _add_grad(tensor, [_grad_data(out)[0]] * len(tensor.data))
-
-        out._backward = _backward
-        return out
-
-    axis = _normalize_axis(axis, len(tensor.shape))
-    out_shape = _reduced_shape(tensor.shape, axis)
-    data = [0.0] * _numel(out_shape)
-
-    for flat_index, value in enumerate(tensor.data):
-        index = _unravel_index(flat_index, tensor.shape)
-        reduced_index = index[:axis] + index[axis + 1 :]
-        if not reduced_index:
-            reduced_index = (0,)
-        data[_flat_index(reduced_index, out_shape)] += value
-
-    out = Tensor(
-        data,
-        out_shape,
-        requires_grad=tensor.requires_grad,
-        _children=(tensor,),
-        _op="sum",
-    )
-
-    def _backward() -> None:
-        if not tensor.requires_grad:
-            return
-        grad = _grad_data(out)
-        tensor_grad = []
-        for flat_index in range(len(tensor.data)):
-            index = _unravel_index(flat_index, tensor.shape)
-            reduced_index = index[:axis] + index[axis + 1 :]
-            if not reduced_index:
-                reduced_index = (0,)
-            tensor_grad.append(grad[_flat_index(reduced_index, out_shape)])
-        _add_grad(tensor, tensor_grad)
-
-    out._backward = _backward
-    return out
-
-
-def tensor_mean(tensor: Tensor, axis: int | None = None) -> Tensor:
-    """Mean of all values or a tensor along one axis."""
-
-    if axis is None:
-        return tensor_sum(tensor) * (1 / len(tensor.data))
-
-    axis = _normalize_axis(axis, len(tensor.shape))
-    return tensor_sum(tensor, axis=axis) * (1 / tensor.shape[axis])
-
-
-def tensor_softmax(tensor: Tensor, axis: int = -1) -> Tensor:
-    """Softmax over one tensor axis."""
-
-    axis = _normalize_axis(axis, len(tensor.shape))
-    groups: dict[tuple[int, ...], list[int]] = {}
-    for flat_index in range(tensor.numel):
-        index = _unravel_index(flat_index, tensor.shape)
-        group_key = index[:axis] + index[axis + 1 :]
-        groups.setdefault(group_key, []).append(flat_index)
-
-    data = [0.0] * tensor.numel
-    for indices in groups.values():
-        values = [tensor.data[index] for index in indices]
-        row_max = max(values)
-        exp_values = [
-            math.exp(value - row_max)
-            for value in values
-        ]
-        exp_sum = sum(exp_values)
-        for index, value in zip(indices, exp_values):
-            data[index] = value / exp_sum
-
-    out = Tensor(
-        data,
-        tensor.shape,
-        requires_grad=tensor.requires_grad,
-        _children=(tensor,),
-        _op="softmax",
-    )
-
-    def _backward() -> None:
-        if not tensor.requires_grad:
-            return
-
-        grad = _grad_data(out)
-        tensor_grad = [0.0] * tensor.numel
-        for indices in groups.values():
-            weighted_grad = sum(
-                grad[index] * out.data[index]
-                for index in indices
-            )
-            for index in indices:
-                tensor_grad[index] += out.data[index] * (
-                    grad[index] - weighted_grad
-                )
-        _add_grad(tensor, tensor_grad)
-
-    out._backward = _backward
-    return out
-
-
-def tensor_exp(tensor: Tensor) -> Tensor:
-    """Elementwise exponential."""
-
-    return _map(tensor, math.exp, math.exp, "exp")
-
-
-def tensor_log(tensor: Tensor) -> Tensor:
-    """Elementwise natural logarithm."""
-
-    if any(value <= 0 for value in tensor.data):
-        raise ValueError("log is only defined for positive values")
-    return _map(tensor, math.log, lambda value: 1 / value, "log")
-
-
-def tensor_relu(tensor: Tensor) -> Tensor:
-    """Elementwise rectified linear unit."""
-
-    return _map(
-        tensor,
-        lambda value: max(0.0, value),
-        lambda value: 1.0 if value > 0 else 0.0,
-        "relu",
+        for out_row in range(out_rows)
+        for out_col in range(out_cols)
     )
 
 
-def tensor_gelu(tensor: Tensor) -> Tensor:
-    """Elementwise Gaussian error linear unit."""
-
-    sqrt_two = math.sqrt(2.0)
-    sqrt_two_pi = math.sqrt(2.0 * math.pi)
-
-    return _map(
-        tensor,
-        lambda value: 0.5 * value * (1.0 + math.erf(value / sqrt_two)),
-        lambda value: (
-            0.5 * (1.0 + math.erf(value / sqrt_two))
-            + value * math.exp(-0.5 * value * value) / sqrt_two_pi
-        ),
-        "gelu",
-    )
-
-
-def tensor_sigmoid(tensor: Tensor) -> Tensor:
-    """Elementwise sigmoid."""
-
-    def sigmoid(value: float) -> float:
-        return 1 / (1 + math.exp(-value))
-
-    return _map(
-        tensor,
-        sigmoid,
-        lambda value: sigmoid(value) * (1 - sigmoid(value)),
-        "sigmoid",
-    )
-
-
-def tensor_tanh(tensor: Tensor) -> Tensor:
-    """Elementwise hyperbolic tangent."""
-
-    return _map(
-        tensor,
-        math.tanh,
-        lambda value: 1 - math.tanh(value) ** 2,
-        "tanh",
-    )
-
-
-def tensor_reciprocal(tensor: Tensor) -> Tensor:
-    """Elementwise reciprocal."""
-
-    if any(value == 0.0 for value in tensor.data):
-        raise ValueError("division by zero")
-    return _map(
-        tensor,
-        lambda value: 1 / value,
-        lambda value: -1 / (value * value),
-        "reciprocal",
-    )
+# ---------------------------------------------------------------------------
+# Small index helpers
+# ---------------------------------------------------------------------------
 
 
 def _numel(shape: tuple[int, ...]) -> int:
@@ -1228,6 +1463,34 @@ def _numel(shape: tuple[int, ...]) -> int:
     for dim in shape:
         total *= dim
     return total
+
+
+def _strides(shape: tuple[int, ...]) -> tuple[int, ...]:
+    """Row-major strides: how far to step in flat data per axis step."""
+
+    strides = []
+    step = 1
+    for dim in reversed(shape):
+        strides.append(step)
+        step *= dim
+    return tuple(reversed(strides))
+
+
+def _strided_indices(
+    sizes: tuple[int, ...],
+    strides: tuple[int, ...],
+) -> tuple[int, ...]:
+    """Flat offsets visited by walking ``sizes`` in row-major order.
+
+    Each axis multiplies the list: every existing offset is extended by every
+    step along the new axis.
+    """
+
+    indices = [0]
+    for size, stride in zip(sizes, strides):
+        steps = [step * stride for step in range(size)]
+        indices = [base + step for base in indices for step in steps]
+    return tuple(indices)
 
 
 def _flat_index(index: tuple[int, ...], shape: tuple[int, ...]) -> int:
@@ -1328,112 +1591,3 @@ def _normalize_index(index: int, size: int) -> int:
     if index < 0 or index >= size:
         raise IndexError("tensor index out of range")
     return index
-
-
-def _broadcast_shape(
-    left_shape: tuple[int, ...],
-    right_shape: tuple[int, ...],
-) -> tuple[int, ...]:
-    shape = []
-    max_ndim = max(len(left_shape), len(right_shape))
-    padded_left = (1,) * (max_ndim - len(left_shape)) + left_shape
-    padded_right = (1,) * (max_ndim - len(right_shape)) + right_shape
-
-    for left_dim, right_dim in zip(padded_left, padded_right):
-        if left_dim == right_dim:
-            shape.append(left_dim)
-        elif left_dim == 1:
-            shape.append(right_dim)
-        elif right_dim == 1:
-            shape.append(left_dim)
-        else:
-            raise ValueError("tensor shapes cannot be broadcast")
-    return tuple(shape)
-
-
-def _broadcast_data_index(
-    out_flat_index: int,
-    out_shape: tuple[int, ...],
-    source_shape: tuple[int, ...],
-) -> int:
-    out_index = _unravel_index(out_flat_index, out_shape)
-    padded_source = (1,) * (len(out_shape) - len(source_shape)) + source_shape
-    source_index = [
-        0 if source_dim == 1 else out_dim
-        for out_dim, source_dim in zip(out_index, padded_source)
-    ]
-    source_index = source_index[len(source_index) - len(source_shape) :]
-    return _flat_index(tuple(source_index), source_shape)
-
-
-def _sum_broadcast_grad(
-    grad: list[float],
-    out_shape: tuple[int, ...],
-    source_shape: tuple[int, ...],
-) -> list[float]:
-    source_grad = [0.0] * _numel(source_shape)
-    for index, value in enumerate(grad):
-        source_grad[_broadcast_data_index(index, out_shape, source_shape)] += value
-    return source_grad
-
-
-def _require_same_shape(left: Tensor, right: Tensor) -> None:
-    if left.shape != right.shape:
-        raise ValueError("tensor shapes must match")
-
-
-def _map(tensor: Tensor, fn, grad_fn, op: str) -> Tensor:
-    out = Tensor(
-        [fn(value) for value in tensor.data],
-        tensor.shape,
-        requires_grad=tensor.requires_grad,
-        _children=(tensor,),
-        _op=op,
-    )
-
-    def _backward() -> None:
-        if tensor.requires_grad:
-            _add_grad(
-                tensor,
-                [
-                    grad_fn(value) * grad
-                    for value, grad in zip(tensor.data, _grad_data(out))
-                ],
-            )
-
-    out._backward = _backward
-    return out
-
-
-def _seed_grad(
-    tensor: Tensor,
-    grad: Tensor | Sequence[Number] | None,
-) -> list[float]:
-    if grad is None:
-        if tensor.shape != (1,):
-            raise ValueError("non-scalar tensor backward requires an explicit gradient")
-        return [1.0]
-
-    if isinstance(grad, Tensor):
-        if grad.shape != tensor.shape:
-            raise ValueError("backward gradient shape must match tensor shape")
-        return grad.data[:]
-
-    if len(grad) != len(tensor.data):
-        raise ValueError("backward gradient length must match tensor data")
-    return [float(value) for value in grad]
-
-
-def _grad_data(tensor: Tensor) -> list[float]:
-    if tensor.grad is None:
-        return [0.0] * len(tensor.data)
-    return tensor.grad
-
-
-def _add_grad(tensor: Tensor, grad: Sequence[Number]) -> None:
-    if tensor.grad is None:
-        tensor.grad = [0.0] * len(tensor.data)
-    if len(grad) != len(tensor.grad):
-        raise ValueError("gradient length does not match tensor data")
-    for i, value in enumerate(grad):
-        tensor.grad[i] += float(value)
