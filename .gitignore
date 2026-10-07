@@ -29,3 +29,6 @@ data/cifar10/*.bin
 data/cifar10/*.tar.gz
 data/cifar10/cifar-10-batches-bin/
 data/tinyshakespeare/input.txt
+
+# Training runs and benchmark logs (results are summarized in docs/)
+runs/

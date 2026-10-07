@@ -1,8 +1,0 @@
-train 60000 images, test 10000 images, batch 32
-nanograd epoch 1: loss 0.3531, test acc 95.37%, 125.8 s (67.1 ms/step)
-nanograd epoch 2: loss 0.1256, test acc 97.32%, 137.0 s (73.0 ms/step)
-nanograd epoch 3: loss 0.0818, test acc 98.06%, 140.6 s (75.0 ms/step)
-torch    epoch 1: loss 0.3531, test acc 95.37%, 14.6 s (7.8 ms/step)
-torch    epoch 2: loss 0.1256, test acc 97.32%, 14.5 s (7.7 ms/step)
-torch    epoch 3: loss 0.0818, test acc 98.06%, 13.7 s (7.3 ms/step)
-max |weight difference| after training: 1.998e-15

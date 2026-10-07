@@ -1,4 +1,0 @@
-train 60000 images, test 10000 images, batch 32
-torch    epoch 1: loss 0.3531, test acc 95.37%, 11.4 s (6.1 ms/step)
-torch    epoch 2: loss 0.1256, test acc 97.32%, 9.6 s (5.1 ms/step)
-torch    epoch 3: loss 0.0818, test acc 98.06%, 9.5 s (5.1 ms/step)
