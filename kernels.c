@@ -80,18 +80,20 @@ typedef real vec __attribute__((vector_size(VECTOR_BYTES)));
  * for rows (<= TILE_ROWS) rows and cols (<= TILE_COLS) columns, where
  * a(r, p) = A[r * row_step + p * col_step] (so A can be a plain matrix, its
  * transpose, or a packed block) and C rows are n apart. The panel holds
- * B's columns, zero-padded past cols. Always inlined, so the full-tile call
- * (rows = TILE_ROWS, cols = TILE_COLS) gets constants the compiler can unroll. */
+ * B's columns, zero-padded past cols, with rows panel_step apart
+ * (TILE_COLS when packed; n when the tile reads B in place). Always inlined,
+ * so the full-tile call (rows = TILE_ROWS, cols = TILE_COLS) gets constants
+ * the compiler can unroll. */
 static inline __attribute__((always_inline)) void tile(
     const real *A, long row_step, long col_step, real *C, int n,
-    const real *panel, int kb, int rows, int cols)
+    const real *panel, long panel_step, int kb, int rows, int cols)
 {
     vec acc[TILE_ROWS][2];
     memset(acc, 0, sizeof acc);
     for (int p = 0; p < kb; p++) {
         vec b0, b1;
-        VEC_LOAD(b0, panel + (long)p * TILE_COLS);
-        VEC_LOAD(b1, panel + (long)p * TILE_COLS + VECTOR_WIDTH);
+        VEC_LOAD(b0, panel + (long)p * panel_step);
+        VEC_LOAD(b1, panel + (long)p * panel_step + VECTOR_WIDTH);
         for (int r = 0; r < rows; r++) {
             real a_rp = A[r * row_step + p * col_step];
             acc[r][0] += a_rp * b0;
@@ -122,18 +124,19 @@ static inline __attribute__((always_inline)) void tile(
  * constant steps (the packed block) are folded into the inner loop. */
 static inline __attribute__((always_inline)) void row_tiles(
     const real *A, long row_step, long col_step, long tile_step,
-    real *C, int n, const real *panel, int kb, int rows, int cols)
+    real *C, int n, const real *panel, long panel_step, int kb, int rows, int cols)
 {
     int i = 0;
     for (; i + TILE_ROWS <= rows; i += TILE_ROWS) {
         const real *a = A + (i / TILE_ROWS) * tile_step;
         if (cols == TILE_COLS)
-            tile(a, row_step, col_step, C + (long)i * n, n, panel, kb, TILE_ROWS, TILE_COLS);
+            tile(a, row_step, col_step, C + (long)i * n, n, panel, panel_step, kb, TILE_ROWS, TILE_COLS);
         else
-            tile(a, row_step, col_step, C + (long)i * n, n, panel, kb, TILE_ROWS, cols);
+            tile(a, row_step, col_step, C + (long)i * n, n, panel, panel_step, kb, TILE_ROWS, cols);
     }
     if (i < rows)                                              /* leftover rows */
-        tile(A + (i / TILE_ROWS) * tile_step, row_step, col_step, C + (long)i * n, n, panel, kb, rows - i, cols);
+        tile(A + (i / TILE_ROWS) * tile_step, row_step, col_step, C + (long)i * n, n,
+             panel, panel_step, kb, rows - i, cols);
 }
 
 /* C (m x n) += op(A) (m x k) @ op(B) (k x n). Packing reads B either way,
@@ -159,6 +162,14 @@ static void gemm_tiled(const real *A, const real *B, real *C,
             }
             for (int j = 0; j < n; j += TILE_COLS) {
                 int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
+                const real *b_panel = panel;
+                long b_step = TILE_COLS;
+                if (!trans_b && cols == TILE_COLS && i_end - i0 <= 2 * TILE_ROWS) {
+                    /* Few rows: the panel would serve only one or two row
+                     * tiles, so read B where it is instead of copying it. */
+                    b_panel = B + (long)p0 * n + j;
+                    b_step = n;
+                } else {
                 if (cols < TILE_COLS)                            /* 2. pack B (zero-padded) */
                     memset(panel, 0, sizeof(real) * K_BLOCK * TILE_COLS);
                 if (trans_b) {                                   /* op(B)[p, c] = B[c, p] */
@@ -170,12 +181,16 @@ static void gemm_tiled(const real *A, const real *B, real *C,
                     for (int p = 0; p < kb; p++)
                         memcpy(panel + (long)p * TILE_COLS, B + (long)(p0 + p) * n + j, sizeof(real) * cols);
                 }
+                }
                 if (pack_a)                                      /* 1. register tiles */
-                    row_tiles(packed, 1, TILE_ROWS, (long)TILE_ROWS * kb, C + (long)i0 * n + j, n, panel, kb, i_end - i0, cols);
+                    row_tiles(packed, 1, TILE_ROWS, (long)TILE_ROWS * kb, C + (long)i0 * n + j, n,
+                              b_panel, b_step, kb, i_end - i0, cols);
                 else if (trans_a)
-                    row_tiles(A + (long)p0 * m + i0, 1, m, TILE_ROWS, C + (long)i0 * n + j, n, panel, kb, i_end - i0, cols);
+                    row_tiles(A + (long)p0 * m + i0, 1, m, TILE_ROWS, C + (long)i0 * n + j, n,
+                              b_panel, b_step, kb, i_end - i0, cols);
                 else
-                    row_tiles(A + (long)i0 * k + p0, k, 1, (long)TILE_ROWS * k, C + (long)i0 * n + j, n, panel, kb, i_end - i0, cols);
+                    row_tiles(A + (long)i0 * k + p0, k, 1, (long)TILE_ROWS * k, C + (long)i0 * n + j, n,
+                              b_panel, b_step, kb, i_end - i0, cols);
             }
         }
     }
@@ -304,7 +319,7 @@ void conv_forward(const real *image, const long *index, const real *kernel, real
                 for (int p = 0; p < kb; p++)                   /* pack through the index */
                     for (int jj = 0; jj < cols; jj++)
                         panel[(long)p * TILE_COLS + jj] = img[index[(long)(j + jj) * k + p0 + p]];
-                row_tiles(A + p0, k, 1, (long)TILE_ROWS * k, C + j, n, panel, kb, m, cols);
+                row_tiles(A + p0, k, 1, (long)TILE_ROWS * k, C + j, n, panel, TILE_COLS, kb, m, cols);
             }
         }
 #endif
@@ -358,7 +373,7 @@ void conv_kernel_grad(const real *image, const long *index, const real *grad, re
                     for (int jj = 0; jj < cols; jj++)
                         panel[(long)p * TILE_COLS + jj] = img[cells[jj]];
                 }
-                row_tiles(A + p0, k, 1, (long)TILE_ROWS * k, dkernel + j, n, panel, kb, m, cols);
+                row_tiles(A + p0, k, 1, (long)TILE_ROWS * k, dkernel + j, n, panel, TILE_COLS, kb, m, cols);
             }
         }
 #endif
@@ -420,9 +435,9 @@ void conv_input_grad(const real *grad, const real *kernel, const long *index, re
                         memcpy(panel + (long)p * TILE_COLS, kernel + (long)(p0 + p) * n + j, sizeof(real) * cols);
                     /* A + i: rows i.. of grad_b^T become the tile's rows 0.. */
                     if (cols == TILE_COLS)
-                        tile(A + i + (long)p0 * m, 1, m, block + j, n, panel, kb, rows, TILE_COLS);
+                        tile(A + i + (long)p0 * m, 1, m, block + j, n, panel, TILE_COLS, kb, rows, TILE_COLS);
                     else
-                        tile(A + i + (long)p0 * m, 1, m, block + j, n, panel, kb, rows, cols);
+                        tile(A + i + (long)p0 * m, 1, m, block + j, n, panel, TILE_COLS, kb, rows, cols);
                 }
             }
 #endif
@@ -953,6 +968,71 @@ void sigmoid_forward(const real *x, real *y, long count)
 void sigmoid_backward(const real *y, const real *grad, real *dx, long count)
 {
     for (long i = 0; i < count; i++) dx[i] = grad[i] * y[i] * (1.0 - y[i]);
+}
+
+/*
+ * The LSTM cell (rnn.py), fused into two steps. gates is (batch x 4H) in
+ * PyTorch's order i, f, g, o:
+ *     memory:  c' = sigmoid(f) * c + sigmoid(i) * tanh(g)
+ *     output:  h  = sigmoid(o) * tanh(c')
+ * The backward passes recompute the gate activations from the gates (a few
+ * exps) instead of storing them, and write the gate columns they do not
+ * use as zero.
+ */
+static inline double sigmoid1(double x)
+{
+    if (x >= 0.0) return 1.0 / (1.0 + exp(-x));
+    double e = exp(x);
+    return e / (1.0 + e);
+}
+
+void lstm_memory(const real *gates, const real *c, real *c_new, long batch, long hidden)
+{
+    for (long b = 0; b < batch; b++) {
+        const real *gi = gates + b * 4 * hidden, *gf = gi + hidden, *gg = gf + hidden;
+        for (long j = 0; j < hidden; j++)
+            c_new[b * hidden + j] = sigmoid1(gf[j]) * c[b * hidden + j] + sigmoid1(gi[j]) * tanh(gg[j]);
+    }
+}
+
+void lstm_memory_backward(const real *gates, const real *c, const real *grad,
+                          real *dgates, real *dc, long batch, long hidden)
+{
+    for (long b = 0; b < batch; b++) {
+        const real *gi = gates + b * 4 * hidden, *gf = gi + hidden, *gg = gf + hidden;
+        real *di = dgates + b * 4 * hidden, *df = di + hidden, *dg = df + hidden, *d_o = dg + hidden;
+        for (long j = 0; j < hidden; j++) {
+            double i = sigmoid1(gi[j]), f = sigmoid1(gf[j]), g = tanh(gg[j]), d = grad[b * hidden + j];
+            di[j] = d * g * i * (1.0 - i);
+            df[j] = d * c[b * hidden + j] * f * (1.0 - f);
+            dg[j] = d * i * (1.0 - g * g);
+            d_o[j] = 0.0;
+            dc[b * hidden + j] = d * f;
+        }
+    }
+}
+
+void lstm_output(const real *gates, const real *c_new, real *h, long batch, long hidden)
+{
+    for (long b = 0; b < batch; b++) {
+        const real *go = gates + b * 4 * hidden + 3 * hidden;
+        for (long j = 0; j < hidden; j++) h[b * hidden + j] = sigmoid1(go[j]) * tanh(c_new[b * hidden + j]);
+    }
+}
+
+void lstm_output_backward(const real *gates, const real *c_new, const real *grad,
+                          real *dgates, real *dc_new, long batch, long hidden)
+{
+    for (long b = 0; b < batch; b++) {
+        const real *go = gates + b * 4 * hidden + 3 * hidden;
+        real *row = dgates + b * 4 * hidden;
+        for (long j = 0; j < 3 * hidden; j++) row[j] = 0.0;
+        for (long j = 0; j < hidden; j++) {
+            double o = sigmoid1(go[j]), t = tanh(c_new[b * hidden + j]), d = grad[b * hidden + j];
+            row[3 * hidden + j] = d * t * o * (1.0 - o);
+            dc_new[b * hidden + j] = d * o * (1.0 - t * t);
+        }
+    }
 }
 
 /*

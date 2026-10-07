@@ -344,6 +344,38 @@ def sigmoid_backward(y: list[float], grad: list[float]) -> list[float]:
     return (kernels_c.sigmoid_backward if BACKEND == "c" else reference.sigmoid_backward)(y, grad)
 
 
+def lstm_memory(gates, c, *, batch: int, hidden: int) -> list[float]:
+    """LSTM memory update c' = sigmoid(f) * c + sigmoid(i) * tanh(g); gates (batch, 4H) as i, f, g, o."""
+
+    if BACKEND == "c":
+        return kernels_c.lstm_step("lstm_memory", gates, c, batch, hidden)
+    return reference.lstm_memory(gates, c, batch, hidden)
+
+
+def lstm_memory_backward(gates, c, grad, *, batch: int, hidden: int):
+    """Gradients (for the gates, for c) of ``lstm_memory``."""
+
+    if BACKEND == "c":
+        return kernels_c.lstm_step_backward("lstm_memory_backward", gates, c, grad, batch, hidden)
+    return reference.lstm_memory_backward(gates, c, grad, batch, hidden)
+
+
+def lstm_output(gates, c_new, *, batch: int, hidden: int) -> list[float]:
+    """LSTM output h = sigmoid(o) * tanh(c')."""
+
+    if BACKEND == "c":
+        return kernels_c.lstm_step("lstm_output", gates, c_new, batch, hidden)
+    return reference.lstm_output(gates, c_new, batch, hidden)
+
+
+def lstm_output_backward(gates, c_new, grad, *, batch: int, hidden: int):
+    """Gradients (for the gates, for c') of ``lstm_output``."""
+
+    if BACKEND == "c":
+        return kernels_c.lstm_step_backward("lstm_output_backward", gates, c_new, grad, batch, hidden)
+    return reference.lstm_output_backward(gates, c_new, grad, batch, hidden)
+
+
 def bce_with_logits_sum(x: list[float], t: list[float]) -> float:
     """Summed binary cross entropy of logits x against targets t (see losses.py)."""
 

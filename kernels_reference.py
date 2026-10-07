@@ -367,6 +367,59 @@ def sum_repeated(x: list[float], outer: int, size: int, inner: int) -> list[floa
     ]
 
 
+def _sigmoid1(x: float) -> float:
+    if x >= 0.0:
+        return 1.0 / (1.0 + math.exp(-x))
+    e = math.exp(x)
+    return e / (1.0 + e)
+
+
+def lstm_memory(gates, c, batch: int, hidden: int) -> list[float]:
+    out = []
+    for b in range(batch):
+        row = gates[b * 4 * hidden : (b + 1) * 4 * hidden]
+        for j in range(hidden):
+            i, f, g = _sigmoid1(row[j]), _sigmoid1(row[hidden + j]), math.tanh(row[2 * hidden + j])
+            out.append(f * c[b * hidden + j] + i * g)
+    return out
+
+
+def lstm_memory_backward(gates, c, grad, batch: int, hidden: int) -> tuple[list[float], list[float]]:
+    dgates, dc = [], []
+    for b in range(batch):
+        row = gates[b * 4 * hidden : (b + 1) * 4 * hidden]
+        di, df, dg = [], [], []
+        for j in range(hidden):
+            i, f, g = _sigmoid1(row[j]), _sigmoid1(row[hidden + j]), math.tanh(row[2 * hidden + j])
+            d = grad[b * hidden + j]
+            di.append(d * g * i * (1.0 - i))
+            df.append(d * c[b * hidden + j] * f * (1.0 - f))
+            dg.append(d * i * (1.0 - g * g))
+            dc.append(d * f)
+        dgates += di + df + dg + [0.0] * hidden
+    return dgates, dc
+
+
+def lstm_output(gates, c_new, batch: int, hidden: int) -> list[float]:
+    return [
+        _sigmoid1(gates[b * 4 * hidden + 3 * hidden + j]) * math.tanh(c_new[b * hidden + j])
+        for b in range(batch) for j in range(hidden)
+    ]
+
+
+def lstm_output_backward(gates, c_new, grad, batch: int, hidden: int) -> tuple[list[float], list[float]]:
+    dgates, dc_new = [], []
+    for b in range(batch):
+        do = []
+        for j in range(hidden):
+            o, t = _sigmoid1(gates[b * 4 * hidden + 3 * hidden + j]), math.tanh(c_new[b * hidden + j])
+            d = grad[b * hidden + j]
+            do.append(d * t * o * (1.0 - o))
+            dc_new.append(d * o * (1.0 - t * t))
+        dgates += [0.0] * (3 * hidden) + do
+    return dgates, dc_new
+
+
 def bce_with_logits_sum(x: list[float], t: list[float]) -> float:
     return math.fsum(max(v, 0.0) - v * target + math.log1p(math.exp(-abs(v))) for v, target in zip(x, t))
 

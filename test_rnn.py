@@ -109,5 +109,24 @@ class GRUTests(unittest.TestCase):
                 self.assertAlmostEqual(a, b, places=12)
 
 
+class FusedCellTests(unittest.TestCase):
+    def test_fused_lstm_ops_match_finite_differences(self) -> None:
+        import random
+
+        from rnn import lstm_memory, lstm_output
+        from test_gradcheck import max_gradient_error
+
+        rng = random.Random(3)
+        gates = Tensor([rng.uniform(-2, 2) for _ in range(2 * 12)], (2, 12), requires_grad=True)
+        c = Tensor([rng.uniform(-1, 1) for _ in range(2 * 3)], (2, 3), requires_grad=True)
+        weights = Tensor([rng.uniform(-1, 1) for _ in range(6)], (2, 3))
+
+        def loss():
+            memory = lstm_memory(gates, c)
+            return ((lstm_output(gates, memory) + memory) * weights).sum()
+
+        self.assertLess(max_gradient_error(loss, [gates, c]), 1e-7)
+
+
 if __name__ == "__main__":
     unittest.main()

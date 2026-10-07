@@ -265,6 +265,16 @@ class KernelBackendTests(unittest.TestCase):
         self.assertAlmostEqual(dropped, 0.3, delta=0.03)
         self.assertEqual({value for value in c if value}, {1 / 0.7})
 
+    def test_lstm_cell_kernels_agree(self) -> None:
+        gates, c, grad = values(2 * 4 * 3, 51), values(2 * 3, 52), values(2 * 3, 53)
+        for name in ("lstm_memory", "lstm_output"):
+            forward, backward = getattr(kernels, name), getattr(kernels, name + "_backward")
+            python, c_out = self.run_both(lambda: forward(gates, c, batch=2, hidden=3))
+            self.assertListsClose(python, c_out)
+            python, c_out = self.run_both(lambda: backward(gates, c, grad, batch=2, hidden=3))
+            for left, right in zip(python, c_out):
+                self.assertListsClose(left, right)
+
     def test_add_scaled_and_sum_of_squares_agree(self) -> None:
         x, y = values(50, 41), values(50, 42)
         python, c = self.run_both(lambda: kernels.add_scaled(x, y, -0.3))

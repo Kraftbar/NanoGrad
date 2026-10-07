@@ -177,6 +177,10 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.multiply_vectors.argtypes = [pointer, pointer, pointer, count]
     library.scale_vector.argtypes = [pointer, ctypes.c_double, pointer, count]
     library.exp_vector.argtypes = [pointer, pointer, count]
+    for name in ("lstm_memory", "lstm_output"):
+        getattr(library, name).argtypes = [pointer, pointer, pointer, count, count]
+    for name in ("lstm_memory_backward", "lstm_output_backward"):
+        getattr(library, name).argtypes = [pointer, pointer, pointer, pointer, pointer, count, count]
     library.dropout_mask.argtypes = [pointer, count, ctypes.c_double, ctypes.c_ulong]
     library.add_scaled.argtypes = [pointer, pointer, ctypes.c_double, pointer, count]
     library.sum_of_squares.argtypes = [pointer, count]
@@ -476,6 +480,19 @@ def sigmoid_backward(y: list[float], grad: list[float]) -> array:
     y_buffer, grad_buffer, dx = _reals(y), _reals(grad), zeros(len(y))
     library.sigmoid_backward(_buffer(y_buffer), _buffer(grad_buffer), _buffer(dx), len(y))
     return dx
+
+
+def lstm_step(name: str, gates, state, batch: int, hidden: int) -> array:
+    gates_buffer, state_buffer, out = _reals(gates), _reals(state), zeros(batch * hidden)
+    getattr(library, name)(_buffer(gates_buffer), _buffer(state_buffer), _buffer(out), batch, hidden)
+    return out
+
+
+def lstm_step_backward(name: str, gates, state, grad, batch: int, hidden: int) -> tuple[array, array]:
+    buffers = [_reals(values) for values in (gates, state, grad)]
+    dgates, dstate = zeros(batch * 4 * hidden), zeros(batch * hidden)
+    getattr(library, name)(*map(_buffer, buffers), _buffer(dgates), _buffer(dstate), batch, hidden)
+    return dgates, dstate
 
 
 def bce_with_logits_sum(x: list[float], t: list[float]) -> float:

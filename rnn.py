@@ -35,8 +35,49 @@ from __future__ import annotations
 import math
 import random
 
-from tensor import Tensor, concat, matmul
+import kernels
+from tensor import Tensor, _add_grad, _grad_data, _op_result, _set_backward, concat, matmul
 from tensor_nn import TensorDropout, TensorEmbedding, TensorLinear, TensorModule
+
+
+def lstm_memory(gates: Tensor, c: Tensor) -> Tensor:
+    """c' = sigmoid(f) * c + sigmoid(i) * tanh(g), for gates (B, 4H) ordered i, f, g, o.
+
+    One fused op (a C kernel) instead of a split and seven elementwise ops
+    per time step; the math is the same.
+    """
+
+    batch, hidden = c.shape
+    data = kernels.lstm_memory(gates.data, c.data, batch=batch, hidden=hidden)
+    out = _op_result(data, (batch, hidden), (gates, c), "lstm_memory")
+
+    def _backward() -> None:
+        dgates, dc = kernels.lstm_memory_backward(gates.data, c.data, _grad_data(out), batch=batch, hidden=hidden)
+        if gates.requires_grad:
+            _add_grad(gates, dgates)
+        if c.requires_grad:
+            _add_grad(c, dc)
+
+    _set_backward(out, _backward)
+    return out
+
+
+def lstm_output(gates: Tensor, c: Tensor) -> Tensor:
+    """h = sigmoid(o) * tanh(c), for gates (B, 4H) ordered i, f, g, o (fused, like ``lstm_memory``)."""
+
+    batch, hidden = c.shape
+    data = kernels.lstm_output(gates.data, c.data, batch=batch, hidden=hidden)
+    out = _op_result(data, (batch, hidden), (gates, c), "lstm_output")
+
+    def _backward() -> None:
+        dgates, dc = kernels.lstm_output_backward(gates.data, c.data, _grad_data(out), batch=batch, hidden=hidden)
+        if gates.requires_grad:
+            _add_grad(gates, dgates)
+        if c.requires_grad:
+            _add_grad(c, dc)
+
+    _set_backward(out, _backward)
+    return out
 
 
 class LSTM(TensorModule):
@@ -79,9 +120,8 @@ class LSTM(TensorModule):
         outputs = []
         for step in steps:
             gates = step.reshape((batch, 4 * hidden_size)) + matmul(h, hidden_weight_t)
-            i, f, g, o = gates.split([hidden_size] * 4, axis=-1)
-            c = f.sigmoid() * c + i.sigmoid() * g.tanh()
-            h = o.sigmoid() * c.tanh()
+            c = lstm_memory(gates, c)        # sigmoid(f) * c + sigmoid(i) * tanh(g)
+            h = lstm_output(gates, c)        # sigmoid(o) * tanh(c)
             outputs.append(h.reshape((batch, 1, hidden_size)))
         return concat(outputs, axis=1), (h, c)
 
