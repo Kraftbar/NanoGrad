@@ -668,21 +668,12 @@ def tensor_gelu(tensor: Tensor) -> Tensor:
     dy = Phi(x) + x * phi(x)        phi = standard normal PDF
     """
 
-    sqrt_two = math.sqrt(2.0)
-    sqrt_two_pi = math.sqrt(2.0 * math.pi)
     inputs = tensor.data
-    cdf = [0.5 * (1.0 + math.erf(x / sqrt_two)) for x in inputs]
-
-    def input_grad(grad: list[float]) -> list[float]:
-        return [
-            g * (phi + x * math.exp(-0.5 * x * x) / sqrt_two_pi)
-            for g, x, phi in zip(grad, inputs, cdf)
-        ]
-
+    out_data, cdf = kernels.gelu(inputs)   # cdf = Phi(x), kept for backward
     return _unary(
         tensor,
-        [x * phi for x, phi in zip(inputs, cdf)],
-        input_grad,
+        out_data,
+        lambda grad: kernels.gelu_backward(inputs, cdf, grad),
         "gelu",
     )
 
@@ -1191,6 +1182,10 @@ def tensor_softmax(tensor: Tensor, axis: int = -1) -> Tensor:
     """
 
     axis = _normalize_axis(axis, len(tensor.shape))
+    if axis == tensor.ndim - 1:
+        # Last axis: every lane is a contiguous row (the attention case).
+        return _softmax_last_axis(tensor)
+
     lanes = _axis_lanes(tensor.shape, axis)
     source = tensor.data
     data = [0.0] * tensor.numel
@@ -1215,6 +1210,18 @@ def tensor_softmax(tensor: Tensor, axis: int = -1) -> Tensor:
                 for y, g in zip(probabilities, lane_grad)
             ]
         _add_grad(tensor, tensor_grad)
+
+    _set_backward(out, _backward)
+    return out
+
+
+def _softmax_last_axis(tensor: Tensor) -> Tensor:
+    width = tensor.shape[-1]
+    data = kernels.softmax_rows(tensor.data, width)
+    out = _op_result(data, tensor.shape, (tensor,), "softmax")
+
+    def _backward() -> None:
+        _add_grad(tensor, kernels.softmax_rows_backward(data, _grad_data(out), width))
 
     _set_backward(out, _backward)
     return out

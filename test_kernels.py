@@ -67,6 +67,33 @@ class KernelBackendTests(unittest.TestCase):
                 for p, q in zip(python, c):
                     self.assertListsClose(p, q)
 
+    def test_elementwise_and_row_kernels_agree(self) -> None:
+        x = values(24, 8)
+        grad = values(24, 9)
+        weight = values(6, 10)
+        bias = values(6, 11)
+
+        for name, function in (
+            ("gelu", lambda: kernels.gelu(x)),
+            ("gelu_backward", lambda: kernels.gelu_backward(x, kernels.gelu(x)[1], grad)),
+            ("softmax", lambda: kernels.softmax_rows(x, 6)),
+            ("softmax_backward", lambda: kernels.softmax_rows_backward(kernels.softmax_rows(x, 6), grad, 6)),
+            ("layer_norm", lambda: kernels.layer_norm_rows(x, weight, bias, 6, 1e-5)),
+            ("layer_norm_backward", lambda: kernels.layer_norm_rows_backward(
+                grad, *kernels.layer_norm_rows(x, weight, bias, 6, 1e-5)[1:], weight, 6, True,
+            )),
+        ):
+            with self.subTest(kernel=name):
+                python, c = self.run_both(function)
+                if isinstance(python, tuple):
+                    for p, q in zip(python, c):
+                        self.assertListsClose(p, q)
+                else:
+                    self.assertListsClose(python, c)
+
+        no_dx = kernels.layer_norm_rows_backward(grad, *kernels.layer_norm_rows(x, weight, bias, 6, 1e-5)[1:], weight, 6, False)
+        self.assertIsNone(no_dx[0])
+
     def test_unknown_backend(self) -> None:
         with self.assertRaises(ValueError):
             kernels.use_backend("cuda")

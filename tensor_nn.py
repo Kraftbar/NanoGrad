@@ -8,6 +8,8 @@ import math
 from collections.abc import Sequence
 from pathlib import Path
 
+import kernels
+
 from tensor import (
     _set_backward,
     Tensor,
@@ -501,46 +503,15 @@ def layer_norm(
     if weight.shape != (width,) or bias.shape != (width,):
         raise ValueError("layer_norm weight and bias must match the last axis")
 
-    x_hats: list[list[float]] = []
-    inv_stds: list[float] = []
-    data: list[float] = []
-    for start in range(0, inputs.numel, width):
-        row = inputs.data[start : start + width]
-        mean = sum(row) / width
-        centered = [value - mean for value in row]
-        variance = sum(value * value for value in centered) / width
-        inv_std = 1.0 / math.sqrt(variance + eps)
-        x_hat = [value * inv_std for value in centered]
-        x_hats.append(x_hat)
-        inv_stds.append(inv_std)
-        data.extend([
-            value * scale + shift
-            for value, scale, shift in zip(x_hat, weight.data, bias.data)
-        ])
-
+    data, x_hat, inv_std = kernels.layer_norm_rows(
+        inputs.data, weight.data, bias.data, width, eps,
+    )
     out = _op_result(data, inputs.shape, (inputs, weight, bias), "layer_norm")
 
     def _backward() -> None:
-        grad = _grad_data(out)
-        input_grad: list[float] = []
-        weight_grad = [0.0] * width
-        bias_grad = [0.0] * width
-        for row_index, (x_hat, inv_std) in enumerate(zip(x_hats, inv_stds)):
-            d_y = grad[row_index * width : (row_index + 1) * width]
-            weight_grad = [
-                total + dy * xh
-                for total, dy, xh in zip(weight_grad, d_y, x_hat)
-            ]
-            bias_grad = [total + dy for total, dy in zip(bias_grad, d_y)]
-            if inputs.requires_grad:
-                g = [dy * scale for dy, scale in zip(d_y, weight.data)]
-                mean_g = sum(g) / width
-                mean_g_x_hat = sum(gi * xh for gi, xh in zip(g, x_hat)) / width
-                input_grad.extend([
-                    inv_std * (gi - mean_g - xh * mean_g_x_hat)
-                    for gi, xh in zip(g, x_hat)
-                ])
-
+        input_grad, weight_grad, bias_grad = kernels.layer_norm_rows_backward(
+            _grad_data(out), x_hat, inv_std, weight.data, width, inputs.requires_grad,
+        )
         if inputs.requires_grad:
             _add_grad(inputs, input_grad)
         if weight.requires_grad:

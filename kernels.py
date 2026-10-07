@@ -1,7 +1,8 @@
 """Compute kernels with two interchangeable backends: C and pure Python.
 
-The heavy inner loops (for now, batched matrix multiplication) live here so
-``tensor.py`` can stay about the math. Two backends compute the same thing:
+The heavy inner loops (batched matrix multiplication, GELU, row softmax and
+row LayerNorm, forward and backward) live here so ``tensor.py`` can stay
+about the math. Two backends compute the same thing:
 
 - ``"c"``: ``kernels.c``, compiled with the system C compiler (``$CC`` or
   ``cc``) the first time it is needed and loaded with ``ctypes``. The build
@@ -87,6 +88,82 @@ def _python_gemm(
     return c
 
 
+def _python_gelu(x: list[float]) -> tuple[list[float], list[float]]:
+    cdf = [0.5 * (1.0 + math.erf(value / _SQRT_TWO)) for value in x]
+    return [value * phi for value, phi in zip(x, cdf)], cdf
+
+
+def _python_gelu_backward(x: list[float], cdf: list[float], grad: list[float]) -> list[float]:
+    return [
+        g * (phi + value * math.exp(-0.5 * value * value) / _SQRT_TWO_PI)
+        for g, value, phi in zip(grad, x, cdf)
+    ]
+
+
+def _python_softmax_rows(x: list[float], width: int) -> list[float]:
+    out: list[float] = []
+    for start in range(0, len(x), width):
+        row = x[start : start + width]
+        row_max = max(row)
+        exps = [math.exp(value - row_max) for value in row]
+        total = sum(exps)
+        out.extend([value / total for value in exps])
+    return out
+
+
+def _python_softmax_rows_backward(y: list[float], grad: list[float], width: int) -> list[float]:
+    out: list[float] = []
+    for start in range(0, len(y), width):
+        probabilities = y[start : start + width]
+        row_grad = grad[start : start + width]
+        weighted = dot(row_grad, probabilities)
+        out.extend([p * (g - weighted) for p, g in zip(probabilities, row_grad)])
+    return out
+
+
+def _python_layer_norm_rows(
+    x: list[float], weight: list[float], bias: list[float], width: int, eps: float,
+) -> tuple[list[float], list[float], list[float]]:
+    y: list[float] = []
+    x_hat: list[float] = []
+    inv_std: list[float] = []
+    for start in range(0, len(x), width):
+        row = x[start : start + width]
+        mean = sum(row) / width
+        centered = [value - mean for value in row]
+        variance = sum(value * value for value in centered) / width
+        scale = 1.0 / math.sqrt(variance + eps)
+        row_hat = [value * scale for value in centered]
+        inv_std.append(scale)
+        x_hat.extend(row_hat)
+        y.extend([h * w + b for h, w, b in zip(row_hat, weight, bias)])
+    return y, x_hat, inv_std
+
+
+def _python_layer_norm_rows_backward(
+    grad: list[float], x_hat: list[float], inv_std: list[float], weight: list[float],
+    width: int, need_dx: bool,
+) -> tuple[list[float] | None, list[float], list[float]]:
+    dx: list[float] = []
+    dweight = [0.0] * width
+    dbias = [0.0] * width
+    for row, scale in enumerate(inv_std):
+        dy = grad[row * width : (row + 1) * width]
+        h = x_hat[row * width : (row + 1) * width]
+        dweight = [total + a * b for total, a, b in zip(dweight, dy, h)]
+        dbias = [total + a for total, a in zip(dbias, dy)]
+        if need_dx:
+            g = [a * w for a, w in zip(dy, weight)]
+            mean_g = sum(g) / width
+            mean_g_h = dot(g, h) / width
+            dx.extend([scale * (gi - mean_g - hi * mean_g_h) for gi, hi in zip(g, h)])
+    return (dx if need_dx else None), dweight, dbias
+
+
+_SQRT_TWO = math.sqrt(2.0)
+_SQRT_TWO_PI = math.sqrt(2.0 * math.pi)
+
+
 # ---------------------------------------------------------------------------
 # C backend
 # ---------------------------------------------------------------------------
@@ -111,7 +188,7 @@ def _build_library() -> ctypes.CDLL | None:
             with tempfile.NamedTemporaryFile(dir=cache, suffix=".so", delete=False) as handle:
                 partial = Path(handle.name)
             subprocess.run(
-                [compiler, "-O3", "-shared", "-fPIC", str(SOURCE), "-o", str(partial)],
+                [compiler, "-O3", "-shared", "-fPIC", str(SOURCE), "-o", str(partial), "-lm"],
                 check=True,
                 capture_output=True,
             )
@@ -131,6 +208,13 @@ def _build_library() -> ctypes.CDLL | None:
         ctypes.c_int, ctypes.c_int,
     ]
     library.gemm.restype = None
+    count = ctypes.c_long
+    library.gelu_forward.argtypes = [pointer, pointer, pointer, count]
+    library.gelu_backward.argtypes = [pointer, pointer, pointer, pointer, count]
+    library.softmax_rows.argtypes = [pointer, pointer, count, count]
+    library.softmax_rows_backward.argtypes = [pointer, pointer, pointer, count, count]
+    library.layer_norm_rows.argtypes = [pointer] * 6 + [count, count, ctypes.c_double]
+    library.layer_norm_rows_backward.argtypes = [pointer] * 7 + [count, count, ctypes.c_int]
     return library
 
 
@@ -162,6 +246,63 @@ def _c_gemm(
         int(trans_a), int(trans_b),
     )
     return c_buffer.tolist()
+
+
+def _zeros(count: int) -> array:
+    return array("d", bytes(8 * count))
+
+
+def _c_gelu(x: list[float]) -> tuple[list[float], list[float]]:
+    x_buffer, y, cdf = array("d", x), _zeros(len(x)), _zeros(len(x))
+    _library.gelu_forward(_c_buffer(x_buffer), _c_buffer(y), _c_buffer(cdf), len(x))
+    return y.tolist(), cdf.tolist()
+
+
+def _c_gelu_backward(x: list[float], cdf: list[float], grad: list[float]) -> list[float]:
+    dx = _zeros(len(x))
+    buffers = [array("d", values) for values in (x, cdf, grad)]
+    _library.gelu_backward(*map(_c_buffer, buffers), _c_buffer(dx), len(x))
+    return dx.tolist()
+
+
+def _c_softmax_rows(x: list[float], width: int) -> list[float]:
+    x_buffer, y = array("d", x), _zeros(len(x))
+    _library.softmax_rows(_c_buffer(x_buffer), _c_buffer(y), len(x) // width, width)
+    return y.tolist()
+
+
+def _c_softmax_rows_backward(y: list[float], grad: list[float], width: int) -> list[float]:
+    y_buffer, grad_buffer, dx = array("d", y), array("d", grad), _zeros(len(y))
+    _library.softmax_rows_backward(
+        _c_buffer(y_buffer), _c_buffer(grad_buffer), _c_buffer(dx), len(y) // width, width,
+    )
+    return dx.tolist()
+
+
+def _c_layer_norm_rows(
+    x: list[float], weight: list[float], bias: list[float], width: int, eps: float,
+) -> tuple[list[float], list[float], list[float]]:
+    rows = len(x) // width
+    inputs = [array("d", values) for values in (x, weight, bias)]
+    y, x_hat, inv_std = _zeros(len(x)), _zeros(len(x)), _zeros(rows)
+    _library.layer_norm_rows(
+        *map(_c_buffer, inputs), _c_buffer(y), _c_buffer(x_hat), _c_buffer(inv_std), rows, width, eps,
+    )
+    return y.tolist(), x_hat.tolist(), inv_std.tolist()
+
+
+def _c_layer_norm_rows_backward(
+    grad: list[float], x_hat: list[float], inv_std: list[float], weight: list[float],
+    width: int, need_dx: bool,
+) -> tuple[list[float] | None, list[float], list[float]]:
+    inputs = [array("d", values) for values in (grad, x_hat, inv_std, weight)]
+    dx = _zeros(len(grad) if need_dx else 1)
+    dweight, dbias = _zeros(width), _zeros(width)
+    _library.layer_norm_rows_backward(
+        *map(_c_buffer, inputs), _c_buffer(dx), _c_buffer(dweight), _c_buffer(dbias),
+        len(inv_std), width, int(need_dx),
+    )
+    return (dx.tolist() if need_dx else None), dweight.tolist(), dbias.tolist()
 
 
 # ---------------------------------------------------------------------------
@@ -210,3 +351,43 @@ def gemm(
 
     kernel = _c_gemm if BACKEND == "c" else _python_gemm
     return kernel(a, b, batches, m, k, n, a_step, b_step, c_step, trans_a, trans_b)
+
+
+def gelu(x: list[float]) -> tuple[list[float], list[float]]:
+    """GELU of every value, plus Phi(x) (the normal CDF) for the backward pass."""
+
+    return (_c_gelu if BACKEND == "c" else _python_gelu)(x)
+
+
+def gelu_backward(x: list[float], cdf: list[float], grad: list[float]) -> list[float]:
+    return (_c_gelu_backward if BACKEND == "c" else _python_gelu_backward)(x, cdf, grad)
+
+
+def softmax_rows(x: list[float], width: int) -> list[float]:
+    """Softmax of every contiguous row of ``width`` values."""
+
+    return (_c_softmax_rows if BACKEND == "c" else _python_softmax_rows)(x, width)
+
+
+def softmax_rows_backward(y: list[float], grad: list[float], width: int) -> list[float]:
+    kernel = _c_softmax_rows_backward if BACKEND == "c" else _python_softmax_rows_backward
+    return kernel(y, grad, width)
+
+
+def layer_norm_rows(
+    x: list[float], weight: list[float], bias: list[float], width: int, eps: float,
+) -> tuple[list[float], list[float], list[float]]:
+    """LayerNorm of every row: returns (y, x_hat, inv_std per row)."""
+
+    kernel = _c_layer_norm_rows if BACKEND == "c" else _python_layer_norm_rows
+    return kernel(x, weight, bias, width, eps)
+
+
+def layer_norm_rows_backward(
+    grad: list[float], x_hat: list[float], inv_std: list[float], weight: list[float],
+    width: int, need_dx: bool,
+) -> tuple[list[float] | None, list[float], list[float]]:
+    """Returns (dx or None, dweight, dbias), dweight and dbias summed over rows."""
+
+    kernel = _c_layer_norm_rows_backward if BACKEND == "c" else _python_layer_norm_rows_backward
+    return kernel(grad, x_hat, inv_std, weight, width, need_dx)
