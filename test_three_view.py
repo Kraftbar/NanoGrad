@@ -2,8 +2,8 @@ import math
 import unittest
 
 from geometry import PinholeCamera, Pose
-from image_pair_demo import CAMERA, SECOND_POSE, default_scene, true_point
-from three_view_demo import THIRD_POSE, link_is_correct, run_three_views, true_point_seen
+from image_pair_demo import CAMERA, SECOND_POSE, default_scene, link_is_correct, true_point, true_point_seen
+from three_view_demo import THIRD_POSE, run_three_views
 
 
 class ThreeViewTests(unittest.TestCase):

@@ -185,6 +185,25 @@ class BundleAdjustmentTests(unittest.TestCase):
         iterations = [step.iteration for step in result.history]
         self.assertEqual(iterations, sorted(set(iterations)))
 
+    def test_rejects_undetermined_cameras_and_same_view_duplicates(self) -> None:
+        scene = synthetic_scene(points=10, noise=0.0, seed=9)
+        third = Pose.from_axis_angle([0.0, 0.1, 0.0], [-1.2, 0.0, 0.1])
+        two_views = [
+            Observation(index, view, scene.camera.project(pose.apply(point)))
+            for index, point in enumerate(scene.points)
+            for view, pose in enumerate([Pose.identity(), scene.second_pose])
+        ]
+
+        with self.assertRaises(ValueError):
+            bundle_adjust(scene.camera, [Pose.identity(), scene.second_pose, third], scene.points, two_views)
+
+        # Two observations of point 0 in the same view do not make it active.
+        duplicate = [Observation(0, 0, [100.0, 100.0]), Observation(0, 0, [101.0, 100.0])]
+        result = bundle_adjust(
+            scene.camera, [Pose.identity(), scene.second_pose], scene.points, two_views[2:] + duplicate,
+        )
+        self.assertNotIn(0, result.active_points())
+
     def test_needs_points(self) -> None:
         with self.assertRaises(ValueError):
             camera = synthetic_scene(points=8).camera

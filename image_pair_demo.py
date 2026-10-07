@@ -30,7 +30,7 @@ from pathlib import Path
 from bundle_adjustment import two_view_bundle_adjustment
 from features import Corner, Match, harris_corners, match_descriptors, patch_descriptor, save_pgm
 from geometry import PinholeCamera, Pose, rotation_angle_degrees, triangulate_matches
-from linalg import Vector, dot, norm, normalize, transpose
+from linalg import Vector, dot, mat_vec, norm, normalize, transpose
 from ransac import RansacResult, ransac_relative_pose
 from tensor import Tensor
 
@@ -165,13 +165,46 @@ def pixel_center(corner: Corner) -> Vector:
     return [corner.x + 0.5, corner.y + 0.5]
 
 
+def true_point_seen(
+    planes: list[TiledPlane],
+    camera: PinholeCamera,
+    pose: Pose,
+    pixel: Vector,
+) -> Vector | None:
+    """World point seen at ``pixel`` by a camera at ``pose`` (None: sky)."""
+
+    ray_camera = [(pixel[0] - camera.cx) / camera.fx, (pixel[1] - camera.cy) / camera.fy, 1.0]
+    direction = mat_vec(transpose(pose.rotation), ray_camera)
+    origin = pose.center
+    hit = cast_ray(planes, origin, direction)
+    if hit is None:
+        return None
+    return [o + hit[0] * d for o, d in zip(origin, direction)]
+
+
 def true_point(planes: list[TiledPlane], camera: PinholeCamera, pixel: Vector) -> Vector:
     """3D point seen at ``pixel`` by the first camera (at the world origin)."""
 
-    direction = [(pixel[0] - camera.cx) / camera.fx, (pixel[1] - camera.cy) / camera.fy, 1.0]
-    hit = cast_ray(planes, [0.0, 0.0, 0.0], direction)
-    assert hit is not None
-    return [hit[0] * value for value in direction]
+    point = true_point_seen(planes, camera, Pose.identity(), pixel)
+    assert point is not None, "every first-camera pixel sees a wall or the floor"
+    return point
+
+
+def link_is_correct(
+    planes: list[TiledPlane],
+    camera: PinholeCamera,
+    from_pose: Pose,
+    to_pose: Pose,
+    from_pixel: Vector,
+    to_pixel: Vector,
+    *,
+    tolerance_px: float = 2.0,
+) -> bool:
+    """Ground truth: does the 3D point seen at ``from_pixel`` land on ``to_pixel``?"""
+
+    point = true_point_seen(planes, camera, from_pose, from_pixel)
+    projected = None if point is None else camera.project(to_pose.apply(point))
+    return projected is not None and math.dist(projected, to_pixel) < tolerance_px
 
 
 # ---------------------------------------------------------------------------
@@ -264,25 +297,6 @@ def direction_error_degrees(estimate: Vector, truth: Vector) -> float:
     return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
 
 
-def match_is_correct(
-    camera: PinholeCamera,
-    planes: list[TiledPlane],
-    pose: Pose,
-    first_pixel: Vector,
-    second_pixel: Vector,
-    *,
-    tolerance_px: float = 2.0,
-) -> bool:
-    """Ground truth: does the first pixel's 3D point land on the second pixel?
-
-    ``first_pixel`` is in the first camera's image (the world origin);
-    ``pose`` is the second camera's true pose.
-    """
-
-    projected = camera.project(pose.apply(true_point(planes, camera, first_pixel)))
-    return projected is not None and math.dist(projected, second_pixel) < tolerance_px
-
-
 def run_pipeline(
     *,
     camera: PinholeCamera = CAMERA,
@@ -301,7 +315,7 @@ def run_pipeline(
     second = detect(second_image, max_corners=max_corners, patch_radius=patch_radius)
     matches, first_pixels, second_pixels = match_features(first, second)
     correct = [
-        match_is_correct(camera, planes, SECOND_POSE, a, b)
+        link_is_correct(planes, camera, Pose.identity(), SECOND_POSE, a, b)
         for a, b in zip(first_pixels, second_pixels)
     ]
 
@@ -330,7 +344,6 @@ def run_pipeline(
         save_pgm(output_dir / "first_inliers.pgm", _mark(first_image, [first_pixels[i] for i in inliers]))
         save_pgm(output_dir / "second_inliers.pgm", _mark(second_image, [second_pixels[i] for i in inliers]))
 
-    truth = SECOND_POSE
     return {
         "corners": (len(first.corners), len(second.corners)),
         "matches": len(matches),
@@ -341,10 +354,10 @@ def run_pipeline(
         "kept_after_ba": len(inliers),
         "correct_after_ba": sum(correct[i] for i in inliers),
         "ransac_iterations": result.ransac.iterations,
-        "ransac_rotation_error_deg": rotation_angle_degrees(result.ransac_pose.rotation, truth.rotation),
-        "ransac_direction_error_deg": direction_error_degrees(result.ransac_pose.translation, truth.translation),
-        "ba_rotation_error_deg": rotation_angle_degrees(result.pose.rotation, truth.rotation),
-        "ba_direction_error_deg": direction_error_degrees(result.pose.translation, truth.translation),
+        "ransac_rotation_error_deg": rotation_angle_degrees(result.ransac_pose.rotation, SECOND_POSE.rotation),
+        "ransac_direction_error_deg": direction_error_degrees(result.ransac_pose.translation, SECOND_POSE.translation),
+        "ba_rotation_error_deg": rotation_angle_degrees(result.pose.rotation, SECOND_POSE.rotation),
+        "ba_direction_error_deg": direction_error_degrees(result.pose.translation, SECOND_POSE.translation),
         "ba_rmse_px": result.rmse_px,
         "median_depth_error": depth_errors[len(depth_errors) // 2],
     }

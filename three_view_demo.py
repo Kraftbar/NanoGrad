@@ -32,54 +32,21 @@ from geometry import PinholeCamera, Pose, refine_pose, rotation_angle_degrees
 from image_pair_demo import (
     CAMERA,
     SECOND_POSE,
-    TiledPlane,
-    cast_ray,
     default_scene,
     detect,
     direction_error_degrees,
+    link_is_correct,
     match_features,
     pixel_center,
     reconstruct_two_view,
     render,
+    true_point,
 )
-from linalg import Vector, norm
+from linalg import norm
 from ransac import ransac_pose_dlt
 
 
 THIRD_POSE = Pose.from_axis_angle([0.03, -0.24, 0.02], [-1.2, 0.08, 0.15])
-
-
-def true_point_seen(
-    planes: list[TiledPlane],
-    camera: PinholeCamera,
-    pose: Pose,
-    pixel: Vector,
-) -> Vector | None:
-    """World point seen at ``pixel`` by a camera at ``pose``."""
-
-    ray_camera = [(pixel[0] - camera.cx) / camera.fx, (pixel[1] - camera.cy) / camera.fy, 1.0]
-    rotation_t = list(zip(*pose.rotation))
-    direction = [sum(rotation_t[row][k] * ray_camera[k] for k in range(3)) for row in range(3)]
-    origin = pose.center
-    hit = cast_ray(planes, origin, direction)
-    if hit is None:
-        return None
-    return [o + hit[0] * d for o, d in zip(origin, direction)]
-
-
-def link_is_correct(
-    planes: list[TiledPlane],
-    camera: PinholeCamera,
-    from_pose: Pose,
-    to_pose: Pose,
-    from_pixel: Vector,
-    to_pixel: Vector,
-    *,
-    tolerance_px: float = 2.0,
-) -> bool:
-    point = true_point_seen(planes, camera, from_pose, from_pixel)
-    projected = None if point is None else camera.project(to_pose.apply(point))
-    return projected is not None and math.dist(projected, to_pixel) < tolerance_px
 
 
 def run_three_views(
@@ -168,7 +135,7 @@ def run_three_views(
     ) / norm(THIRD_POSE.translation)
     depth_errors = []
     for point_index in final_points:
-        truth = true_point_seen(planes, camera, Pose.identity(), first_pixels[two.kept[point_index]])
+        truth = true_point(planes, camera, first_pixels[two.kept[point_index]])
         depth_errors.append(abs(scale * adjusted.points[point_index][2] - truth[2]) / truth[2])
     depth_errors.sort()
 

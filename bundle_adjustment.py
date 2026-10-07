@@ -53,6 +53,10 @@ from geometry import (
 from linalg import Matrix, Vector, inverse, mat_mul, mat_vec, norm, solve, transpose
 
 
+# A camera's 6 pose numbers need at least 3 points; demand a little slack.
+MIN_POINTS_PER_CAMERA = 4
+
+
 @dataclass(frozen=True)
 class Observation:
     """Point ``point`` was seen at ``pixel`` in view ``view``."""
@@ -129,17 +133,25 @@ def bundle_adjust(
     each point drops its *worst* observation if that one exceeds
     ``reject_px``, and the rest are adjusted again. Only the worst one: a
     single bad observation drags its point away, so the point's good
-    observations can look bad too until the bad one is gone. A point left with fewer than two
-    observations is no longer constrained and stops being adjusted. Use it
+    observations can look bad too until the bad one is gone. A point left
+    seen in fewer than two views is no longer constrained and stops being
+    adjusted. Rejection also stops before any camera would be left with
+    fewer than ``MIN_POINTS_PER_CAMERA`` points. Use it
     together with ``huber_px``: under plain least squares a few bad matches
     can bend the fit so much that good observations get rejected.
     """
 
     if len(poses) < 2:
         raise ValueError("bundle adjustment needs at least two views")
-    observations = list(observations)
-    if not _active_points(observations):
+    observations = _constrained(observations)
+    if not observations:
         raise ValueError("bundle adjustment needs a point seen in two views")
+    for view in range(1, len(poses)):
+        if _points_per_camera(observations, view) < MIN_POINTS_PER_CAMERA:
+            raise ValueError(
+                f"camera {view} sees fewer than {MIN_POINTS_PER_CAMERA} "
+                "points seen elsewhere; its pose is not determined"
+            )
 
     poses = list(poses)
     points = [list(point) for point in points]
@@ -165,14 +177,16 @@ def bundle_adjust(
 
     adjust()
     for _ in range((rounds - 1) if reject_px is not None else 0):
-        survivors = _drop_worst_per_point(camera, poses, points, observations, reject_px)
-        survivors = [
-            observation
-            for observation in survivors
-            if observation.point in set(_active_points(survivors))
-        ]
-        if len(survivors) == len(observations) or len(_active_points(survivors)) < 6:
+        survivors = _constrained(
+            _drop_worst_per_point(camera, poses, points, observations, reject_px)
+        )
+        if len(survivors) == len(observations):
             break
+        if any(
+            _points_per_camera(survivors, view) < MIN_POINTS_PER_CAMERA
+            for view in range(1, len(poses))
+        ):
+            break  # rejecting more would leave a camera undetermined
         observations = survivors
         adjust()  # every prune is followed by a fit on the survivors
     return BundleResult(poses, points, observations, history)
@@ -199,11 +213,7 @@ def two_view_bundle_adjustment(
     if not points:
         raise ValueError("bundle adjustment needs at least one point")
 
-    observations = [
-        Observation(index, view, pixel)
-        for index, (first, second) in enumerate(zip(first_pixels, second_pixels))
-        for view, pixel in ((0, first), (1, second))
-    ]
+    observations = _two_view_observations(first_pixels, second_pixels)
     result = bundle_adjust(
         camera,
         [Pose.identity(), pose],
@@ -250,11 +260,7 @@ def two_view_rmse(
 ) -> float:
     """Pixel RMSE over both images (first camera at the origin)."""
 
-    observations = [
-        Observation(index, view, pixel)
-        for index, (first, second) in enumerate(zip(first_pixels, second_pixels))
-        for view, pixel in ((0, first), (1, second))
-    ]
+    observations = _two_view_observations(first_pixels, second_pixels)
     return reprojection_rmse(camera, [Pose.identity(), pose], points, observations)
 
 
@@ -275,8 +281,8 @@ def _adjust(
 ) -> tuple[list[Pose], list[Vector], list[RefinementStep]]:
     """Damped Gauss-Newton steps on a fixed set of observations."""
 
-    active = _active_points(observations)
-    used = [observation for observation in observations if observation.point in set(active)]
+    used = _constrained(observations)
+    active = _active_points(used)
     baseline = norm(poses[1].translation)
 
     def rmse(candidate_poses: list[Pose], candidate_points: list[Vector]) -> float:
@@ -471,10 +477,34 @@ def _drop_worst_per_point(
 
 
 def _active_points(observations: Sequence[Observation]) -> list[int]:
-    counts: dict[int, int] = {}
+    """Points seen in at least two *different* views (so depth is defined)."""
+
+    views: dict[int, set[int]] = {}
     for observation in observations:
-        counts[observation.point] = counts.get(observation.point, 0) + 1
-    return sorted(index for index, count in counts.items() if count >= 2)
+        views.setdefault(observation.point, set()).add(observation.view)
+    return sorted(index for index, seen in views.items() if len(seen) >= 2)
+
+
+def _constrained(observations: Sequence[Observation]) -> list[Observation]:
+    """Only the observations of active points."""
+
+    active = set(_active_points(observations))
+    return [observation for observation in observations if observation.point in active]
+
+
+def _points_per_camera(observations: Sequence[Observation], view: int) -> int:
+    return len({observation.point for observation in observations if observation.view == view})
+
+
+def _two_view_observations(
+    first_pixels: Sequence[Vector],
+    second_pixels: Sequence[Vector],
+) -> list[Observation]:
+    return [
+        Observation(index, view, pixel)
+        for index, (first, second) in enumerate(zip(first_pixels, second_pixels))
+        for view, pixel in ((0, first), (1, second))
+    ]
 
 
 def _pixel_error(
