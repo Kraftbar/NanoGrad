@@ -98,6 +98,8 @@ are in [docs/benchmarks.md](./docs/benchmarks.md).
 - [x] [Benchmark against PyTorch: LeNet on MNIST and op by op](./docs/benchmarks.md)
 - [x] [ResNet and ViT on MNIST, and a BERT-style encoder on Tiny Shakespeare,
   each trained identically to PyTorch](./docs/benchmarks.md#model-families)
+- [x] [LLM gears: BPE tokenizer, KV cache, RMSNorm, rotary embeddings,
+  SwiGLU](./docs/llm_gears.md)
 - [x] Keep tensors in C arrays between kernels, so data stops being copied
   to and from Python lists at every op
 
@@ -184,6 +186,7 @@ vision.py        # reusable small CNN model implementations
 resnet.py        # a small residual network (ResNet) with batch norm
 vit.py           # a tiny vision transformer (ViT)
 bert.py          # a tiny BERT-style encoder and its masking recipe
+bpe.py           # byte-level byte-pair-encoding tokenizer (GPT-2 style)
 torch_twin.py    # runs a NanoGrad architecture in PyTorch with the same weights
 mnist_demo.py    # local-file MNIST MLP demo
 mnist_cnn_demo.py # local-file MNIST CNN demo
