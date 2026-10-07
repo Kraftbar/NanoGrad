@@ -53,7 +53,7 @@ class AugmentTests(unittest.TestCase):
         image = bytes(range(1, 17))                        # one 1 x 4 x 4 image, values 1..16
         shapes = (1, 4, 4)
         seen_shift = seen_mirror = False
-        for seed in range(40):
+        for seed in range(2000):       # an unshifted mirror is a 1-in-162 event
             out = augmented_pixels([image], [0], shapes, random.Random(seed), flip=True)
             self.assertEqual(len(out), 16)
             values = {round(v * 255) for v in out} - {0}
