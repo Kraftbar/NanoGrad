@@ -6,12 +6,16 @@ The GLUE-style workflow, end to end, on Tiny Shakespeare (see speakers.py):
    held-out speeches removed
 2. fine-tune: put a classifier on the encoder and train everything to
    predict which of 8 characters speaks a 64-character window
-3. baseline: the same classifier trained from a fresh, untrained encoder
+3. baseline: the same classifier on a fresh, untrained encoder, trained
    for the same number of steps
 
 Accuracy on held-out speeches shows what pretraining bought (chance is 1/8).
+With ``--probe`` the encoder is frozen and only the classifier layer
+trains (a "linear probe"), which measures how much the pretrained
+features alone say about the speaker.
 
     python3 bert_finetune.py --pretrain-steps 2000 --finetune-steps 1000
+    python3 bert_finetune.py --probe
 """
 
 from __future__ import annotations
@@ -58,19 +62,30 @@ def pretrain(encoder: TinyBERT, encoded: list[int], args: argparse.Namespace) ->
 
 
 def fine_tune(model: BERTClassifier, vocab: CharVocab, data, args: argparse.Namespace, label: str) -> float:
-    optimizer = TensorAdam(model.parameters(), lr=args.finetune_lr, weight_decay=0.01, weight_decay_min_ndim=2)
+    trainable = model.classifier.parameters() if args.probe else model.parameters()
+    optimizer = TensorAdam(trainable, lr=args.finetune_lr, weight_decay=0.01, weight_decay_min_ndim=2)
     rng = random.Random(args.seed + 10)
     start = perf_counter()
     for step in range(1, args.finetune_steps + 1):
         texts, labels = speech_windows(data.train, length=args.context_size, count=args.batch_size, rng=rng)
         optimizer.zero_grad()
-        loss = softmax_cross_entropy(model([vocab.encode(text) for text in texts]), labels)
+        loss = softmax_cross_entropy(scores(model, [vocab.encode(text) for text in texts], args.probe), labels)
         loss.backward()
         optimizer.step()
         if step % args.report_every == 0:
             print(f"{label:12s} step {step:5d}: loss {loss.item():.4f}, "
                   f"{perf_counter() - start:.0f} s", flush=True)
     return accuracy(model, vocab, data, args)
+
+
+def scores(model: BERTClassifier, batch: list[list[int]], probe: bool):
+    """Class scores; a probe computes the frozen encoder's features without gradients."""
+
+    if not probe:
+        return model(batch)
+    with no_grad():
+        features = model.encoder.encode(batch).mean(axis=1)
+    return model.classifier(features)
 
 
 def accuracy(model: BERTClassifier, vocab: CharVocab, data, args: argparse.Namespace) -> float:
@@ -99,10 +114,10 @@ def run(args: argparse.Namespace) -> dict:
     pretrained = build_encoder(len(vocab), args)
     pretrain(pretrained, vocab.encode(data.pretraining_text), args)
     results = {
-        "fine-tuned": fine_tune(BERTClassifier(pretrained, len(data.speakers), seed=args.seed), vocab, data, args, "fine-tuned"),
-        "from scratch": fine_tune(
+        "pretrained": fine_tune(BERTClassifier(pretrained, len(data.speakers), seed=args.seed), vocab, data, args, "pretrained"),
+        "untrained": fine_tune(
             BERTClassifier(build_encoder(len(vocab), args), len(data.speakers), seed=args.seed),
-            vocab, data, args, "from scratch",
+            vocab, data, args, "untrained",
         ),
     }
     for name, value in results.items():
@@ -123,6 +138,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--layers", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--finetune-lr", type=float, default=3e-4)
+    parser.add_argument("--probe", action="store_true", help="freeze the encoder, train only the classifier")
     parser.add_argument("--eval-windows", type=int, default=2000)
     parser.add_argument("--report-every", type=int, default=250)
     parser.add_argument("--seed", type=int, default=0)
