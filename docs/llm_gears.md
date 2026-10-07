@@ -14,6 +14,38 @@ checked against PyTorch where PyTorch has an equivalent.
 | bidirectional attention | `causal=False` | for encoders: ViT (`vit.py`) and BERT (`bert.py`) |
 | masked language modeling | `bert.py` | BERT's training task |
 
+## Results: the Baby GPT on Tiny Shakespeare
+
+Every row is the same recipe as nanoGPT's baby GPT (about 0.8M parameters,
+2,000 steps of 12 x 64 tokens, AdamW, warmup + cosine; 4 worker processes
+on a 4-core CPU), changing one thing at a time. Bits per character on the
+validation text make character and BPE models comparable (lower is better).
+
+| model | val bits / char | val loss (nats / token) | time |
+| --- | ---: | ---: | ---: |
+| GPT-2 parts, characters (`--preset baby`) | 2.77 | 1.921 | 11 min |
+| nanoGPT itself, PyTorch, same recipe | 2.72 | 1.886 | 2 min |
+| GPT-2 parts, BPE 512 tokens (`--tokenizer bpe`) | 2.44 | 3.180 | 8 min |
+| LLaMA parts, characters (`--preset baby-llama`) | 2.44 | 1.693 | 7 min |
+
+Two independent improvements of about the same size:
+
+- **BPE** makes each token cover 1.88 characters, so each of the 2,000
+  steps sees about twice as much text.
+- **RMSNorm + rotary embeddings + SwiGLU** learn faster from the same
+  characters: at step 1,000 the LLaMA-style model is already below the
+  GPT-2-style model's final loss.
+
+Samples, LLaMA parts, top-k 20, temperature 0.8:
+
+```text
+No, your compector, and they stay may
+Or sking the dead of live to there adoes
+Atay the servil of his conclude own of some worth thee
+To heart up a crack, in sulse of hold,
+And brows say is stones: I'll be our friends,
+```
+
 ## Byte-Pair Encoding
 
 ```bash
