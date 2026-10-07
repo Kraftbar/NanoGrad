@@ -6,6 +6,7 @@ from linalg import (
     cross,
     determinant3,
     identity,
+    inverse,
     mat_mul,
     mat_vec,
     nearest_rotation,
@@ -48,6 +49,11 @@ class LinalgTests(unittest.TestCase):
             self.assertAlmostEqual(expected, actual)
         with self.assertRaises(ValueError):
             solve([[1.0, 2.0], [2.0, 4.0]], [1.0, 2.0])
+
+    def test_inverse(self) -> None:
+        a = random_matrix(4, 4, seed=6)
+
+        self.assertMatrixAlmostEqual(mat_mul(a, inverse(a)), identity(4))
 
     def test_symmetric_eigen_reconstructs_matrix(self) -> None:
         b = random_matrix(6, 6, seed=2)

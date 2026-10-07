@@ -292,7 +292,15 @@ def estimate_pose_dlt(points: Sequence[Vector], normalized: Sequence[Vector]) ->
                            [p3]
 
     The null vector gives P up to scale. Its left 3x3 block is s * R, so we
-    divide out s and snap that block to the nearest true rotation.
+    snap that block to the nearest true rotation. With noise the block is not
+    an exact scaled rotation, so rather than dividing the 4th column by a
+    guessed s, the translation is re-solved for the snapped R: with R fixed,
+    x = (r1.X + t1) / (r3.X + t3) is *linear* in t,
+
+        [1  0  -x] t = x (r3 . X) - r1 . X
+        [0  1  -y] t = y (r3 . X) - r2 . X
+
+    and least squares over all points gives t.
     """
 
     if len(points) < 6:
@@ -312,23 +320,44 @@ def estimate_pose_dlt(points: Sequence[Vector], normalized: Sequence[Vector]) ->
         projection = [[-value for value in row] for row in projection]
         block = [row[:3] for row in projection]
 
-    _, singular, _ = svd3(block)
-    scale = sum(singular) / 3.0
     rotation = nearest_rotation(block)
-    translation = [row[3] / scale for row in projection]
-    return Pose(rotation, translation)
+    return Pose(rotation, _translation_given_rotation(rotation, points, normalized))
 
 
-def essential_matrix(
+def _translation_given_rotation(
+    rotation: Matrix,
+    points: Sequence[Vector],
+    normalized: Sequence[Vector],
+) -> Vector:
+    """Least-squares t for a known R (normal equations A^T A t = A^T b)."""
+
+    rows: list[Vector] = []
+    rhs: list[float] = []
+    for point, (x, y) in zip(points, normalized):
+        r1x, r2x, r3x = mat_vec(rotation, point)
+        rows.append([1.0, 0.0, -x])
+        rhs.append(x * r3x - r1x)
+        rows.append([0.0, 1.0, -y])
+        rhs.append(y * r3x - r2x)
+    rows_t = transpose(rows)
+    return solve(mat_mul(rows_t, rows), mat_vec(rows_t, rhs))
+
+
+def epipolar_matrix(
     first_normalized: Sequence[Vector],
     second_normalized: Sequence[Vector],
 ) -> Matrix:
-    """Eight-point algorithm for the essential matrix E = [t]x R.
+    """Eight-point estimate of the epipolar constraint, rank 2 only.
 
-    A match (x1, x2) in normalized coordinates satisfies the epipolar
-    constraint x2^T E x1 = 0, which is one linear equation in the 9 entries
-    of E. Eight or more matches pin E down up to scale. Then E is projected
-    onto valid essential matrices: two equal singular values and one zero.
+    A match (x1, x2) in normalized coordinates satisfies x2^T E x1 = 0, one
+    linear equation in the 9 entries of E. Eight or more matches give the
+    least-squares null vector. Every epipolar matrix has rank 2 (all epipolar
+    lines meet at the epipole), so the smallest singular value is zeroed.
+
+    This is the fundamental matrix in normalized coordinates. It does not
+    yet have an essential matrix's equal singular values, and that is useful:
+    it fits noisy matches much better than its projection does, so it is the
+    right model for scoring inliers (see ``ransac.ransac_relative_pose``).
     """
 
     if len(first_normalized) < 8:
@@ -342,11 +371,25 @@ def essential_matrix(
             x1, y1, 1.0,
         ])
     e = null_vector(rows)
-    estimate = [e[0:3], e[3:6], e[6:9]]
+    u, singular, vt = svd3([e[0:3], e[3:6], e[6:9]])
+    return mat_mul(mat_mul(u, _diagonal([singular[0], singular[1], 0.0])), vt)
 
-    u, singular, vt = svd3(estimate)
+
+def essential_matrix(
+    first_normalized: Sequence[Vector],
+    second_normalized: Sequence[Vector],
+) -> Matrix:
+    """Eight-point algorithm for the essential matrix E = [t]x R.
+
+    A valid essential matrix has two equal singular values and one zero, so
+    the rank-2 estimate from ``epipolar_matrix`` is projected onto that set.
+    With little parallax this projection can move E noticeably; the pose it
+    gives is a starting point for bundle adjustment.
+    """
+
+    u, singular, vt = svd3(epipolar_matrix(first_normalized, second_normalized))
     sigma = (singular[0] + singular[1]) / 2.0
-    return mat_mul(mat_mul(u, [[sigma, 0, 0], [0, sigma, 0], [0, 0, 0]]), vt)
+    return mat_mul(mat_mul(u, _diagonal([sigma, sigma, 0.0])), vt)
 
 
 def relative_pose_from_essential(
@@ -441,7 +484,7 @@ def refine_pose(
         # Try damped steps until one lowers the error (or damping explodes).
         while damping <= 1e12:
             step = solve(_add_damping(jt_j, damping), [-value for value in jt_r])
-            candidate = _apply_update(pose, step)
+            candidate = apply_pose_update(pose, step)
             if error(candidate) < current:
                 pose = candidate
                 damping = max(damping / 10.0, 1e-12)
@@ -504,7 +547,9 @@ def _reprojection_residuals(
     return residuals
 
 
-def _apply_update(pose: Pose, step: Vector) -> Pose:
+def apply_pose_update(pose: Pose, step: Vector) -> Pose:
+    """Apply a 6-vector update (w, dt): R <- exp([w]x) R, t <- exp([w]x) t + dt."""
+
     update = rotation_from_axis_angle(step[:3])
     rotation = mat_mul(update, pose.rotation)
     translation = [
@@ -517,6 +562,13 @@ def _apply_update(pose: Pose, step: Vector) -> Pose:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _diagonal(values: Vector) -> Matrix:
+    return [
+        [value if row == col else 0.0 for col in range(len(values))]
+        for row, value in enumerate(values)
+    ]
 
 
 def _projection_matrix(pose: Pose) -> Matrix:

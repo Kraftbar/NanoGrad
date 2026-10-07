@@ -120,6 +120,14 @@ def solve(matrix: Matrix, rhs: Vector) -> Vector:
     return solution
 
 
+def inverse(matrix: Matrix) -> Matrix:
+    """Matrix inverse, one ``solve`` per column of the identity."""
+
+    size = len(matrix)
+    columns = [solve(matrix, unit) for unit in identity(size)]
+    return transpose(columns)
+
+
 def symmetric_eigen(
     matrix: Matrix,
     *,
