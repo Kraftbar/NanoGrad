@@ -35,7 +35,30 @@ def load() -> bool:
     global library
     if library is None:
         library = _build_library()
+        if library is not None:
+            _keep_freed_memory()
     return library is not None
+
+
+def _keep_freed_memory() -> None:
+    """Let freed tensor buffers be reused instead of handed back to the OS.
+
+    Tensors are often a few megabytes. By default glibc returns each such
+    block to the operating system when it is freed, so the next allocation
+    has to fault its memory back in page by page: about a fifth of a small
+    ResNet's training step. Raising glibc's thresholds keeps those blocks
+    in the heap for reuse (PyTorch's caching allocator exists for the same
+    reason). The cost is that the process keeps its peak memory. Does
+    nothing on systems without glibc's ``mallopt``.
+    """
+
+    try:
+        mallopt = ctypes.CDLL(None).mallopt
+    except (OSError, AttributeError):
+        return
+    m_trim_threshold, m_mmap_threshold = -1, -3   # constants from <malloc.h>
+    mallopt(m_mmap_threshold, 1 << 30)
+    mallopt(m_trim_threshold, 1 << 30)
 
 
 
@@ -98,6 +121,8 @@ def _build_library() -> ctypes.CDLL | None:
     library.scale_vector.argtypes = [pointer, ctypes.c_double, pointer, count]
     library.adam_update.argtypes = [pointer] * 5 + [count] + [ctypes.c_double] * 7
     library.tanh_forward.argtypes = [pointer, pointer, count]
+    library.relu_forward.argtypes = [pointer, pointer, count]
+    library.relu_backward.argtypes = [pointer, pointer, pointer, count]
     library.tanh_backward.argtypes = [pointer, pointer, pointer, count]
     for name in ("window_mean", "window_mean_backward"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer] + [count] * 4
@@ -262,6 +287,18 @@ def adam_update(w, grad, m, v, *hyperparameters) -> tuple[array, array, array]:
     new_w = zeros(len(w))
     library.adam_update(*map(_buffer, buffers), _buffer(new_w), len(w), *hyperparameters)
     return new_w, buffers[2], buffers[3]
+
+
+def relu(x: list[float]) -> array:
+    x_buffer, y = _doubles(x), zeros(len(x))
+    library.relu_forward(_buffer(x_buffer), _buffer(y), len(x))
+    return y
+
+
+def relu_backward(x: list[float], grad: list[float]) -> array:
+    x_buffer, grad_buffer, dx = _doubles(x), _doubles(grad), zeros(len(x))
+    library.relu_backward(_buffer(x_buffer), _buffer(grad_buffer), _buffer(dx), len(x))
+    return dx
 
 
 def tanh(x: list[float]) -> array:

@@ -321,3 +321,16 @@ void adam_update(const double *w, const double *grad, double *m, double *v, doub
         new_w[i] = w[i] * decay - step_size * m[i] / (sqrt(v[i]) / sqrt_correction + eps);
     }
 }
+
+/*
+ * ReLU, elementwise:  y = max(0, x),  dx = dy where x > 0, else 0
+ */
+void relu_forward(const double *x, double *y, long count)
+{
+    for (long i = 0; i < count; i++) y[i] = x[i] > 0.0 ? x[i] : 0.0;
+}
+
+void relu_backward(const double *x, const double *grad, double *dx, long count)
+{
+    for (long i = 0; i < count; i++) dx[i] = x[i] > 0.0 ? grad[i] : 0.0;
+}

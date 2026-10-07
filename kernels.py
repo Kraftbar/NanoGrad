@@ -194,6 +194,16 @@ def adam_update(
     return kernel(w, grad, m, v, grad_scale, beta1, beta2, decay, step_size, sqrt_correction, eps)
 
 
+def relu(x: list[float]) -> list[float]:
+    return (kernels_c.relu if BACKEND == "c" else reference.relu)(x)
+
+
+def relu_backward(x: list[float], grad: list[float]) -> list[float]:
+    """Gradient of ReLU: ``grad`` where the input was positive, else 0."""
+
+    return (kernels_c.relu_backward if BACKEND == "c" else reference.relu_backward)(x, grad)
+
+
 def tanh(x: list[float]) -> list[float]:
     return (kernels_c.tanh if BACKEND == "c" else reference.tanh)(x)
 

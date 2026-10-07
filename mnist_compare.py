@@ -1,24 +1,26 @@
-"""Train the same LeNet-style CNN on MNIST in NanoGrad and in PyTorch.
+"""Train the same model on MNIST in NanoGrad and in PyTorch.
 
-The model is the classic LeNet-5 shape, scaled to 28x28 inputs:
+Three model families, all built on the same NanoGrad core:
 
-    conv 6@5x5 -> tanh -> avgpool 2 -> conv 16@5x5 -> tanh -> avgpool 2
-    -> flatten (16*4*4 = 256) -> linear 10
+- ``lenet``: the classic LeNet-5 shape, scaled to 28x28 inputs:
+  conv 6@5x5 -> tanh -> avgpool 2 -> conv 16@5x5 -> tanh -> avgpool 2
+  -> flatten (16*4*4 = 256) -> linear 10
+- ``resnet``: a small residual network with batch norm (resnet.py)
+- ``vit``: a tiny vision transformer on 7x7 patches (vit.py)
 
-PyTorch starts from NanoGrad's exact initial weights and sees the same
-batches in the same order with the same Adam settings. In float64 the two
-runs should then agree to many decimal places, so this is a correctness
-check of NanoGrad's convolution, pooling, autograd and optimizer, and a
-speed comparison on the same work.
+PyTorch runs the same architecture (torch_twin.py), starts from NanoGrad's
+exact initial weights, and sees the same batches in the same order with the
+same Adam settings. In float64 the two runs should then agree to many
+decimal places, so this is a correctness check of NanoGrad's layers,
+autograd and optimizer, and a speed comparison on the same work.
 
 PyTorch is only needed for the comparison side:
 
     python3 -m venv .venv && .venv/bin/pip install torch
-    .venv/bin/python mnist_compare.py --epochs 1
+    .venv/bin/python mnist_compare.py --epochs 1 --model resnet
 
     python3 mnist_compare.py --frameworks nanograd     # NanoGrad alone
 """
-
 from __future__ import annotations
 
 import argparse
@@ -31,9 +33,12 @@ from datasets import read_mnist_images, read_mnist_labels
 from losses import softmax_cross_entropy
 from optim import TensorAdam
 from parallel import DataParallel
+from resnet import SmallResNet
 from tensor import Tensor, no_grad
+from tensor_nn import TensorModule
 from train import evaluation_mode
 from vision import TwoConvCNN
+from vit import TinyViT
 
 
 FRAMEWORKS = ("nanograd", "torch")
@@ -69,11 +74,22 @@ def batch_pixels(images: list[list[float]], indices: list[int]) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
-def build_nanograd(seed: int) -> TwoConvCNN:
-    return TwoConvCNN(image_shape=IMAGE_SHAPE, classes=10, pooling="avg", activation="tanh", seed=seed)
+MODELS = ("lenet", "resnet", "vit")
 
 
-def image_loss(model: TwoConvCNN, xs: list[list[float]], ys: list[int]):
+def build_nanograd(seed: int, model: str = "lenet") -> TensorModule:
+    """The three model families: a classic CNN, a ResNet and a ViT."""
+
+    if model == "lenet":
+        return TwoConvCNN(image_shape=IMAGE_SHAPE, classes=10, pooling="avg", activation="tanh", seed=seed)
+    if model == "resnet":
+        return SmallResNet(image_shape=IMAGE_SHAPE, classes=10, seed=seed)
+    if model == "vit":
+        return TinyViT(image_shape=IMAGE_SHAPE, classes=10, seed=seed)
+    raise ValueError(f"unknown model: {model}")
+
+
+def image_loss(model: TensorModule, xs: list[list[float]], ys: list[int]):
     """Mean cross entropy of a batch of flat images (also run by workers)."""
 
     inputs = Tensor([value for image in xs for value in image], (len(xs), *IMAGE_SHAPE))
@@ -81,7 +97,7 @@ def image_loss(model: TwoConvCNN, xs: list[list[float]], ys: list[int]):
 
 
 class NanoGradRunner:
-    def __init__(self, model: TwoConvCNN, lr: float, workers: int = 1) -> None:
+    def __init__(self, model: TensorModule, lr: float, workers: int = 1) -> None:
         self.model = model
         self.optimizer = TensorAdam(model.parameters(), lr=lr)
         # With workers > 1 each batch is split across processes (parallel.py).
@@ -122,48 +138,38 @@ class NanoGradRunner:
 
 
 class TorchRunner:
-    def __init__(self, model: TwoConvCNN, lr: float, dtype: str, threads: int) -> None:
+    """The same model in PyTorch (see torch_twin.py), with PyTorch's Adam."""
+
+    def __init__(self, model: TensorModule, lr: float, dtype: str, threads: int) -> None:
         import torch
-        from torch import nn
+
+        from torch_twin import TorchTwin
 
         torch.set_num_threads(threads)
         self.torch = torch
         self.dtype = getattr(torch, dtype)
-        self.net = nn.Sequential(
-            nn.Conv2d(1, 6, 5), nn.Tanh(), nn.AvgPool2d(2),
-            nn.Conv2d(6, 16, 5), nn.Tanh(), nn.AvgPool2d(2),
-            nn.Flatten(), nn.Linear(256, 10),
-        ).to(self.dtype)
-        # NanoGrad and PyTorch share layouts: kernels (F, C, k, k), linear
-        # weights (out, in), and row-major flatten. Biases just need reshaping.
-        torch_parameters = [
-            self.net[0].weight, self.net[0].bias,
-            self.net[3].weight, self.net[3].bias,
-            self.net[7].weight, self.net[7].bias,
-        ]
-        with torch.no_grad():
-            for target, source in zip(torch_parameters, model.parameters()):
-                target.copy_(torch.tensor(source.data, dtype=self.dtype).reshape(target.shape))
-        self.parameters = torch_parameters
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=lr)
+        self.twin = TorchTwin(model, dtype=self.dtype)
+        self.optimizer = torch.optim.Adam(self.twin.parameters, lr=lr)
 
     def _inputs(self, pixels: list[float], count: int):
         return self.torch.tensor(pixels, dtype=self.dtype).reshape(count, *IMAGE_SHAPE)
 
     def train_step(self, pixels: list[float], labels: list[int]) -> float:
         inputs = self._inputs(pixels, len(labels))
+        self.twin.training = True
         self.optimizer.zero_grad()
-        loss = self.torch.nn.functional.cross_entropy(self.net(inputs), self.torch.tensor(labels))
+        loss = self.torch.nn.functional.cross_entropy(self.twin(inputs), self.torch.tensor(labels))
         loss.backward()
         self.optimizer.step()
         return loss.item()
 
     def predict(self, pixels: list[float], count: int) -> list[int]:
+        self.twin.training = False
         with self.torch.no_grad():
-            return self.net(self._inputs(pixels, count)).argmax(dim=1).tolist()
+            return self.twin(self._inputs(pixels, count)).argmax(dim=1).tolist()
 
     def weights(self) -> list[list[float]]:
-        return [parameter.detach().reshape(-1).tolist() for parameter in self.parameters]
+        return [parameter.detach().reshape(-1).tolist() for parameter in self.twin.parameters]
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +192,8 @@ def run(args: argparse.Namespace) -> dict:
     test_images, test_labels = load_split(data_dir, "t10k", args.test_limit)
     print(f"train {len(train_labels)} images, test {len(test_labels)} images, batch {args.batch_size}")
 
-    model = build_nanograd(args.seed)
+    model = build_nanograd(args.seed, args.model)
+    print(f"model {args.model}, {model.num_parameters()} parameters")
     runners = {}
     for name in args.frameworks:
         if name == "nanograd":
@@ -239,6 +246,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--data-dir", default="data/mnist")
     parser.add_argument("--frameworks", nargs="+", choices=FRAMEWORKS, default=list(FRAMEWORKS))
+    parser.add_argument("--model", choices=MODELS, default="lenet")
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)

@@ -192,6 +192,14 @@ def adam_update(
     return new_w, m, v
 
 
+def relu(x: list[float]) -> list[float]:
+    return [value if value > 0.0 else 0.0 for value in x]
+
+
+def relu_backward(x: list[float], grad: list[float]) -> list[float]:
+    return [g if value > 0.0 else 0.0 for g, value in zip(grad, x)]
+
+
 def tanh(x: list[float]) -> list[float]:
     return [math.tanh(value) for value in x]
 

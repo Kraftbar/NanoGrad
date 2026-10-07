@@ -134,6 +134,13 @@ class KernelBackendTests(unittest.TestCase):
         for p, q in zip(python, c):
             self.assertListsClose(p, q)
 
+    def test_relu_agrees(self) -> None:
+        x, grad = values(40, 25), values(40, 26)
+        python, c = self.run_both(lambda: kernels.relu(x))
+        self.assertListsClose(python, c)
+        python, c = self.run_both(lambda: kernels.relu_backward(x, grad))
+        self.assertListsClose(python, c)
+
     def test_tanh_agrees(self) -> None:
         x = values(50, 15)
         grad = values(50, 16)

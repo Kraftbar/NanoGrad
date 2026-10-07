@@ -198,8 +198,8 @@ class Tensor:
     def permute(self, axes: tuple[int, ...]) -> "Tensor":
         return permute(self, axes)
 
-    def conv2d_valid(self, kernel: "Tensor") -> "Tensor":
-        return conv2d_valid(self, kernel)
+    def conv2d_valid(self, kernel: "Tensor", *, stride: int = 1) -> "Tensor":
+        return conv2d_valid(self, kernel, stride=stride)
 
     def avg_pool2d(
         self,
@@ -618,7 +618,12 @@ def _expand(tensor: Tensor, out_shape: tuple[int, ...]) -> list[float]:
         outer, inner = block
         if inner == 1:
             return data * outer
-        return [value for value in data for _ in range(inner)] * outer
+        # Repeat each value inner times by repeating length-1 slices, which
+        # works at C speed for lists and arrays alike.
+        repeated = data[:0]
+        for index in range(len(data)):
+            repeated += data[index : index + 1] * inner
+        return repeated * outer
     return [data[index] for index in _broadcast_index_map(out_shape, tensor.shape)]
 
 
@@ -697,8 +702,8 @@ def tensor_relu(tensor: Tensor) -> Tensor:
     inputs = tensor.data
     return _unary(
         tensor,
-        [value if value > 0.0 else 0.0 for value in inputs],
-        lambda grad: [g if x > 0.0 else 0.0 for g, x in zip(grad, inputs)],
+        kernels.relu(inputs),
+        lambda grad: kernels.relu_backward(inputs, grad),
         "relu",
     )
 
@@ -1261,8 +1266,58 @@ def _axis_lanes(shape: tuple[int, ...], axis: int) -> tuple[slice, ...]:
 # ---------------------------------------------------------------------------
 
 
-def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
-    """Apply a valid (no padding, stride 1) convolution-style filter.
+def conv2d(image: Tensor, kernel: Tensor, *, stride: int = 1, padding: int = 0) -> Tensor:
+    """Convolution with zero ``padding`` around the image and a ``stride``.
+
+    Same shapes and convention as ``conv2d_valid``; padding just adds a
+    border of zeros first (``pad2d``). With kernel size k, padding p and
+    stride s, an H-pixel side becomes (H + 2p - k) // s + 1 pixels: a 3x3
+    kernel with padding 1 keeps the size, and stride 2 halves it.
+    """
+
+    padded = pad2d(image, padding) if padding else image
+    return conv2d_valid(padded, kernel, stride=stride)
+
+
+def pad2d(image: Tensor, padding: int) -> Tensor:
+    """Add ``padding`` zeros on every side of the last two axes.
+
+    Every input pixel moves to a fixed place in the larger zero image, listed
+    in an index table, so padding is a scatter into zeros and its backward
+    pass is the matching gather (the same kernels im2col uses).
+    """
+
+    if padding < 0:
+        raise ValueError("padding must be non-negative")
+    if image.ndim < 2:
+        raise ValueError("pad2d expects at least a 2D tensor")
+    rows, cols = image.shape[-2:]
+    out_shape = (*image.shape[:-2], rows + 2 * padding, cols + 2 * padding)
+    index = _pad2d_index(rows, cols, padding)
+    sizes = dict(batches=image.numel // (rows * cols), image_size=out_shape[-2] * out_shape[-1])
+    out = _op_result(kernels.scatter_add_indexed(image.data, index, **sizes), out_shape, (image,), "pad2d")
+
+    def _backward() -> None:
+        _add_grad(image, kernels.gather_indexed(_grad_data(out), index, **sizes))
+
+    _set_backward(out, _backward)
+    return out
+
+
+@lru_cache(maxsize=64)
+def _pad2d_index(rows: int, cols: int, padding: int) -> tuple[int, ...]:
+    """Where each pixel of a (rows, cols) plane lands in the padded plane."""
+
+    padded_cols = cols + 2 * padding
+    return kernels.index_table(
+        (row + padding) * padded_cols + col + padding
+        for row in range(rows)
+        for col in range(cols)
+    )
+
+
+def conv2d_valid(image: Tensor, kernel: Tensor, *, stride: int = 1) -> Tensor:
+    """Apply a valid (no padding) convolution-style filter.
 
     This uses the cross-correlation convention common in neural networks:
     the kernel is slid over the image without flipping it.
@@ -1277,6 +1332,8 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
     Unbatched outputs with a single filter (O = 1) drop the filter axis.
     - image (B, C, H, W) kernel (O, C, kh, kw) -> (B, O, oh, ow)
 
+    The kernel moves ``stride`` pixels at a time, so oh = (H - kh) // stride + 1.
+
     Internally everything is treated as the batched 4D case (reshaping a flat
     row-major list is free), using im2col:
 
@@ -1285,7 +1342,7 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
     """
 
     batches, channels, image_rows, image_cols, filters, out_shape = (
-        _conv2d_shapes(image.shape, kernel.shape)
+        _conv2d_shapes(image.shape, kernel.shape, stride)
     )
     kernel_rows, kernel_cols = kernel.shape[-2:]
     patch_index = _conv2d_patch_index(
@@ -1294,6 +1351,7 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
         image_cols,
         kernel_rows,
         kernel_cols,
+        stride,
     )
     patch_size = channels * kernel_rows * kernel_cols      # K
     positions = len(patch_index) // patch_size             # P
@@ -1337,6 +1395,7 @@ def conv2d_valid(image: Tensor, kernel: Tensor) -> Tensor:
 def _conv2d_shapes(
     image_shape: tuple[int, ...],
     kernel_shape: tuple[int, ...],
+    stride: int = 1,
 ) -> tuple[int, int, int, int, int, tuple[int, ...]]:
     """Validate shapes and return (B, C, H, W, O, output shape)."""
 
@@ -1376,8 +1435,10 @@ def _conv2d_shapes(
     if kernel_rows > image_rows or kernel_cols > image_cols:
         raise ValueError("conv2d_valid kernel must fit inside the image")
 
-    out_rows = image_rows - kernel_rows + 1
-    out_cols = image_cols - kernel_cols + 1
+    if stride <= 0:
+        raise ValueError("conv2d stride must be positive")
+    out_rows = (image_rows - kernel_rows) // stride + 1
+    out_cols = (image_cols - kernel_cols) // stride + 1
     if len(image_shape) == 4:
         out_shape = (batches, filters, out_rows, out_cols)
     elif filters == 1:
@@ -1395,10 +1456,12 @@ def _conv2d_patch_index(
     image_cols: int,
     kernel_rows: int,
     kernel_cols: int,
+    stride: int = 1,
 ) -> tuple[int, ...]:
     """Flat image indices of every patch, patch after patch (P x K, row-major).
 
     Index order inside a patch matches a flattened (C, kh, kw) kernel.
+    Patches start every ``stride`` pixels.
     """
 
     channel_size = image_rows * image_cols
@@ -1409,9 +1472,9 @@ def _conv2d_patch_index(
         for col in range(kernel_cols)
     ]
     return kernels.index_table(
-        out_row * image_cols + out_col + offset
-        for out_row in range(image_rows - kernel_rows + 1)
-        for out_col in range(image_cols - kernel_cols + 1)
+        out_row * stride * image_cols + out_col * stride + offset
+        for out_row in range((image_rows - kernel_rows) // stride + 1)
+        for out_col in range((image_cols - kernel_cols) // stride + 1)
         for offset in patch_offsets
     )
 

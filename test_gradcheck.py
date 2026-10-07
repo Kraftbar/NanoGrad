@@ -9,15 +9,17 @@ from tensor import (
     Tensor,
     avg_pool2d,
     concat,
+    conv2d,
     conv2d_valid,
     gather_rows,
     matmul,
     max_pool2d,
     no_grad,
+    pad2d,
     permute,
     stack,
 )
-from tensor_nn import TensorLayerNorm, layer_norm
+from tensor_nn import TensorBatchNorm2d, TensorLayerNorm, layer_norm
 
 
 TOLERANCE = 1e-5
@@ -182,6 +184,25 @@ class GradientCheckTests(unittest.TestCase):
             conv2d_valid(Tensor.zeros((1, 2, 4, 5)), Tensor.zeros((1, 2, 2, 2))).shape,
             (1, 1, 3, 4),
         )
+
+    def test_padding_and_strided_convolution(self) -> None:
+        image = random_tensor((2, 2, 5, 6), seed=40)
+        kernel = random_tensor((3, 2, 3, 3), seed=41)
+
+        self.assertGradientsMatch(lambda: pad2d(image, 2), [image])
+        for stride, padding in ((2, 0), (1, 1), (2, 1), (3, 2)):
+            with self.subTest(stride=stride, padding=padding):
+                self.assertGradientsMatch(
+                    lambda stride=stride, padding=padding: conv2d(image, kernel, stride=stride, padding=padding),
+                    [image, kernel],
+                )
+
+    def test_batch_norm_training_mode(self) -> None:
+        image = random_tensor((3, 2, 3, 4), seed=42)
+        norm = TensorBatchNorm2d(2)
+        norm.weight = random_tensor((2,), seed=43)
+        norm.bias = random_tensor((2,), seed=44)
+        self.assertGradientsMatch(lambda: norm(image), [image, norm.weight, norm.bias])
 
     def test_pooling(self) -> None:
         image = random_tensor((2, 2, 5, 6), seed=12)

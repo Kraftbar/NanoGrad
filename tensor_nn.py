@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import kernels
+from kernels import dot
 
 from tensor import (
     _set_backward,
@@ -16,7 +17,7 @@ from tensor import (
     _add_grad,
     _grad_data,
     _op_result,
-    conv2d_valid,
+    conv2d,
     dropout,
     gather_rows,
     matmul,
@@ -134,6 +135,9 @@ class TensorConv2D(TensorModule):
         kernel: Tensor | None = None,
         bias: Tensor | None = None,
         seed: int | None = None,
+        stride: int = 1,
+        padding: int = 0,
+        use_bias: bool = True,
     ) -> None:
         if len(kernel_shape) not in (2, 3, 4):
             raise ValueError("TensorConv2D kernel shape must be 2D, 3D, or 4D")
@@ -141,30 +145,119 @@ class TensorConv2D(TensorModule):
             raise ValueError("TensorConv2D kernel dimensions must be positive")
 
         bias_shape = _conv2d_bias_shape(kernel_shape)
+        self.stride = stride
+        self.padding = padding
         self.kernel = kernel or conv2d_kernel(kernel_shape, seed=seed)
-        self.bias = bias or Tensor.zeros(bias_shape, requires_grad=True)
+        # A conv followed by batch norm needs no bias: the norm subtracts it.
+        self.bias = (bias or Tensor.zeros(bias_shape, requires_grad=True)) if use_bias else None
 
         _require_conv2d_kernel("kernel", self.kernel)
         if self.kernel.shape != kernel_shape:
             raise ValueError("kernel shape must match kernel_shape")
-        if self.bias.shape not in ((1,), bias_shape):
+        if self.bias is not None and self.bias.shape not in ((1,), bias_shape):
             raise ValueError("bias shape must be (1,) or match conv output channels")
 
     def __call__(self, inputs: Tensor) -> Tensor:
-        return conv2d_valid(inputs, self.kernel) + self.bias
+        out = conv2d(inputs, self.kernel, stride=self.stride, padding=self.padding)
+        return out if self.bias is None else out + self.bias
 
     def parameters(self) -> list[Tensor]:
-        return [self.kernel, self.bias]
+        return [self.kernel] if self.bias is None else [self.kernel, self.bias]
 
     def state_dict(self) -> dict:
-        return {
-            "kernel": _tensor_state(self.kernel),
-            "bias": _tensor_state(self.bias),
-        }
+        state = {"kernel": _tensor_state(self.kernel)}
+        if self.bias is not None:
+            state["bias"] = _tensor_state(self.bias)
+        return state
 
     def load_state_dict(self, state: dict) -> None:
         self.kernel.data = _state_data(state, "kernel", self.kernel.shape)
+        if self.bias is not None:
+            self.bias.data = _state_data(state, "bias", self.bias.shape)
+
+
+class TensorBatchNorm2d(TensorModule):
+    """Batch normalization for (batch, channels, rows, cols) images.
+
+    Training mode normalizes each channel by the mean and variance of all its
+    values in the batch (every image, every pixel), then scales and shifts
+    it with learned per-channel ``weight`` and ``bias``:
+
+        x_hat = (x - mean_c) / sqrt(var_c + eps),    y = x_hat * weight_c + bias_c
+
+    That is LayerNorm with the roles of the axes swapped: make each channel
+    one long row, and LayerNorm normalizes rows. It also keeps running
+    averages of the statistics for evaluation mode, as PyTorch does:
+
+        running = (1 - momentum) * running + momentum * batch statistic
+
+    (the running variance uses the unbiased n / (n - 1) estimate). Evaluation
+    mode normalizes with the running statistics instead of the batch's.
+    """
+
+    def __init__(self, channels: int, *, eps: float = 1e-5, momentum: float = 0.1) -> None:
+        if channels <= 0:
+            raise ValueError("channels must be positive")
+        self.channels = channels
+        self.eps = eps
+        self.momentum = momentum
+        self.weight = Tensor([1.0] * channels, (channels,), requires_grad=True)
+        self.bias = Tensor.zeros((channels,), requires_grad=True)
+        self.running_mean = [0.0] * channels
+        self.running_var = [1.0] * channels
+        self._unit_affine: dict[int, tuple[Tensor, Tensor]] = {}   # see __call__
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        if inputs.ndim != 4 or inputs.shape[1] != self.channels:
+            raise ValueError("TensorBatchNorm2d expects (batch, channels, rows, cols)")
+        batch, channels, rows, cols = inputs.shape
+        per_channel = (channels, 1, 1)
+        if self.training:
+            count = batch * rows * cols
+            channel_rows = inputs.permute((1, 0, 2, 3)).reshape((channels, count))
+            self._update_running_statistics(channel_rows.data, count)
+            # Plain normalization: LayerNorm with weight 1 and bias 0 (cached
+            # per row length); the per-channel weight and bias come after.
+            if count not in self._unit_affine:
+                self._unit_affine[count] = (Tensor([1.0] * count, (count,)), Tensor.zeros((count,)))
+            ones, zeros = self._unit_affine[count]
+            normalized = layer_norm(channel_rows, ones, zeros, eps=self.eps)
+            x_hat = normalized.reshape((channels, batch, rows, cols)).permute((1, 0, 2, 3))
+        else:
+            mean = Tensor(self.running_mean, per_channel)
+            inv_std = Tensor([1.0 / math.sqrt(v + self.eps) for v in self.running_var], per_channel)
+            x_hat = (inputs - mean) * inv_std
+        return x_hat * self.weight.reshape(per_channel) + self.bias.reshape(per_channel)
+
+    def _update_running_statistics(self, channel_rows: Sequence[float], count: int) -> None:
+        momentum = self.momentum
+        for channel in range(self.channels):
+            row = channel_rows[channel * count : (channel + 1) * count]
+            mean = sum(row) / count
+            variance = max(dot(row, row) / count - mean * mean, 0.0)
+            unbiased = variance * count / max(count - 1, 1)
+            self.running_mean[channel] = (1 - momentum) * self.running_mean[channel] + momentum * mean
+            self.running_var[channel] = (1 - momentum) * self.running_var[channel] + momentum * unbiased
+
+    def parameters(self) -> list[Tensor]:
+        return [self.weight, self.bias]
+
+    def state_dict(self) -> dict:
+        return {
+            "weight": _tensor_state(self.weight),
+            "bias": _tensor_state(self.bias),
+            "running_mean": list(self.running_mean),
+            "running_var": list(self.running_var),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        self.weight.data = _state_data(state, "weight", self.weight.shape)
         self.bias.data = _state_data(state, "bias", self.bias.shape)
+        for name in ("running_mean", "running_var"):
+            values = state.get(name)
+            if not isinstance(values, list) or len(values) != self.channels:
+                raise ValueError(f"state {name} does not match TensorBatchNorm2d")
+            setattr(self, name, [float(value) for value in values])
 
 
 

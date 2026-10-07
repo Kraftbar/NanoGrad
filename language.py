@@ -198,7 +198,12 @@ class CharEmbeddingModel(TensorModule):
 
 
 class CausalSelfAttention(TensorModule):
-    """Causal self-attention for tiny sequence models."""
+    """Multi-head self-attention, causal by default.
+
+    Causal (GPT): a token only attends to itself and earlier tokens.
+    With ``causal=False`` every token attends to every token, as in a
+    vision transformer or a BERT-style encoder.
+    """
 
     def __init__(
         self,
@@ -207,6 +212,7 @@ class CausalSelfAttention(TensorModule):
         *,
         num_heads: int = 1,
         dropout: float = 0.0,
+        causal: bool = True,
         seed: int = 0,
     ) -> None:
         if embedding_dim <= 0:
@@ -221,6 +227,7 @@ class CausalSelfAttention(TensorModule):
         self.embedding_dim = embedding_dim
         self.context_size = context_size
         self.num_heads = num_heads
+        self.causal = causal
         self.head_dim = embedding_dim // num_heads
         self._mask_cache: dict[int, Tensor] = {}
         self.queries = [
@@ -257,7 +264,7 @@ class CausalSelfAttention(TensorModule):
 
         # Attention runs per sequence: scores are (batch, context, context),
         # so a token only ever looks at tokens from its own row.
-        mask = self._causal_mask(context_size)
+        mask = self._causal_mask(context_size) if self.causal else None
         scale = 1 / math.sqrt(self.head_dim)
         head_outputs = []
         for query_layer, key_layer, value_layer in zip(
@@ -270,7 +277,9 @@ class CausalSelfAttention(TensorModule):
             value = value_layer(inputs)                      # (B, T, D)
             key_t = key.permute((0, 2, 1))                   # (B, D, T)
             scores = matmul(query, key_t) * scale            # (B, T, T)
-            weights = (scores + mask).softmax(axis=-1)       # (B, T, T)
+            if mask is not None:
+                scores = scores + mask                       # hide future keys
+            weights = scores.softmax(axis=-1)                # (B, T, T)
             weights = self.attention_dropout(weights)
             head_outputs.append(matmul(weights, value))      # (B, T, D)
 
@@ -361,7 +370,7 @@ def _load_layer_list(layers: list[TensorLinear], state, name: str) -> None:
 
 
 class TransformerBlock(TensorModule):
-    """Pre-norm transformer block for tiny causal language models."""
+    """Pre-norm transformer block (causal for GPT, or not: see attention)."""
 
     def __init__(
         self,
@@ -372,6 +381,7 @@ class TransformerBlock(TensorModule):
         num_heads: int = 1,
         feed_forward_activation: str = "relu",
         dropout: float = 0.0,
+        causal: bool = True,
         seed: int = 0,
     ) -> None:
         if embedding_dim <= 0:
@@ -396,6 +406,7 @@ class TransformerBlock(TensorModule):
             context_size,
             num_heads=num_heads,
             dropout=dropout,
+            causal=causal,
             seed=seed,
         )
         self.norm2 = TensorLayerNorm(embedding_dim)
