@@ -186,5 +186,65 @@ class AdamL2Tests(unittest.TestCase):
             self.assertAlmostEqual(a, b, places=14)
 
 
+class LBFGSTests(unittest.TestCase):
+    def test_minimizes_a_quadratic_quickly(self) -> None:
+        from optim import TensorLBFGS
+        from tensor import Tensor
+
+        x = Tensor([3.0, -2.0], (2,), requires_grad=True)
+        target = Tensor([1.0, 4.0], (2,))
+        optimizer = TensorLBFGS([x], lr=1.0)
+
+        def closure() -> float:
+            x.zero_grad()
+            loss = ((x - target) * (x - target) * Tensor([1.0, 10.0], (2,))).sum()
+            loss.backward()
+            return loss.item()
+
+        optimizer.step(closure)
+        for a, b in zip(x.data, [1.0, 4.0]):
+            self.assertAlmostEqual(a, b, places=6)
+
+    @unittest.skipUnless(__import__("importlib").util.find_spec("torch"), "PyTorch not installed")
+    def test_takes_the_same_steps_as_torch(self) -> None:
+        import random
+
+        import torch
+
+        from optim import TensorLBFGS
+        from tensor import Tensor, matmul
+
+        rng = random.Random(0)
+        xs = [[rng.uniform(-1, 1) for _ in range(3)] for _ in range(10)]
+        ys = [sum(row) ** 2 for row in xs]
+        w1, w2 = [rng.uniform(-0.5, 0.5) for _ in range(12)], [rng.uniform(-0.5, 0.5) for _ in range(4)]
+        ours = [Tensor(w1, (3, 4), requires_grad=True), Tensor(w2, (4, 1), requires_grad=True)]
+        theirs = [torch.tensor(w1, dtype=torch.float64).reshape(3, 4).requires_grad_(),
+                  torch.tensor(w2, dtype=torch.float64).reshape(4, 1).requires_grad_()]
+        x_ours, y_ours = Tensor([v for row in xs for v in row], (10, 3)), Tensor(ys, (10, 1))
+        x_torch, y_torch = torch.tensor(xs, dtype=torch.float64), torch.tensor(ys, dtype=torch.float64).reshape(10, 1)
+        optimizer_ours, optimizer_torch = TensorLBFGS(ours, lr=0.8), torch.optim.LBFGS(theirs, lr=0.8)
+
+        def closure_ours() -> float:
+            for parameter in ours:
+                parameter.zero_grad()
+            error = matmul(matmul(x_ours, ours[0]).tanh(), ours[1]) - y_ours
+            loss = (error * error).mean()
+            loss.backward()
+            return loss.item()
+
+        def closure_torch():
+            optimizer_torch.zero_grad()
+            loss = ((torch.tanh(x_torch @ theirs[0]) @ theirs[1] - y_torch) ** 2).mean()
+            loss.backward()
+            return loss
+
+        for _ in range(2):
+            self.assertAlmostEqual(optimizer_ours.step(closure_ours), optimizer_torch.step(closure_torch).item(), places=10)
+        for parameter, reference in zip(ours, theirs):
+            for a, b in zip(parameter.data, reference.detach().reshape(-1).tolist()):
+                self.assertAlmostEqual(a, b, places=9)
+
+
 if __name__ == "__main__":
     unittest.main()

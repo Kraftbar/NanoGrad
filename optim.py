@@ -232,3 +232,107 @@ def _uses_weight_decay(
     if weight_decay_min_ndim is None:
         return True
     return parameter.ndim >= weight_decay_min_ndim
+
+
+class TensorLBFGS:
+    """L-BFGS, a quasi-Newton method, as ``torch.optim.LBFGS`` (no line search).
+
+    Gradient descent steps along -grad. Newton's method steps along
+    -H^-1 grad, using the curvature (Hessian H) to take long steps where the
+    loss is flat and short ones where it is steep. L-BFGS estimates H^-1 grad
+    from the last ``history_size`` steps alone: each pair (s = step taken,
+    y = change in gradient) says how the gradient bends along s. The
+    "two-loop recursion" turns those pairs into a direction without ever
+    building a matrix.
+
+    It works on the whole loss, not on noisy batches: each ``step(closure)``
+    runs up to ``max_iter`` iterations, calling ``closure()`` (which must
+    zero the gradients, compute the loss, call backward and return it)
+    after every move. The arithmetic follows PyTorch's implementation, so
+    the two take the same steps.
+    """
+
+    def __init__(self, parameters: list[Tensor], lr: float = 1.0, *, max_iter: int = 20, max_eval: int | None = None,
+                 tolerance_grad: float = 1e-7, tolerance_change: float = 1e-9, history_size: int = 100) -> None:
+        self.parameters = parameters
+        self.lr, self.max_iter, self.history_size = lr, max_iter, history_size
+        self.max_eval = max_iter * 5 // 4 if max_eval is None else max_eval
+        self.tolerance_grad, self.tolerance_change = tolerance_grad, tolerance_change
+        self.state: dict = {"n_iter": 0}
+
+    def _flat_grad(self) -> list[float]:
+        return [g for parameter in self.parameters
+                for g in (parameter.grad if parameter.grad is not None else [0.0] * parameter.numel)]
+
+    def _move(self, step: float, direction: list[float]) -> None:
+        offset = 0
+        for parameter in self.parameters:
+            count = parameter.numel
+            parameter.data = kernels.add_scaled(parameter.data, direction[offset : offset + count], step)
+            offset += count
+
+    def step(self, closure) -> float:
+        state = self.state
+        loss = float(closure())
+        orig_loss, current_evals = loss, 1
+        flat_grad = self._flat_grad()
+        if max(abs(g) for g in flat_grad) <= self.tolerance_grad:
+            return orig_loss
+
+        d, t = state.get("d"), state.get("t")
+        old_dirs, old_steps, ro = state.get("old_dirs"), state.get("old_steps"), state.get("ro")
+        h_diag, prev_flat_grad = state.get("h_diag"), state.get("prev_flat_grad")
+        n_iter = 0
+        while n_iter < self.max_iter:
+            n_iter += 1
+            state["n_iter"] += 1
+            if state["n_iter"] == 1:
+                d = [-g for g in flat_grad]
+                old_dirs, old_steps, ro, h_diag = [], [], [], 1.0
+            else:
+                y = kernels.add_scaled(flat_grad, prev_flat_grad, -1.0)       # change in gradient
+                s = kernels.scale(d, t)                                         # the step just taken
+                ys = _dot(y, s)
+                if ys > 1e-10:                                                  # keep only curvature that makes sense
+                    if len(old_dirs) == self.history_size:
+                        old_dirs.pop(0), old_steps.pop(0), ro.pop(0)
+                    old_dirs.append(y)
+                    old_steps.append(s)
+                    ro.append(1.0 / ys)
+                    h_diag = ys / _dot(y, y)                                    # scale of the initial H^-1
+                # Two-loop recursion: q = -grad, newest pair first, then back.
+                q, alphas = [-g for g in flat_grad], [0.0] * len(old_dirs)
+                for i in range(len(old_dirs) - 1, -1, -1):
+                    alphas[i] = _dot(old_steps[i], q) * ro[i]
+                    q = kernels.add_scaled(q, old_dirs[i], -alphas[i])
+                d = kernels.scale(q, h_diag)
+                for i in range(len(old_dirs)):
+                    beta = _dot(old_dirs[i], d) * ro[i]
+                    d = kernels.add_scaled(d, old_steps[i], alphas[i] - beta)
+            prev_flat_grad, prev_loss = list(flat_grad), loss
+            # The first step is cautious (the direction is just -grad).
+            t = min(1.0, 1.0 / sum(abs(g) for g in flat_grad)) * self.lr if state["n_iter"] == 1 else self.lr
+            if _dot(flat_grad, d) > -self.tolerance_change:                    # not a descent direction
+                break
+            self._move(t, d)
+            evals = 0
+            if n_iter != self.max_iter:
+                loss = float(closure())
+                flat_grad = self._flat_grad()
+                evals = 1
+            current_evals += evals
+            if n_iter == self.max_iter or current_evals >= self.max_eval:
+                break
+            if max(abs(g) for g in flat_grad) <= self.tolerance_grad:
+                break
+            if max(abs(value) for value in d) * abs(t) <= self.tolerance_change:
+                break
+            if abs(loss - prev_loss) < self.tolerance_change:
+                break
+        state.update(d=d, t=t, old_dirs=old_dirs, old_steps=old_steps, ro=ro, h_diag=h_diag,
+                     prev_flat_grad=prev_flat_grad)
+        return orig_loss
+
+
+def _dot(a, b) -> float:
+    return math.fsum(kernels.multiply(a, b))
