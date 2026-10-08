@@ -120,6 +120,62 @@ class DLinear(TensorModule):
         return [*self.seasonal.parameters(), *self.trend.parameters()]
 
 
+class PatchTST(TensorModule):
+    """A transformer forecaster in the style of PatchTST (Nie et al., 2023).
+
+    Each series is handled on its own ("channel independence"): it is
+    normalized by its own window's mean and spread (RevIN), cut into
+    overlapping patches of 16 steps (stride 8; 42 patches of 336 steps),
+    and each patch becomes one token: linear embedding plus a learned
+    position, then the bidirectional transformer blocks of the language
+    models (language.py), then one linear map from all patch outputs to the
+    forecast, which is de-normalized.
+    """
+
+    def __init__(self, lookback: int, horizon: int, *, patch: int = 16, stride: int = 8, width: int = 16,
+                 heads: int = 4, layers: int = 3, hidden: int = 128, dropout: float = 0.2, seed: int = 0) -> None:
+        from language import TransformerBlock
+
+        self.lookback, self.horizon, self.patch, self.stride = lookback, horizon, patch, stride
+        self.patches = (lookback - patch) // stride + 1
+        self.embed = TensorLinear(patch, width, seed=seed)
+        rng = random.Random(seed + 1)
+        self.position = Tensor([rng.uniform(-0.02, 0.02) for _ in range(self.patches * width)],
+                               (self.patches, width), requires_grad=True)
+        self.blocks = [TransformerBlock(width, self.patches, hidden_dim=hidden, num_heads=heads, causal=False,
+                                        feed_forward_activation="gelu", dropout=dropout, seed=seed + 10 * (i + 1))
+                       for i in range(layers)]
+        self.head = TensorLinear(self.patches * width, horizon, seed=seed + 100)
+        self.width = width
+
+    def __call__(self, series: Tensor) -> Tensor:
+        """(B, channels, lookback) -> (B, channels, horizon)."""
+
+        batch, channels, length = series.shape
+        rows, values = batch * channels, series.data
+        # RevIN: each window by its own mean and spread (constants: no gradient).
+        means, spreads, patches = [], [], []
+        for row in range(rows):
+            window = values[row * length : (row + 1) * length]
+            mean = sum(window) / length
+            spread = math.sqrt(sum((v - mean) ** 2 for v in window) / length + 1e-5)
+            means.append(mean)
+            spreads.append(spread)
+            for p in range(self.patches):
+                start = p * self.stride
+                patches += [(v - mean) / spread for v in window[start : start + self.patch]]
+        tokens = self.embed(Tensor(patches, (rows, self.patches, self.patch))) + self.position
+        for block in self.blocks:
+            tokens = block(tokens)
+        forecast = self.head(tokens.reshape((rows, self.patches * self.width)))               # (rows, horizon)
+        forecast = forecast * Tensor(spreads, (rows, 1)) + Tensor(means, (rows, 1))
+        return forecast.reshape((batch, channels, self.horizon))
+
+    def parameters(self) -> list[Tensor]:
+        return [*self.embed.parameters(), self.position,
+                *[p for block in self.blocks for p in block.parameters()], *self.head.parameters()]
+
+
 class NanoGradRunner:
     def __init__(self, model: DLinear, lr: float) -> None:
         self.model, self.optimizer = model, TensorAdam(model.parameters(), lr=lr)
@@ -214,7 +270,12 @@ def run(framework: str, rows, args, horizon: int) -> dict:
     ranges = splits(rows, lookback, horizon)
     train_firsts, valid_firsts, test_firsts = (windows(rows, *ranges[name], lookback, horizon)
                                                for name in ("train", "validation", "test"))
-    model = DLinear(lookback, horizon, seed=args.seed)
+    if args.model == "patchtst":
+        if framework != "nanograd":
+            raise SystemExit("--model patchtst runs in NanoGrad only")
+        model = PatchTST(lookback, horizon, seed=args.seed)
+    else:
+        model = DLinear(lookback, horizon, seed=args.seed)
     runner = NanoGradRunner(model, args.lr) if framework == "nanograd" else TorchRunner(model, args.lr)
     rng = random.Random(args.seed)
     best, best_weights, waited, start, steps = math.inf, runner.weights(), 0, perf_counter(), 0
@@ -222,10 +283,12 @@ def run(framework: str, rows, args, horizon: int) -> dict:
         lr = args.lr * 0.5 ** (epoch - 1)                                  # the paper's "type1" schedule
         order = list(train_firsts)
         rng.shuffle(order)
+        model.train()
         for first in range(0, len(order) - args.batch_size + 1, args.batch_size):   # drop_last, as theirs
             inputs, targets = batch(rows, order[first : first + args.batch_size], lookback, horizon)
             runner.train_step(inputs, targets, args.batch_size, channels, lr)
             steps += 1
+        model.eval()
         valid = mean_loss(runner, rows, valid_firsts, lookback, horizon, channels)
         if valid < best:
             best, best_weights, waited = valid, runner.weights(), 0
@@ -245,6 +308,7 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--data", default="data/ett/ETTh1.csv")
     parser.add_argument("--frameworks", nargs="+", choices=("nanograd", "torch"), default=["nanograd"])
     parser.add_argument("--horizons", type=int, nargs="+", default=[96])
+    parser.add_argument("--model", choices=("dlinear", "patchtst"), default="dlinear")
     parser.add_argument("--lookback", type=int, default=336)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--patience", type=int, default=3)
