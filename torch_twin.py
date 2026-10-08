@@ -126,17 +126,20 @@ class TorchTwin:
     def _layer_norm(self, layer: TensorLayerNorm, x):
         return F.layer_norm(x, (layer.normalized_shape,), self._p(layer.weight), self._p(layer.bias), layer.eps)
 
-    def _attention(self, layer: CausalSelfAttention, x):
+    def _attention(self, layer: CausalSelfAttention, x, memory=None, key_mask=None):
         context = x.shape[1]
+        source = x if memory is None else memory
         heads = []
         for head, query in enumerate(layer.queries):
             shared = head // layer.group_size        # grouped-query attention shares keys and values
             key, value = layer.keys[shared], layer.values[shared]
-            q, k, v = self._linear(query, x), self._linear(key, x), self._linear(value, x)
-            if layer.rotary:
+            q, k, v = self._linear(query, x), self._linear(key, source), self._linear(value, source)
+            if layer.rotary and memory is None:
                 q, k = self._rope(q), self._rope(k)
             scores = q @ k.transpose(1, 2) * (1 / math.sqrt(layer.head_dim))
-            if layer.causal:
+            if key_mask is not None:                                 # (B, S): -1e9 at padding
+                scores = scores + key_mask[:, None, :]
+            if layer.causal and memory is None:
                 future = torch.ones(context, context, dtype=torch.bool).triu(1)
                 if layer.window is not None:                         # sliding window: hide the far past too
                     future |= torch.ones(context, context, dtype=torch.bool).tril(-layer.window)
@@ -144,10 +147,10 @@ class TorchTwin:
             heads.append(self._dropout(layer.attention_dropout, scores.softmax(dim=-1)) @ v)
         return self._dropout(layer.output_dropout, self._linear(layer.projection, torch.cat(heads, dim=-1)))
 
-    def _transformer_block(self, block: TransformerBlock, x):
+    def _transformer_block(self, block: TransformerBlock, x, key_mask=None):
         if block.moe is not None:
             raise TypeError("TorchTwin does not support mixture-of-experts blocks")
-        x = x + self._attention(block.attention, self._norm(block.norm1, x))
+        x = x + self._attention(block.attention, self._norm(block.norm1, x), key_mask=key_mask)
         normed = self._norm(block.norm2, x)
         hidden = self._linear(block.feed_forward_in, normed)
         if block.feed_forward_activation == "swiglu":
@@ -206,6 +209,28 @@ class TorchTwin:
         for block in model.blocks:
             hidden = self._transformer_block(block, hidden)
         return self._linear(model.projection, self._norm(model.norm, hidden))
+
+    # -- encoder-decoder transformer (seq2seq.py); takes padded id lists ----
+
+    def seq2seq(self, model, source: list[list[int]], target: list[list[int]]):
+        """Next-token scores (B, T, V), like ``Seq2SeqTransformer.__call__``."""
+
+        from seq2seq import PAD
+
+        source_ids, target_ids = torch.tensor(source), torch.tensor(target)
+        key_mask = torch.zeros(source_ids.shape, dtype=self.dtype).masked_fill(source_ids == PAD, -1e9)
+        memory = self._dropout(model.embedding_dropout, self._token_position(model.source_embedding, source_ids))
+        for block in model.encoder:
+            memory = self._transformer_block(block, memory, key_mask)
+        memory = self._layer_norm(model.encoder_norm, memory)
+        x = self._dropout(model.embedding_dropout, self._token_position(model.target_embedding, target_ids))
+        for block in model.decoder:
+            x = x + self._attention(block.self_attention, self._layer_norm(block.norm1, x))
+            x = x + self._attention(block.cross_attention, self._layer_norm(block.norm2, x), memory, key_mask)
+            hidden = self._linear(block.feed_forward_in, self._layer_norm(block.norm3, x))
+            hidden = F.gelu(hidden) if block.activation == "gelu" else F.relu(hidden)
+            x = x + self._dropout(block.dropout, self._linear(block.feed_forward_out, hidden))
+        return self._linear(model.projection, self._layer_norm(model.decoder_norm, x))
 
     # -- diffusion U-Net (diffusion.py); takes images and time steps --------
 

@@ -281,7 +281,16 @@ class CausalSelfAttention(TensorModule):
         self.attention_dropout = TensorDropout(dropout, seed=seed + 101)
         self.output_dropout = TensorDropout(dropout, seed=seed + 102)
 
-    def __call__(self, inputs: Tensor) -> Tensor:
+    def __call__(self, inputs: Tensor, *, memory: Tensor | None = None, key_mask: Tensor | None = None) -> Tensor:
+        """Attention of ``inputs`` over themselves, or over ``memory``.
+
+        With ``memory`` (B, S, C) this is cross-attention, as in a
+        translation model's decoder: queries come from ``inputs``, keys and
+        values from ``memory`` (the encoded source sentence), and there is
+        no causal mask. ``key_mask`` (B, S), 0 for real keys and -1e9 for
+        padding, hides the padding at the end of shorter sequences.
+        """
+
         if inputs.ndim != 3:
             raise ValueError("CausalSelfAttention expects (batch, context, embedding)")
 
@@ -305,24 +314,32 @@ class CausalSelfAttention(TensorModule):
         # key/value head are stacked along the time axis, (B * KV, G * T, D),
         # so the same 2 batched products cover them without copying keys.
         batch, length, _ = inputs.shape
+        source = inputs if memory is None else memory
+        key_length = source.shape[1]
         heads, kv_heads, group, head_dim = self.num_heads, self.num_kv_heads, self.group_size, self.head_dim
-        mask = self._causal_mask(length) if self.causal else None
+        mask = self._causal_mask(length) if self.causal and memory is None else None
         scale = 1 / math.sqrt(head_dim)
 
-        def project(layers: list[TensorLinear]) -> Tensor:
+        def project(layers: list[TensorLinear], x: Tensor) -> Tensor:
+            steps = x.shape[1]
             weight = concat([layer.weight for layer in layers], axis=0)     # (n * D, C)
             bias = concat([layer.bias for layer in layers], axis=0)         # (n * D,)
-            out = linear(inputs, weight, bias)                              # (B, T, n * D)
-            out = out.reshape((batch, length, len(layers), head_dim)).permute((0, 2, 1, 3))
-            return out.reshape((batch * len(layers), length, head_dim))     # (B * n, T, D)
+            out = linear(x, weight, bias)                                   # (B, T, n * D)
+            out = out.reshape((batch, steps, len(layers), head_dim)).permute((0, 2, 1, 3))
+            return out.reshape((batch * len(layers), steps, head_dim))      # (B * n, T, D)
 
-        query, key, value = project(self.queries), project(self.keys), project(self.values)
-        if self.rotary:            # positions rotate queries and keys, never values
+        query = project(self.queries, inputs)
+        key, value = project(self.keys, source), project(self.values, source)
+        if self.rotary and memory is None:    # positions rotate queries and keys, never values
             query, key = rotary_embedding(query), rotary_embedding(key)
         query = query.reshape((batch * kv_heads, group * length, head_dim))  # a no-op when G = 1
-        scores = matmul(query, key.permute((0, 2, 1))) * scale             # (B * KV, G * T, T)
+        scores = matmul(query, key.permute((0, 2, 1))) * scale             # (B * KV, G * T, S)
         if mask is not None:
             scores = scores + mask                                          # hide future keys
+        if key_mask is not None:                                            # hide padding keys
+            per_head = [value for row in range(batch) for _ in range(kv_heads)
+                        for value in key_mask.data[row * key_length : (row + 1) * key_length]]
+            scores = scores + Tensor(per_head, (batch * kv_heads, 1, key_length))
         weights = self.attention_dropout(scores.softmax(axis=-1))
         attended = matmul(weights, value)                                   # (B * KV, G * T, D)
         # Back to (B, T, H * D): each token's head outputs side by side.
@@ -545,7 +562,9 @@ class TransformerBlock(TensorModule):
             hidden = hidden * self.feed_forward_up(normed)
         return hidden
 
-    def __call__(self, inputs: Tensor) -> Tensor:
+    def __call__(self, inputs: Tensor, *, key_mask: Tensor | None = None) -> Tensor:
+        """``key_mask`` (B, T): 0 for real tokens, -1e9 for padding (encoders)."""
+
         if inputs.ndim != 3:
             raise ValueError("TransformerBlock expects (batch, context, embedding)")
 
@@ -557,7 +576,7 @@ class TransformerBlock(TensorModule):
 
         # x = x + attention(norm1(x))
         # x = x + feed_forward(norm2(x))
-        attended = self.attention(self.norm1(inputs))
+        attended = self.attention(self.norm1(inputs), key_mask=key_mask)
         residual = inputs + attended
         update = self.feed_forward_dropout(self._feed_forward(self.norm2(residual)))
         return residual + update
