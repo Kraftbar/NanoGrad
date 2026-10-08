@@ -300,8 +300,8 @@ def gather_rows(table: list[float], ids: Sequence[int], width: int) -> list[floa
     return out
 
 
-def scatter_add_rows(grad: list[float], ids: Sequence[int], width: int, rows: int) -> list[float]:
-    table_grad = [0.0] * (rows * width)
+def scatter_add_rows(grad: list[float], ids: Sequence[int], width: int, rows: int, into=None) -> list[float]:
+    table_grad = [0.0] * (rows * width) if into is None else into
     for position, row in enumerate(ids):
         start = row * width
         table_grad[start : start + width] = [

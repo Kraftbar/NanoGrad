@@ -95,7 +95,12 @@ class Tensor:
 
     @grad.setter
     def grad(self, values: Sequence[float] | None) -> None:
-        self._grad = None if values is None else kernels.storage(values)
+        if values is None or isinstance(values, RowGrad):
+            self._grad = values
+        else:
+            self._grad = kernels.storage(values)
+
+    sparse_grad = False   # True on an embedding table: its gradient is a RowGrad (see below)
 
     def __repr__(self) -> str:
         return f"Tensor(shape={self.shape}, data={self.tolist()})"
@@ -262,7 +267,8 @@ class Tensor:
 
     def zero_grad(self) -> None:
         if self.requires_grad:
-            self.grad = kernels.zeros(len(self.data))
+            # A sparse table's "zero" gradient is no rows at all.
+            self.grad = None if self.sparse_grad else kernels.zeros(len(self.data))
 
     def backward(
         self,
@@ -450,11 +456,53 @@ def _grad_data(tensor: Tensor) -> list[float]:
     return tensor.grad
 
 
+class RowGrad:
+    """The gradient of a big table where only a few rows were used.
+
+    An embedding table of 1,000,000 x 10 numbers, of which a batch reads
+    3,000 rows, has a gradient that is zero everywhere else. Storing it
+    dense means writing (and then applying) 10 million numbers per step;
+    a RowGrad keeps just the row ids and their gradient rows, like
+    PyTorch's sparse embedding gradients. The same id may appear more than
+    once; its rows add up (``coalesced`` merges them).
+    """
+
+    def __init__(self, ids: Sequence[int], values: Sequence[float], width: int, rows: int) -> None:
+        self.ids, self.values, self.width, self.rows = list(ids), kernels.storage(values), width, rows
+
+    def __len__(self) -> int:                       # as long as the dense gradient it stands for
+        return self.rows * self.width
+
+    def plus(self, other: "RowGrad") -> "RowGrad":
+        return RowGrad(self.ids + other.ids, list(self.values) + list(other.values), self.width, self.rows)
+
+    def coalesced(self) -> "RowGrad":
+        """Each id once, with its rows summed."""
+
+        unique = list(dict.fromkeys(self.ids))
+        position = {row: index for index, row in enumerate(unique)}
+        summed = kernels.scatter_add_rows(self.values, kernels.index_table([position[i] for i in self.ids]),
+                                          width=self.width, rows=len(unique))
+        return RowGrad(unique, summed, self.width, self.rows)
+
+    def to_dense(self) -> list[float]:
+        return kernels.scatter_add_rows(self.values, kernels.index_table(self.ids), width=self.width, rows=self.rows)
+
+
 def _add_grad(tensor: Tensor, grad: Sequence[Number]) -> None:
     """Accumulate ``grad`` into ``tensor.grad`` (gradients add up over uses)."""
 
     if len(grad) != len(tensor.data):
         raise ValueError("gradient length does not match tensor data")
+    if isinstance(grad, RowGrad) or isinstance(tensor.grad, RowGrad):
+        if tensor.grad is None:
+            tensor.grad = grad
+        elif isinstance(grad, RowGrad) and isinstance(tensor.grad, RowGrad):
+            tensor.grad = tensor.grad.plus(grad)
+        else:                                       # mixed with a dense gradient: go dense
+            dense = [g.to_dense() if isinstance(g, RowGrad) else g for g in (tensor.grad, grad)]
+            tensor.grad = kernels.add(*dense)
+        return
     if tensor.grad is None:
         # Gradients are never modified in place (accumulating builds a new
         # sequence), so the first one can be adopted as-is, not copied.
@@ -1309,7 +1357,10 @@ def gather_rows(table: Tensor, indices: Sequence[int]) -> Tensor:
     out = _op_result(data, (len(indices), width), (table,), "gather_rows")
 
     def _backward() -> None:
-        _add_grad(table, kernels.scatter_add_rows(_grad_data(out), ids, width=width, rows=rows))
+        if table.sparse_grad:                       # only the rows that were read
+            _add_grad(table, RowGrad(indices, _grad_data(out), width, rows))
+        else:
+            _add_grad(table, kernels.scatter_add_rows(_grad_data(out), ids, width=width, rows=rows))
 
     _set_backward(out, _backward)
     return out

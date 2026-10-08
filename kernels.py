@@ -268,11 +268,16 @@ def gather_rows(table: list[float], ids: Sequence[int], *, width: int) -> list[f
     return (kernels_c.gather_rows if BACKEND == "c" else reference.gather_rows)(table, ids, width)
 
 
-def scatter_add_rows(grad: list[float], ids: Sequence[int], *, width: int, rows: int) -> list[float]:
+def scatter_add_rows(grad: list[float], ids: Sequence[int], *, width: int, rows: int, into=None) -> list[float]:
     """Inverse of ``gather_rows`` for gradients: a zero table with each
-    gradient row added into row ``ids[i]`` (repeated ids add up)."""
+    gradient row added into row ``ids[i]`` (repeated ids add up).
 
-    return (kernels_c.scatter_add_rows if BACKEND == "c" else reference.scatter_add_rows)(grad, ids, width, rows)
+    With ``into`` (a table in the backend's storage form, owned by the
+    caller) the rows are added onto it in place instead, and it is returned.
+    """
+
+    kernel = kernels_c.scatter_add_rows if BACKEND == "c" else reference.scatter_add_rows
+    return kernel(grad, ids, width, rows, into)
 
 
 def scatter_add_indexed(

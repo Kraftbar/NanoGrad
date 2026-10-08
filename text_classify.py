@@ -86,6 +86,9 @@ class BagOfEmbeddings(TensorModule):
         bound = 1.0 / dim                                            # fastText's initialization
         self.embedding = Tensor([rng.uniform(-bound, bound) for _ in range(vocab_size * dim)], (vocab_size, dim),
                                 requires_grad=True)
+        # A batch reads a few thousand of up to a million rows, so its gradient
+        # keeps just those rows (tensor.RowGrad) and SGD updates just those.
+        self.embedding.sparse_grad = True
         self.output = TensorLinear(dim, classes, weight=Tensor.zeros((classes, dim), requires_grad=True))
 
     def __call__(self, texts: list[list[int]]) -> Tensor:
@@ -128,7 +131,7 @@ class TorchRunner:
 
         self.torch = torch
         vocab, dim = model.embedding.shape
-        self.bag = torch.nn.EmbeddingBag(vocab, dim, mode="mean", dtype=torch.float64)
+        self.bag = torch.nn.EmbeddingBag(vocab, dim, mode="mean", sparse=True, dtype=torch.float64)
         self.linear = torch.nn.Linear(dim, model.output.weight.shape[0], dtype=torch.float64)
         with torch.no_grad():
             self.bag.weight.copy_(torch.tensor(list(model.embedding.data), dtype=torch.float64).reshape(vocab, dim))

@@ -415,10 +415,12 @@ def gather_rows(table: list[float], ids: Sequence[int], width: int) -> array:
     return out
 
 
-def scatter_add_rows(grad: list[float], ids: Sequence[int], width: int, rows: int) -> array:
+def scatter_add_rows(grad: list[float], ids: Sequence[int], width: int, rows: int, into=None) -> array:
     grad_buffer = _reals(grad)
     keep, id_buffer = _index_buffer(ids)
-    table_grad = zeros(rows * width)
+    if into is not None and (type(into) is not array or into.typecode != typecode or len(into) != rows * width):
+        raise TypeError("scatter_add_rows(into=...) needs a table in the current precision")
+    table_grad = zeros(rows * width) if into is None else into
     library.scatter_add_rows(_buffer(grad_buffer), id_buffer, _buffer(table_grad), len(ids), width)
     return table_grad
 

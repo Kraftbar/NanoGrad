@@ -6,7 +6,7 @@ import math
 
 import kernels
 from engine import Value
-from tensor import Tensor
+from tensor import RowGrad, Tensor
 
 
 class SGD:
@@ -77,6 +77,13 @@ class TensorSGD:
             if parameter.grad is None:
                 continue
             decays = _uses_weight_decay(parameter, self.weight_decay, self.weight_decay_min_ndim)
+            if isinstance(parameter.grad, RowGrad):     # sparse rows: update just those, in place
+                if self.momentum or decays:
+                    raise ValueError("row-sparse gradients support plain SGD only")
+                grad = parameter.grad
+                kernels.scatter_add_rows(kernels.scale(grad.values, -self.lr * grad_scale), kernels.index_table(grad.ids),
+                                         width=grad.width, rows=grad.rows, into=parameter.data)
+                continue
             if not self.momentum and not decays:        # plain SGD: w - lr * scale * grad, in one pass
                 parameter.data = kernels.add_scaled(parameter.data, parameter.grad, -self.lr * grad_scale)
                 continue
@@ -177,6 +184,8 @@ class TensorAdam:
             # (one fused loop per parameter, see kernels.adam_update)
             decay = 1.0 - self.lr * self.weight_decay if use_weight_decay else 1.0
             grad, scale = parameter.grad, grad_scale
+            if isinstance(grad, RowGrad):                 # Adam moves every row (its moments decay), so go dense
+                grad = grad.to_dense()
             if self.l2:                                   # g <- g + l2 * w  (torch.optim.Adam's weight_decay)
                 grad, scale = kernels.add_scaled(kernels.scale(grad, grad_scale), parameter.data, self.l2), 1.0
             parameter.data, self._m[parameter_index], self._v[parameter_index] = kernels.adam_update(
@@ -205,7 +214,9 @@ def _global_grad_scale(
     for parameter in parameters:
         if parameter.grad is None:
             continue
-        grad_norm_sq += kernels.sum_of_squares(parameter.grad)
+        grad = parameter.grad
+        values = grad.coalesced().values if isinstance(grad, RowGrad) else grad
+        grad_norm_sq += kernels.sum_of_squares(values)
 
     # PyTorch's clip_grad_norm_ rule (with its 1e-6), so runs can be compared.
     return min(1.0, max_grad_norm / (math.sqrt(grad_norm_sq) + 1e-6))
