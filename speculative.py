@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> None:
     import argparse
     from time import perf_counter
 
-    from quantize import load_run
+    from gpt_train import load_run
     from text import CharVocab
 
     parser = argparse.ArgumentParser(description="speculative decoding with two gpt_train.py runs")

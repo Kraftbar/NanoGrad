@@ -23,10 +23,9 @@ validation loss on a trained character model:
 from __future__ import annotations
 
 import argparse
-import json
 import math
-from pathlib import Path
 
+from gpt_train import load_run
 from tensor import Tensor
 from tensor_nn import TensorModule
 
@@ -78,25 +77,6 @@ def quantize_model(model: TensorModule, *, bits: int, group_size: int = 32) -> d
 # ---------------------------------------------------------------------------
 # Measuring it on a trained character model (a gpt_train.py run directory)
 # ---------------------------------------------------------------------------
-
-
-def load_run(run_dir: str | Path):
-    from char_checkpoint import load_checkpoint
-    from gpt_train import build_model, split_text
-    from text import CharVocab
-
-    run_dir = Path(run_dir)
-    config = argparse.Namespace(**json.loads((run_dir / "config.json").read_text(encoding="utf-8")))
-    config.kv_heads = getattr(config, "kv_heads", None)
-    config.experts = getattr(config, "experts", 0)
-    config.expert_top_k = getattr(config, "expert_top_k", None) or 2
-    config.window = getattr(config, "window", None)
-    text = Path(config.text_file).read_text(encoding="utf-8")
-    vocab = CharVocab.from_text(text)
-    model = build_model(len(vocab), config)
-    load_checkpoint(run_dir / "model.json", model, vocab, model_name="transformer")
-    _, validation = split_text(text, config.validation_fraction)
-    return model, vocab.encode(validation), config
 
 
 def validation_loss(model, encoded: list[int], context_size: int, *, batch_size: int = 64) -> float:

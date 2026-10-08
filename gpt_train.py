@@ -412,6 +412,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def load_run(run_dir: str | Path):
+    """A trained character transformer from an ``--out-dir``: the model, the
+    encoded validation text, and the run's settings."""
+
+    run_dir = Path(run_dir)
+    config = argparse.Namespace(**json.loads((run_dir / "config.json").read_text(encoding="utf-8")))
+    for name, default in (("kv_heads", None), ("experts", 0), ("expert_top_k", None), ("window", None)):
+        setattr(config, name, getattr(config, name, default))   # runs saved before these options
+    config.expert_top_k = config.expert_top_k or 2
+    text = Path(config.text_file).read_text(encoding="utf-8")
+    vocab = CharVocab.from_text(text)
+    model = build_model(len(vocab), config)
+    load_checkpoint(run_dir / "model.json", model, vocab, model_name="transformer")
+    _, validation = split_text(text, config.validation_fraction)
+    return model, vocab.encode(validation), config
+
+
 def main(argv: list[str] | None = None) -> None:
     train(parse_args(argv))
 
