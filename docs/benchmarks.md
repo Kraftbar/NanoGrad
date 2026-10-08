@@ -26,7 +26,7 @@ and float64, and NanoGrad uses its C kernels.
 | WikiText-2 | 2-layer GPT, same recipe | running | |
 | Cora (citation graph) | GCN, pygcn's recipe, 10 seeds | **83.1% +- 0.6** test accuracy (PyTorch, own dropout masks: 82.9% +- 0.7) | GCN paper: 81.5% (on the Planetoid split) |
 | AG News (text classification) | fastText's model, words / words + bigrams, 5 epochs | **91.38% / 91.76%** | fastText paper: 91.5% / 92.5% |
-| Cora (link prediction) | GAE / VGAE, the authors' recipe, 5 edge splits | test AUC **91.6 / 92.1**, AP 92.6 / 93.0 | GAE paper: AUC 91.0 / 91.4, AP 92.0 / 92.6 |
+| Cora (link prediction) | GAE / VGAE, the authors' recipe, 5 edge splits | test AUC **91.6 / 92.4**, AP 92.6 / 93.4 | GAE paper: AUC 91.0 / 91.4, AP 92.0 / 92.6 |
 | FSDD (spoken digits) | log-mel spectrogram + 3-block CNN, 20 epochs | **99.33%** test accuracy | |
 | Cora | GAT (8 heads), early stopping, 5 seeds | 81.6% +- 1.6 | GAT paper: 83.0% +- 0.7 |
 | ETTh1 (forecasting) | DLinear, 336 hours -> 96 / 192 / 336 / 720 | test MSE 0.370 / 0.421 / 0.455 / 0.494 | DLinear paper: 0.375 / 0.405 / 0.439 / 0.472 |
