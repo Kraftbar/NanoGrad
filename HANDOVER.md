@@ -1,7 +1,7 @@
 # Handover: branch `perf-geometry-nanogpt-compare`
 
 This is the state of NanoGrad when it left the cloud session (2026-10-08). The branch sits
-on top of `origin/main` (`caef81f`) and holds 220 commits that were never pushed. Across
+on top of `origin/main` (`caef81f`) and holds about 220 commits that were never pushed. Across
 164 files it adds about 29.5K lines and removes about 1.7K.
 
 ## Getting the work back into GitHub
