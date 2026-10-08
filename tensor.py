@@ -652,6 +652,14 @@ def _broadcast_index_map(
     return _strided_indices(out_shape, strides)
 
 
+@lru_cache(maxsize=256)
+def _broadcast_index_table(out_shape: tuple[int, ...], source_shape: tuple[int, ...], backend: str):
+    """``_broadcast_index_map`` as the active backend's index table, so a
+    broadcast is one gather (and its gradient one scatter-add) kernel call."""
+
+    return kernels.index_table(_broadcast_index_map(out_shape, source_shape))
+
+
 def _repeated_block(
     out_shape: tuple[int, ...],
     source_shape: tuple[int, ...],
@@ -693,7 +701,8 @@ def _expand(tensor: Tensor, out_shape: tuple[int, ...]) -> list[float]:
         for index in range(len(data)):
             repeated += data[index : index + 1] * inner
         return repeated * outer
-    return [data[index] for index in _broadcast_index_map(out_shape, tensor.shape)]
+    table = _broadcast_index_table(out_shape, tensor.shape, kernels.BACKEND)
+    return kernels.gather_indexed(data, table, batches=1, image_size=len(data))
 
 
 def _reduce_to_shape(
@@ -709,10 +718,8 @@ def _reduce_to_shape(
     if block is not None:
         outer, inner = block
         return kernels.sum_repeated(grad, outer=outer, size=_numel(source_shape), inner=inner)
-    source_grad = [0.0] * _numel(source_shape)
-    for index, value in zip(_broadcast_index_map(out_shape, source_shape), grad):
-        source_grad[index] += value
-    return source_grad
+    table = _broadcast_index_table(out_shape, source_shape, kernels.BACKEND)
+    return kernels.scatter_add_indexed(grad, table, batches=1, image_size=_numel(source_shape))
 
 
 def _unary(
