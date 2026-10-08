@@ -49,3 +49,4 @@ data/sr/*/*.bmp
 data/omniglot/*.zip
 data/omniglot/*.txt
 data/omniglot/*.pkl
+data/fsdd/recordings/
