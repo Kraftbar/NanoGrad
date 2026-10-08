@@ -252,7 +252,7 @@ Adam and binary cross entropy. 32 factors, MLP 256-128-64-32, 20 epochs:
 | model | HR@10 | NDCG@10 | reference |
 | --- | ---: | ---: | --- |
 | GMF | 0.710 | 0.426 | PyTorch reproduction: 0.708 / 0.429 |
-| MLP | running | | NCF authors' code: 0.692 / 0.425 |
+| MLP | 0.691 | 0.419 | NCF authors' code: 0.692 / 0.425 |
 | NeuMF | running | | 0.701 / 0.425 |
 | NeuMF, pre-trained from GMF + MLP | running | | 0.726 / 0.445 |
 
