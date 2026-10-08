@@ -225,8 +225,8 @@ void gemm(
         abort();  /* out of memory: fail loudly rather than return zeros */
     }
 #ifdef VECTOR_WIDTH
-    real *panel = malloc(sizeof(real) * K_BLOCK * TILE_COLS);
-    real *packed = malloc(sizeof(real) * (A_BLOCK + K_BLOCK * TILE_ROWS));
+    real *panel = aligned_alloc(64, sizeof(real) * K_BLOCK * TILE_COLS);  /* cache-line aligned vector loads */
+    real *packed = aligned_alloc(64, sizeof(real) * (A_BLOCK + K_BLOCK * TILE_ROWS));
     if (panel == NULL || packed == NULL) {
         abort();
     }
@@ -306,7 +306,7 @@ void conv_forward(const real *image, const long *index, const real *kernel, real
     const real *A = kernel;
     (void)trans_a;
 #ifdef VECTOR_WIDTH
-    real *panel = malloc(sizeof(real) * K_BLOCK * TILE_COLS);
+    real *panel = aligned_alloc(64, sizeof(real) * K_BLOCK * TILE_COLS);  /* cache-line aligned vector loads */
     if (panel == NULL) {
         abort();
     }
@@ -358,7 +358,7 @@ void conv_kernel_grad(const real *image, const long *index, const real *grad, re
     const int trans_a = 0, m = filters, k = positions, n = patch_size;
     (void)trans_a;
 #ifdef VECTOR_WIDTH
-    real *panel = malloc(sizeof(real) * K_BLOCK * TILE_COLS);
+    real *panel = aligned_alloc(64, sizeof(real) * K_BLOCK * TILE_COLS);  /* cache-line aligned vector loads */
     if (panel == NULL) {
         abort();
     }
