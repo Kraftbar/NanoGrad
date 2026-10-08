@@ -31,6 +31,7 @@ from __future__ import annotations
 import math
 import operator
 import random
+from time import perf_counter
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from functools import lru_cache
@@ -296,7 +297,12 @@ class Tensor:
 
         for node in reversed(topo):
             if node.requires_grad:
-                node._backward()
+                if _profiler is None:
+                    node._backward()
+                else:                                   # profiler.py is timing ops
+                    start = perf_counter()
+                    node._backward()
+                    _profiler.backward(node._op, perf_counter() - start)
 
         # Leaves the output does not depend on get zeros, not None.
         for node in topo:
@@ -350,6 +356,7 @@ def _topological_order(root: Tensor) -> list[Tensor]:
 
 
 _grad_enabled = True
+_profiler = None          # set by profiler.profile() while it measures ops
 
 
 @contextmanager
@@ -398,6 +405,8 @@ def _op_result(
     out._prev = set(parents) if out.requires_grad else set()
     out._op = op
     out._backward = _no_backward
+    if _profiler is not None:
+        _profiler.forward(op)
     return out
 
 
