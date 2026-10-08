@@ -469,6 +469,49 @@ void conv_input_grad(const real *grad, const real *kernel, const long *index, re
 
 #undef A_AT
 
+/*
+ * Depthwise convolution: every channel is filtered by its own (kh x kw)
+ * kernel, with no mixing between channels (MobileNet's building block;
+ * a 1x1 convolution mixes the channels afterwards). index holds, for each
+ * of the P output positions, the Q = kh * kw pixel offsets of its patch
+ * inside one channel image of size channel_size.
+ *     out[b, c, p]       = sum_q image[b, c, index[p, q]] * kernel[c, q]
+ *     dkernel[c, q]     += sum_b,p grad[b, c, p] * image[b, c, index[p, q]]
+ *     dimage[b, c, index[p, q]] += grad[b, c, p] * kernel[c, q]
+ */
+void depthwise_forward(const real *image, const long *index, const real *kernel, real *out,
+                       long batches, long channels, long channel_size, long positions, long q_size)
+{
+    for (long bc = 0; bc < batches * channels; bc++) {
+        const real *img = image + bc * channel_size, *k = kernel + (bc % channels) * q_size;
+        real *o = out + bc * positions;
+        for (long p = 0; p < positions; p++) {
+            const long *cells = index + p * q_size;
+            double total = 0.0;
+            for (long q = 0; q < q_size; q++) total += img[cells[q]] * k[q];
+            o[p] = total;
+        }
+    }
+}
+
+void depthwise_backward(const real *image, const long *index, const real *kernel, const real *grad,
+                        real *dkernel, real *dimage, long batches, long channels, long channel_size,
+                        long positions, long q_size)
+{
+    for (long bc = 0; bc < batches * channels; bc++) {
+        const real *img = image + bc * channel_size, *k = kernel + (bc % channels) * q_size;
+        const real *g = grad + bc * positions;
+        real *dk = dkernel + (bc % channels) * q_size, *di = dimage + bc * channel_size;
+        for (long p = 0; p < positions; p++) {
+            const long *cells = index + p * q_size;
+            for (long q = 0; q < q_size; q++) {
+                dk[q] += g[p] * img[cells[q]];
+                di[cells[q]] += g[p] * k[q];
+            }
+        }
+    }
+}
+
 
 /*
  * GELU, exact erf form:  y = x * Phi(x),  dy/dx = Phi(x) + x * phi(x)

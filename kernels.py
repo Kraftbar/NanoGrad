@@ -256,6 +256,22 @@ def gather_indexed(image: list[float], index: Sequence[int], *, batches: int, im
     return kernel(image, index, batches, image_size)
 
 
+def depthwise_forward(image, index, kernel, *, batches: int, channels: int, channel_size: int,
+                      q_size: int) -> list[float]:
+    """Each channel convolved with its own kernel (see kernels.c)."""
+
+    kernel_fn = kernels_c.depthwise_forward if BACKEND == "c" else reference.depthwise_forward
+    return kernel_fn(image, index, kernel, batches, channels, channel_size, q_size)
+
+
+def depthwise_backward(image, index, kernel, grad, *, batches: int, channels: int, channel_size: int,
+                       q_size: int):
+    """Gradients (for the kernel, for the image) of ``depthwise_forward``."""
+
+    kernel_fn = kernels_c.depthwise_backward if BACKEND == "c" else reference.depthwise_backward
+    return kernel_fn(image, index, kernel, grad, batches, channels, channel_size, q_size)
+
+
 def csr_matmul(row_start, cols, values, dense, *, rows: int, n: int) -> list[float]:
     """Sparse (rows x inner, stored by rows) @ dense (inner x n); see kernels.c."""
 

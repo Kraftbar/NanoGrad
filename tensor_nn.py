@@ -17,6 +17,7 @@ from tensor import (
     _grad_data,
     _op_result,
     conv2d,
+    depthwise_conv2d,
     dropout,
     gather_rows,
     matmul,
@@ -122,6 +123,27 @@ class TensorLinear(TensorModule):
     def load_state_dict(self, state: dict) -> None:
         self.weight.data = _state_data(state, "weight", self.weight.shape)
         self.bias.data = _state_data(state, "bias", self.bias.shape)
+
+
+class TensorDepthwiseConv2D(TensorModule):
+    """Depthwise convolution: one (k x k) kernel per channel (``tensor.depthwise_conv2d``)."""
+
+    def __init__(self, channels: int, kernel_size: int = 3, *, stride: int = 1, padding: int = 1,
+                 seed: int | None = None) -> None:
+        self.stride, self.padding = stride, padding
+        self.kernel = conv2d_kernel((channels, 1, kernel_size, kernel_size), seed=seed)
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        return depthwise_conv2d(inputs, self.kernel, stride=self.stride, padding=self.padding)
+
+    def parameters(self) -> list[Tensor]:
+        return [self.kernel]
+
+    def state_dict(self) -> dict:
+        return {"kernel": _tensor_state(self.kernel)}
+
+    def load_state_dict(self, state: dict) -> None:
+        self.kernel.data = _state_data(state, "kernel", self.kernel.shape)
 
 
 class TensorConv2D(TensorModule):

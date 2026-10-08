@@ -171,6 +171,8 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.conv_input_grad.argtypes = [pointer, pointer, index_pointer, pointer] + [count, count] + [ctypes.c_int] * 3
     for name in ("gather_indexed", "scatter_add_indexed"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer, count, count, count]
+    library.depthwise_forward.argtypes = [pointer, index_pointer, pointer, pointer] + [count] * 5
+    library.depthwise_backward.argtypes = [pointer, index_pointer, pointer, pointer, pointer, pointer] + [count] * 5
     library.csr_matmul.argtypes = [index_pointer, index_pointer, pointer, pointer, pointer, count, count]
     for name in ("gather_rows", "scatter_add_rows"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer, count, count]
@@ -397,6 +399,27 @@ def scatter_add_indexed(
         _buffer(grad_buffer), index_buffer, _buffer(image_grad), batches, image_size, len(index),
     )
     return image_grad
+
+
+def depthwise_forward(image, index, kernel, batches: int, channels: int, channel_size: int, q_size: int) -> array:
+    image_buffer, kernel_buffer = _reals(image), _reals(kernel)
+    keep, index_buffer = _index_buffer(index)
+    positions = len(index) // q_size
+    out = zeros(batches * channels * positions)
+    library.depthwise_forward(_buffer(image_buffer), index_buffer, _buffer(kernel_buffer), _buffer(out),
+                              batches, channels, channel_size, positions, q_size)
+    return out
+
+
+def depthwise_backward(image, index, kernel, grad, batches: int, channels: int, channel_size: int,
+                       q_size: int) -> tuple[array, array]:
+    buffers = [_reals(values) for values in (image, kernel, grad)]
+    keep, index_buffer = _index_buffer(index)
+    dkernel, dimage = zeros(channels * q_size), zeros(batches * channels * channel_size)
+    library.depthwise_backward(_buffer(buffers[0]), index_buffer, _buffer(buffers[1]), _buffer(buffers[2]),
+                               _buffer(dkernel), _buffer(dimage), batches, channels, channel_size,
+                               len(index) // q_size, q_size)
+    return dkernel, dimage
 
 
 def csr_matmul(row_start, cols, values, dense, rows: int, n: int) -> array:

@@ -1665,6 +1665,39 @@ def _upsample_index(rows: int, cols: int, factor: int):
     )
 
 
+def depthwise_conv2d(image: Tensor, kernel: Tensor, *, stride: int = 1, padding: int = 0) -> Tensor:
+    """Depthwise convolution: image (B, C, H, W), kernel (C, 1, kh, kw).
+
+    Channel c of the output is channel c of the image convolved with
+    kernel c alone (PyTorch's ``conv2d`` with ``groups=C``). It costs C
+    times less than a full convolution with C filters; MobileNet pairs it
+    with a 1x1 convolution that mixes the channels.
+    """
+
+    if image.ndim != 4 or kernel.ndim != 4 or kernel.shape[1] != 1 or kernel.shape[0] != image.shape[1]:
+        raise ValueError("depthwise_conv2d expects image (B, C, H, W) and kernel (C, 1, kh, kw)")
+    if padding:
+        image = pad2d(image, padding)
+    batches, channels, rows, cols = image.shape
+    kernel_rows, kernel_cols = kernel.shape[2:]
+    index = _conv2d_patch_index(1, rows, cols, kernel_rows, kernel_cols, stride)   # one channel's patches
+    q_size = kernel_rows * kernel_cols
+    out_rows, out_cols = (rows - kernel_rows) // stride + 1, (cols - kernel_cols) // stride + 1
+    sizes = dict(batches=batches, channels=channels, channel_size=rows * cols, q_size=q_size)
+    data = kernels.depthwise_forward(image.data, index, kernel.data, **sizes)
+    out = _op_result(data, (batches, channels, out_rows, out_cols), (image, kernel), "depthwise_conv2d")
+
+    def _backward() -> None:
+        dkernel, dimage = kernels.depthwise_backward(image.data, index, kernel.data, _grad_data(out), **sizes)
+        if kernel.requires_grad:
+            _add_grad(kernel, dkernel)
+        if image.requires_grad:
+            _add_grad(image, dimage)
+
+    _set_backward(out, _backward)
+    return out
+
+
 def conv2d_valid(image: Tensor, kernel: Tensor, *, stride: int = 1) -> Tensor:
     """Apply a valid (no padding) convolution-style filter.
 

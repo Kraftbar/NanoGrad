@@ -282,6 +282,32 @@ def gather_indexed(
     return out
 
 
+def depthwise_forward(image, index, kernel, batches: int, channels: int, channel_size: int,
+                      q_size: int) -> list[float]:
+    positions = len(index) // q_size
+    out = []
+    for bc in range(batches * channels):
+        img, k = image[bc * channel_size : (bc + 1) * channel_size], kernel[(bc % channels) * q_size :]
+        for p in range(positions):
+            cells = index[p * q_size : (p + 1) * q_size]
+            out.append(sum(img[cell] * k[q] for q, cell in enumerate(cells)))
+    return out
+
+
+def depthwise_backward(image, index, kernel, grad, batches: int, channels: int, channel_size: int,
+                       q_size: int) -> tuple[list[float], list[float]]:
+    positions = len(index) // q_size
+    dkernel, dimage = [0.0] * (channels * q_size), [0.0] * (batches * channels * channel_size)
+    for bc in range(batches * channels):
+        c, img_start = bc % channels, bc * channel_size
+        for p in range(positions):
+            g = grad[bc * positions + p]
+            for q, cell in enumerate(index[p * q_size : (p + 1) * q_size]):
+                dkernel[c * q_size + q] += g * image[img_start + cell]
+                dimage[img_start + cell] += g * kernel[c * q_size + q]
+    return dkernel, dimage
+
+
 def csr_matmul(row_start, cols, values, dense, rows: int, n: int) -> list[float]:
     out = []
     for r in range(rows):

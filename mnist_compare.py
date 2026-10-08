@@ -144,7 +144,7 @@ def augmented_pixels(images, indices, image_shape, rng: random.Random, *, flip: 
 # ---------------------------------------------------------------------------
 
 
-MODELS = ("lenet", "resnet", "resnet8", "vit")
+MODELS = ("lenet", "resnet", "resnet8", "mobilenet", "vit")
 
 
 def build_nanograd(seed: int, model: str = "lenet", image_shape: tuple[int, int, int] = IMAGE_SHAPE) -> TensorModule:
@@ -157,6 +157,10 @@ def build_nanograd(seed: int, model: str = "lenet", image_shape: tuple[int, int,
     if model == "resnet8":
         # MLPerf Tiny's image-classification model: the same shape, wider.
         return SmallResNet(image_shape=image_shape, classes=10, widths=(16, 32, 64), seed=seed)
+    if model == "mobilenet":
+        from mobilenet import MobileNet          # depthwise separable convolutions
+
+        return MobileNet(image_shape=image_shape, classes=10, seed=seed)
     if model == "vit":
         # A 4x4 grid of patches: 7x7 on MNIST, 8x8 on CIFAR-10.
         return TinyViT(image_shape=image_shape, patch_size=image_shape[1] // 4, classes=10, seed=seed)

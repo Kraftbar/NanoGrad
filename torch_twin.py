@@ -22,6 +22,7 @@ import torch.nn.functional as F
 
 from bert import TinyBERT
 from language import CausalSelfAttention, CharTransformerModel, TokenPositionEmbedding, TransformerBlock
+from mobilenet import MobileNet, SeparableBlock
 from resnet import ResidualBlock, SmallResNet
 from tensor_nn import TensorBatchNorm2d, TensorConv2D, TensorLayerNorm, TensorLinear, TensorModule, TensorRMSNorm
 from vision import TwoConvCNN
@@ -67,6 +68,8 @@ class TorchTwin:
         for kind, method in (
             (TwoConvCNN, self._two_conv_cnn),
             (SmallResNet, self._small_resnet),
+            (MobileNet, self._mobilenet),
+            (SeparableBlock, self._separable_block),
             (ResidualBlock, self._residual_block),
             (TinyViT, self._tiny_vit),
             (TinyBERT, self._tiny_bert),
@@ -175,6 +178,19 @@ class TorchTwin:
         if block.shortcut_conv is not None:
             shortcut = self._batch_norm(block.shortcut_norm, self._conv(block.shortcut_conv, x))
         return F.relu(correction + shortcut)
+
+    def _depthwise(self, layer, x):
+        return F.conv2d(x, self._p(layer.kernel), stride=layer.stride, padding=layer.padding, groups=x.shape[1])
+
+    def _separable_block(self, block: SeparableBlock, x):
+        x = F.relu(self._batch_norm(block.norm1, self._depthwise(block.depthwise, x)))
+        return F.relu(self._batch_norm(block.norm2, self._conv(block.pointwise, x)))
+
+    def _mobilenet(self, model: MobileNet, x):
+        x = F.relu(self._batch_norm(model.stem_norm, self._conv(model.stem, x)))
+        for block in model.blocks:
+            x = self._separable_block(block, x)
+        return self._linear(model.classifier, x.mean(dim=(2, 3)))
 
     def _small_resnet(self, model: SmallResNet, x):
         x = F.relu(self._batch_norm(model.stem_norm, self._conv(model.stem, x)))
