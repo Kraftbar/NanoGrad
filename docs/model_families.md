@@ -174,7 +174,8 @@ is a fixed 336 x 336 matrix, so the model is three matrix products. It
 reaches test MSE 0.370 at horizon 96 (paper: 0.375), trained identically
 to the authors' PyTorch formulation. `--model patchtst` cuts every series
 into overlapping 16-hour patches and runs them as tokens through the
-language models' transformer encoder.
+language models' transformer encoder: test MSE 0.390 at horizon 96 after
+8 epochs with early stopping (PatchTST paper: 0.370 with a larger model).
 
 *Added*: nothing; both models are the core's linear layers and transformer
 blocks.
@@ -468,3 +469,47 @@ with augmentation.
 *Added*: separate row and column padding in `conv2d` / `pad2d` (the
 10 x 4 stem), and MFCCs: the log-mel spectrogram followed by a DCT, both
 matrix products.
+
+## Mobile networks: MobileNet (`mobilenet.py`)
+
+Depthwise-separable convolutions: a 3 x 3 filter per channel, then a
+1 x 1 convolution that mixes channels, about 8x fewer multiplications
+than a full 3 x 3 convolution. On CIFAR-10, 3 epochs of Adam: **66.61%**
+test accuracy, the same in PyTorch from the same weights (weights equal
+to 4e-12 after training), at 207 vs 206 ms per step. The same module,
+with a 10 x 4 stride-2 stem, is the DS-CNN of keyword spotting.
+
+*Added*: `depthwise_conv2d` (one kernel per channel) and its C kernels.
+
+## GANs: a DCGAN on MNIST (`gan.py`)
+
+A generator (transposed convolutions from 100 random numbers to a 28 x 28
+image) and a discriminator (strided convolutions to one score) trained
+against each other, with DCGAN's recipe (Adam at 2e-4, beta1 0.5, batch
+norm, LeakyReLU). After 5 epochs the losses settle near the equilibrium
+(discriminator 0.77, generator 1.60), and the samples in
+`runs/gan/samples_epoch*.png` are recognizable digits. `gan.py --compare`
+runs 20 steps in both frameworks: identical losses, weights equal to
+7e-16.
+
+*Added*: `conv_transpose2d` (the convolution kernels with input and
+output roles swapped), `LeakyReLU` and `Tanh` modules.
+
+## Sequence regression: sine waves with L-BFGS (`sine.py`)
+
+PyTorch's `time_sequence_prediction` example: a 2-layer LSTM learns to
+continue sine waves, trained full-batch with L-BFGS (15 steps). Test MSE
+after training: 4.98e-6 in NanoGrad, 5.01e-6 in PyTorch from the same
+weights. Fed its own predictions, it then continues the 3 test waves for
+1,000 more samples with mean squared error 0.011.
+
+*Added*: `TensorLBFGS`, a port of `torch.optim.LBFGS` (without line
+search).
+
+## Sequential MNIST with an LSTM (`mnist_compare.py --model lstm`)
+
+Each 28 x 28 digit is read as 28 rows, one time step each, by a 128-unit
+LSTM, and its last state is classified. 3 epochs of Adam: **97.67%**
+test accuracy (PyTorch, same weights: 96.80%; the runs drift apart over
+thousands of steps, because the fused gate kernels round differently).
+

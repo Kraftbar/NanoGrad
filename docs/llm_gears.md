@@ -38,6 +38,7 @@ between runs, so they are rough.
 | nanoGPT itself, PyTorch, same recipe | 2.72 | 1.886 | 2 min |
 | GPT-2 parts, BPE 512 tokens (`--tokenizer bpe`) | 2.44 | 3.180 | 8 min |
 | LLaMA parts, characters (`--preset baby-llama`) | 2.44 | 1.693 | 7 min |
+| GPT-2 parts + mixture of experts, 4 experts, top 2 (`--preset baby-moe`) | 2.42 | 1.678 | 24 min |
 | LLaMA parts, BPE 512 tokens (`--preset baby-llama --tokenizer bpe`) | **2.22** | 2.885 | 6 min |
 | 2-layer LSTM, characters (`--preset baby-lstm`, 875K parameters) | 2.71 | 1.875 | 24 min |
 
@@ -300,3 +301,20 @@ It works as DPO should: more real, short words. They are still in a
 loose order, because the preference asked for real words, not for
 sense. The PyTorch check (`--compare`) runs the same DPO loss and
 gradient through the twin; they agree to 1e-15.
+
+## Results: speculative decoding (`speculative.py`)
+
+A 2-layer draft model proposes 4 characters at a time, and the baby GPT
+checks all 4 in one forward pass, keeping the longest run it agrees with.
+The output follows the large model's distribution exactly. For 300
+characters:
+
+| | large-model passes | time |
+| --- | ---: | ---: |
+| large model alone | 300 | 5.5 s |
+| speculative, lookahead 4 | 112 | 4.0 s |
+
+189 of 448 drafted characters were accepted (42%). That is 2.7x fewer
+large-model passes. The wall-clock gain is smaller, 1.4x, because the
+draft model is not free and the checking pass covers 5 positions.
+
