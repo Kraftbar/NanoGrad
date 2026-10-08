@@ -352,6 +352,16 @@ def add_scaled(x: list[float], y: list[float], factor: float) -> list[float]:
     return (kernels_c.add_scaled if BACKEND == "c" else reference.add_scaled)(x, y, factor)
 
 
+def projected_sign_step(delta: list[float], grad: list[float], x: list[float], alpha: float,
+                        eps: float) -> list[float]:
+    """One step of a sign-gradient attack on images ``x`` in [0, 1]:
+    ``delta + alpha * sign(grad)``, clipped to [-eps, eps], then to [-x, 1 - x]
+    so that ``x + delta`` stays a valid image."""
+
+    return (kernels_c.projected_sign_step if BACKEND == "c" else reference.projected_sign_step)(
+        delta, grad, x, alpha, eps)
+
+
 def sum_of_squares(x: list[float]) -> float:
     """The sum of every value squared (a squared norm)."""
 

@@ -282,6 +282,15 @@ class KernelBackendTests(unittest.TestCase):
         python, c = self.run_both(lambda: kernels.sum_of_squares(x))
         self.assertAlmostEqual(python, c, places=12)
 
+    def test_projected_sign_step_agrees(self) -> None:
+        delta, grad = values(60, 43), values(60, 44)
+        grad[3] = 0.0
+        x = [abs(v) % 1.0 for v in values(60, 45)]
+        python, c = self.run_both(lambda: kernels.projected_sign_step(delta, grad, x, 0.25, 0.3))
+        self.assertListsClose(python, c)
+        for d, v in zip(python, x):
+            self.assertTrue(-0.3 <= d <= 0.3 and 0.0 <= v + d <= 1.0)
+
     def test_relu_agrees(self) -> None:
         x, grad = values(40, 25), values(40, 26)
         python, c = self.run_both(lambda: kernels.relu(x))

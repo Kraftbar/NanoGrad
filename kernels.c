@@ -961,6 +961,21 @@ void add_scaled(const real *x, const real *y, double factor, real *out, long cou
     for (long i = 0; i < count; i++) out[i] = x[i] + factor * y[i];
 }
 
+/*
+ * One step of a sign-gradient (FGSM / PGD) attack on images x in [0, 1]:
+ *     d = clip(delta + alpha * sign(grad), -eps, eps),  then clip(d, -x, 1 - x)
+ */
+void projected_sign_step(const real *delta, const real *grad, const real *x, double alpha, double eps,
+                         real *out, long count)
+{
+    for (long i = 0; i < count; i++) {
+        double d = delta[i] + (grad[i] > 0 ? alpha : (grad[i] < 0 ? -alpha : 0.0));
+        d = d < -eps ? -eps : (d > eps ? eps : d);
+        d = d < -x[i] ? -x[i] : d;
+        out[i] = d > 1.0 - x[i] ? 1.0 - x[i] : d;
+    }
+}
+
 /* sum of x[i]^2, accumulated in double (for gradient norms) */
 double sum_of_squares(const real *x, long count)
 {

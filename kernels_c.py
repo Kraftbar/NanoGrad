@@ -194,6 +194,8 @@ def _build_library(code: str) -> ctypes.CDLL | None:
         getattr(library, name).argtypes = [pointer, pointer, pointer, pointer, pointer, count, count]
     library.dropout_mask.argtypes = [pointer, count, ctypes.c_double, ctypes.c_ulong]
     library.add_scaled.argtypes = [pointer, pointer, ctypes.c_double, pointer, count]
+    library.projected_sign_step.argtypes = [pointer, pointer, pointer, ctypes.c_double, ctypes.c_double, pointer,
+                                            count]
     library.sum_of_squares.argtypes = [pointer, count]
     library.sum_of_squares.restype = ctypes.c_double
     library.adam_update.argtypes = [pointer] * 5 + [count] + [ctypes.c_double] * 7
@@ -501,6 +503,13 @@ def add_scaled(x: list[float], y: list[float], factor: float) -> array:
         raise ValueError("add_scaled needs equal lengths")
     x_buffer, y_buffer, out = _reals(x), _reals(y), zeros(len(x))
     library.add_scaled(_buffer(x_buffer), _buffer(y_buffer), factor, _buffer(out), len(x))
+    return out
+
+
+def projected_sign_step(delta, grad, x, alpha: float, eps: float) -> array:
+    buffers = [_reals(values) for values in (delta, grad, x)]
+    out = zeros(len(delta))
+    library.projected_sign_step(*map(_buffer, buffers), alpha, eps, _buffer(out), len(delta))
     return out
 
 

@@ -384,6 +384,16 @@ def add_scaled(x: list[float], y: list[float], factor: float) -> list[float]:
     return [a + factor * b for a, b in zip(x, y)]
 
 
+def projected_sign_step(delta: list[float], grad: list[float], x: list[float], alpha: float,
+                        eps: float) -> list[float]:
+    out = []
+    for d, g, v in zip(delta, grad, x):
+        d += alpha if g > 0 else (-alpha if g < 0 else 0.0)
+        d = min(max(d, -eps), eps)
+        out.append(min(max(d, -v), 1.0 - v))
+    return out
+
+
 def sum_of_squares(x: list[float]) -> float:
     return math.fsum(value * value for value in x)
 
