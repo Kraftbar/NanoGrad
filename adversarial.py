@@ -48,13 +48,28 @@ PIXELS = 28 * 28
 
 
 def small_cnn(seed: int = 0) -> Sequential:
-    """Wong et al.'s MNIST network."""
+    """Wong et al.'s MNIST network, initialized as PyTorch initializes it:
+    every weight and bias uniform in +-1 / sqrt(fan_in).
 
-    return Sequential(
+    The initialization matters here. With Xavier-initialized linear layers
+    and zero biases, the same FGSM training "catastrophically overfits"
+    (Wong et al.'s term): FGSM accuracy climbs to 97% while PGD accuracy
+    falls to 0, because the model learns to make the single FGSM step
+    useless instead of becoming robust."""
+
+    model = Sequential(
         TensorConv2D((16, 1, 4, 4), stride=2, padding=1, seed=seed), ReLU(),           # 28 -> 14
         TensorConv2D((32, 16, 4, 4), stride=2, padding=1, seed=seed + 1), ReLU(),      # 14 -> 7
         Flatten(), TensorLinear(32 * 7 * 7, 100, seed=seed + 2), ReLU(), TensorLinear(100, 10, seed=seed + 3),
     )
+    rng = random.Random(seed)
+    for layer in model.layers:
+        if isinstance(layer, (TensorConv2D, TensorLinear)):
+            weight = layer.kernel if isinstance(layer, TensorConv2D) else layer.weight
+            bound = 1.0 / math.sqrt(weight.numel // weight.shape[0])
+            weight.data = [rng.uniform(-bound, bound) for _ in range(weight.numel)]
+            layer.bias.data = [rng.uniform(-bound, bound) for _ in range(layer.bias.numel)]
+    return model
 
 
 class NanoGradRunner:

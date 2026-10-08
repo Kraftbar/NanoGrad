@@ -237,3 +237,103 @@ the same weights.
 
 *Added*: a WAV reader (the standard library's `wave`), mel filters, and
 the `MaxPool2d` module.
+
+## Recommendation: neural collaborative filtering (`recommend.py`)
+
+MovieLens-1M as the NCF paper splits it: every user's latest movie is
+held out, and the model must rank it among 99 movies that user never
+rated (HR@10: is it in the top 10? NDCG@10 also rewards a higher rank).
+Each user and movie gets a learned vector. GMF scores a pair by an
+elementwise product of the two vectors; MLP puts the vectors side by side
+through ReLU layers; NeuMF concatenates both and adds a final layer.
+Training samples 4 unwatched movies per watched one, every epoch, with
+Adam and binary cross entropy. 32 factors, MLP 256-128-64-32, 20 epochs:
+
+| model | HR@10 | NDCG@10 | reference |
+| --- | ---: | ---: | --- |
+| GMF | 0.710 | 0.426 | PyTorch reproduction: 0.708 / 0.429 |
+| MLP | running | | NCF authors' code: 0.692 / 0.425 |
+| NeuMF | running | | 0.701 / 0.425 |
+| NeuMF, pre-trained from GMF + MLP | running | | 0.726 / 0.445 |
+
+*Added*: nothing in the core: embeddings are row gathers, and the pair
+losses are the existing BCE with logits.
+
+## Uncertainty: MC dropout on UCI regression (`uci.py`)
+
+Gal and Ghahramani showed that keeping dropout on at test time and
+averaging many stochastic passes approximates a Bayesian network's
+predictive distribution. The UCI benchmark (Hernandez-Lobato and Adams)
+measures it: 9 small regression tables, fixed 90/10 splits, test RMSE and
+predictive log-likelihood. The protocol is followed exactly: a grid search
+over the dropout rate and tau on a held-out fifth of each training split,
+a 50-unit ReLU layer, and 10,000 MC samples at test time.
+
+(results running)
+
+## Normalizing flows: MADE and MAF (`flow.py`)
+
+An exact-likelihood generative model: an invertible map from images to
+Gaussian noise, trained on log p(x) = log N(f(x)) + log |det df/dx|.
+MADE masks an MLP's weights so each output pixel sees only earlier
+pixels, which makes the Jacobian triangular and its determinant a sum.
+MAF stacks MADEs in alternating orders with batch norm between them (a
+flow layer with its own log-determinant). Dequantized MNIST in logit
+space, as in the MAF paper.
+
+(results running)
+
+## Super-resolution: SRCNN (`sr.py`)
+
+Three convolutions turn a bicubic-upscaled image into a sharp one. SRCNN's
+protocol (Y channel, 3 border pixels shaved, PSNR in dB) depends on
+MATLAB's `imresize`, which is reimplemented exactly here. As a check,
+bicubic upscaling alone scores the 30.39 dB (Set5) and 27.54 dB (Set14)
+that every super-resolution paper lists.
+
+(results running)
+
+## Few-shot learning: prototypical networks (`fewshot.py`)
+
+Classify new Omniglot characters from 1 or 5 examples each. A
+four-block CNN embeds every image. Each class's prototype is the mean
+embedding of its examples, and a query goes to the nearest prototype.
+Training runs on random 60-way episodes that mimic the test.
+
+(results running)
+
+## Adversarial robustness: FGSM, PGD and fast adversarial training (`adversarial.py`)
+
+Attacks move every pixel by at most 0.3 along the sign of the loss
+gradient with respect to the input image: one step (FGSM), or 50 steps
+with random restarts (PGD). The defence is Wong et al.'s "fast"
+adversarial training, which trains on FGSM examples from a random start.
+
+(results running)
+
+## Knowledge distillation (`distill.py`)
+
+Hinton et al.'s MNIST experiment: a large teacher (two 1,200-unit layers,
+dropout, jittered inputs) and a small student (two 800-unit layers)
+trained alone or on the teacher's predictions softened at T = 20.
+
+(results running)
+
+## Segmentation: a U-Net on CamVid (`segment.py`)
+
+Per-pixel classification of street scenes into 11 classes. An
+encoder-decoder with skip connections (transposed convolutions and
+concatenation) is trained on the 367 SegNet training frames at half
+resolution. Reported: global accuracy, class-average accuracy and mean
+IoU on the 233 test frames.
+
+(results running)
+
+## Keyword spotting: DS-CNN on Speech Commands (`kws.py`)
+
+MLPerf Tiny's audio benchmark: 12 classes (10 commands, unknown and
+silence) from one-second clips, using 49 x 10 MFCCs. The model is a
+MobileNet with a 10 x 4 stride-2 stem: the same `mobilenet.py`, with
+different arguments.
+
+(results running)
