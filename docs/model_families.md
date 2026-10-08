@@ -315,9 +315,22 @@ adversarial training, which trains on FGSM examples from a random start.
 
 Hinton et al.'s MNIST experiment: a large teacher (two 1,200-unit layers,
 dropout, jittered inputs) and a small student (two 800-unit layers)
-trained alone or on the teacher's predictions softened at T = 20.
+trained alone or on the teacher's predictions softened at T = 20. Every
+network gets 20 epochs of Adam; the paper trains far longer:
 
-(results running)
+| model | test errors (of 10,000) | paper |
+| --- | ---: | ---: |
+| teacher, 2 x 1,200, dropout + jitter | 163 | 67 |
+| student, 2 x 800, alone | 176 | 146 |
+| student, distilled at T = 20 | **159** | 74 |
+
+The distilled student beats the same network trained alone from the
+same weights, and here even its teacher: 20 epochs are not enough for
+dropout and jitter to pay off, but the teacher's soft targets still
+carry what it learned about similar digits.
+
+*Added*: `losses.soft_cross_entropy`, cross entropy against target
+distributions (gradient: softmax - targets).
 
 ## Segmentation: a U-Net on CamVid (`segment.py`)
 
