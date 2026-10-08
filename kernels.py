@@ -327,6 +327,12 @@ def scale(x: list[float], factor: float) -> list[float]:
     return (kernels_c.scale if BACKEND == "c" else reference.scale)(x, factor)
 
 
+def exp(x: list[float]) -> list[float]:
+    """e^x, elementwise."""
+
+    return (kernels_c.exp if BACKEND == "c" else reference.exp)(x)
+
+
 def dropout_mask(count: int, p: float, seed: int) -> list[float]:
     """``count`` values, each 0 with probability ``p`` and 1 / (1 - p) otherwise,
     drawn from a 64-bit ``seed`` (the same mask on either backend)."""

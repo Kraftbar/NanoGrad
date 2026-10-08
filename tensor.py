@@ -524,12 +524,8 @@ def add(left: Tensor, right: Number | Tensor) -> Tensor:
     """
 
     if isinstance(right, (int, float)):
-        out = _op_result(
-            [value + right for value in left.data],
-            left.shape,
-            (left,),
-            "+",
-        )
+        constant = kernels.storage([float(right)]) * len(left.data)    # repeated at C speed
+        out = _op_result(kernels.add(left.data, constant), left.shape, (left,), "+")
 
         def _backward_scalar() -> None:
             _add_grad(left, _grad_data(out))
@@ -559,20 +555,14 @@ def subtract(left: Tensor, right: Tensor) -> Tensor:
     out_shape = _broadcast_shape(left.shape, right.shape)
     left_values = _expand(left, out_shape)
     right_values = _expand(right, out_shape)
-    out = _op_result(
-        [a - b for a, b in zip(left_values, right_values)],
-        out_shape,
-        (left, right),
-        "-",
-    )
+    out = _op_result(kernels.add_scaled(left_values, right_values, -1.0), out_shape, (left, right), "-")
 
     def _backward() -> None:
         grad = _grad_data(out)
         if left.requires_grad:
             _add_grad(left, _reduce_to_shape(grad, out_shape, left.shape))
         if right.requires_grad:
-            negated = [-value for value in grad]
-            _add_grad(right, _reduce_to_shape(negated, out_shape, right.shape))
+            _add_grad(right, _reduce_to_shape(kernels.scale(grad, -1.0), out_shape, right.shape))
 
     _set_backward(out, _backward)
     return out
@@ -742,13 +732,8 @@ def _unary(
 def tensor_exp(tensor: Tensor) -> Tensor:
     """Elementwise exponential: y = e^x, dy/dx = y."""
 
-    out_data = [math.exp(value) for value in tensor.data]
-    return _unary(
-        tensor,
-        out_data,
-        lambda grad: [g * y for g, y in zip(grad, out_data)],
-        "exp",
-    )
+    out_data = kernels.exp(tensor.data)
+    return _unary(tensor, out_data, lambda grad: kernels.multiply(grad, out_data), "exp")
 
 
 def tensor_log(tensor: Tensor) -> Tensor:
@@ -1663,6 +1648,46 @@ def _upsample_index(rows: int, cols: int, factor: int):
         for row in range(rows * factor)
         for col in range(cols * factor)
     )
+
+
+def conv_transpose2d(image: Tensor, kernel: Tensor, *, stride: int = 1, padding: int = 0) -> Tensor:
+    """Transposed convolution: image (B, Cin, H, W), kernel (Cin, Cout, kh, kw)
+    -> (B, Cout, (H - 1) * stride - 2 * padding + kh, ...), as PyTorch's
+    ``conv_transpose2d``. It grows an image: generators and decoders use it.
+
+    It is exactly the backward pass of an ordinary convolution with the same
+    kernel (Cin filters over Cout channels): each input pixel scatters
+    kernel-weighted copies of itself onto a (kh x kw) patch of the output,
+    and overlapping patches add up. So its three products are the three
+    convolution kernels with their roles swapped:
+
+        forward              = convolution's input gradient (col2im)
+        gradient for image   = an ordinary convolution of the output gradient
+        gradient for kernel  = convolution's kernel gradient, image and grad swapped
+    """
+
+    if image.ndim != 4 or kernel.ndim != 4 or kernel.shape[0] != image.shape[1]:
+        raise ValueError("conv_transpose2d expects image (B, Cin, H, W) and kernel (Cin, Cout, kh, kw)")
+    batches, channels_in, rows, cols = image.shape
+    _, channels_out, kernel_rows, kernel_cols = kernel.shape
+    full_rows, full_cols = (rows - 1) * stride + kernel_rows, (cols - 1) * stride + kernel_cols
+    index = _conv2d_patch_index(channels_out, full_rows, full_cols, kernel_rows, kernel_cols, stride)
+    sizes = dict(batches=batches, image_size=channels_out * full_rows * full_cols, filters=channels_in,
+                 patch_size=channels_out * kernel_rows * kernel_cols, positions=rows * cols)
+    data = kernels.conv_input_grad(image.data, kernel.data, index, **sizes)
+    full = _op_result(data, (batches, channels_out, full_rows, full_cols), (image, kernel), "conv_transpose2d")
+
+    def _backward() -> None:
+        grad = _grad_data(full)
+        if image.requires_grad:
+            _add_grad(image, kernels.conv_forward(grad, index, kernel.data, **sizes))
+        if kernel.requires_grad:
+            _add_grad(kernel, kernels.conv_kernel_grad(grad, index, image.data, **sizes))
+
+    _set_backward(full, _backward)
+    if padding == 0:
+        return full
+    return full[:, :, padding : full_rows - padding, padding : full_cols - padding]
 
 
 def depthwise_conv2d(image: Tensor, kernel: Tensor, *, stride: int = 1, padding: int = 0) -> Tensor:

@@ -24,7 +24,10 @@ from bert import TinyBERT
 from language import CausalSelfAttention, CharTransformerModel, TokenPositionEmbedding, TransformerBlock
 from mobilenet import MobileNet, SeparableBlock
 from resnet import ResidualBlock, SmallResNet
-from tensor_nn import TensorBatchNorm2d, TensorConv2D, TensorLayerNorm, TensorLinear, TensorModule, TensorRMSNorm
+from tensor_nn import (
+    Flatten, LeakyReLU, ReLU, Sequential, Tanh, TensorBatchNorm2d, TensorConv2D, TensorConvTranspose2D,
+    TensorLayerNorm, TensorLinear, TensorModule, TensorRMSNorm,
+)
 from vision import TwoConvCNN
 from vit import TinyViT
 
@@ -79,6 +82,12 @@ class TorchTwin:
             (TransformerBlock, self._transformer_block),
             (CausalSelfAttention, self._attention),
             (TensorConv2D, self._conv),
+            (TensorConvTranspose2D, self._conv_transpose),
+            (Sequential, self._sequential),
+            (ReLU, lambda layer, x: F.relu(x)),
+            (LeakyReLU, lambda layer, x: F.leaky_relu(x, layer.slope)),
+            (Tanh, lambda layer, x: torch.tanh(x)),
+            (Flatten, lambda layer, x: x.flatten(1)),
             (TensorBatchNorm2d, self._batch_norm),
             (TensorLayerNorm, self._layer_norm),
             (TensorLinear, self._linear),
@@ -178,6 +187,15 @@ class TorchTwin:
         if block.shortcut_conv is not None:
             shortcut = self._batch_norm(block.shortcut_norm, self._conv(block.shortcut_conv, x))
         return F.relu(correction + shortcut)
+
+    def _conv_transpose(self, layer: TensorConvTranspose2D, x):
+        bias = None if layer.bias is None else self._p(layer.bias).reshape(-1)
+        return F.conv_transpose2d(x, self._p(layer.kernel), bias, stride=layer.stride, padding=layer.padding)
+
+    def _sequential(self, model: Sequential, x):
+        for layer in model.layers:
+            x = self.forward(layer, x)
+        return x
 
     def _depthwise(self, layer, x):
         return F.conv2d(x, self._p(layer.kernel), stride=layer.stride, padding=layer.padding, groups=x.shape[1])

@@ -470,6 +470,12 @@ def scale(x: list[float], factor: float) -> array:
     return out
 
 
+def exp(x) -> array:
+    x_buffer, out = _reals(x), zeros(len(x))
+    library.exp_vector(_buffer(x_buffer), _buffer(out), len(x))
+    return out
+
+
 def dropout_mask(count: int, p: float, seed: int) -> array:
     mask = zeros(count)
     library.dropout_mask(_buffer(mask), count, p, seed)

@@ -17,6 +17,7 @@ from tensor import (
     _grad_data,
     _op_result,
     conv2d,
+    conv_transpose2d,
     depthwise_conv2d,
     dropout,
     gather_rows,
@@ -144,6 +145,65 @@ class TensorDepthwiseConv2D(TensorModule):
 
     def load_state_dict(self, state: dict) -> None:
         self.kernel.data = _state_data(state, "kernel", self.kernel.shape)
+
+
+class TensorConvTranspose2D(TensorModule):
+    """Transposed convolution layer (``tensor.conv_transpose2d``): kernel (Cin, Cout, k, k)."""
+
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, *, stride: int = 1,
+                 padding: int = 0, use_bias: bool = True, seed: int | None = None) -> None:
+        self.stride, self.padding = stride, padding
+        self.kernel = conv2d_kernel((in_channels, out_channels, kernel_size, kernel_size), seed=seed)
+        self.bias = Tensor.zeros((out_channels, 1, 1), requires_grad=True) if use_bias else None
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        out = conv_transpose2d(inputs, self.kernel, stride=self.stride, padding=self.padding)
+        return out if self.bias is None else out + self.bias
+
+    def parameters(self) -> list[Tensor]:
+        return [self.kernel] if self.bias is None else [self.kernel, self.bias]
+
+
+class Sequential(TensorModule):
+    """Layers applied one after another: ``Sequential(a, b, c)(x) == c(b(a(x)))``."""
+
+    def __init__(self, *layers: TensorModule) -> None:
+        self.layers = list(layers)
+
+    def __call__(self, x: Tensor) -> Tensor:
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+    def parameters(self) -> list[Tensor]:
+        return [parameter for layer in self.layers for parameter in layer.parameters()]
+
+
+class ReLU(TensorModule):
+    def __call__(self, x: Tensor) -> Tensor:
+        return x.relu()
+
+
+class LeakyReLU(TensorModule):
+    """x for x > 0, slope * x below: relu(x) - slope * relu(-x)."""
+
+    def __init__(self, slope: float = 0.01) -> None:
+        self.slope = slope
+
+    def __call__(self, x: Tensor) -> Tensor:
+        return x.relu() - (-x).relu() * self.slope
+
+
+class Tanh(TensorModule):
+    def __call__(self, x: Tensor) -> Tensor:
+        return x.tanh()
+
+
+class Flatten(TensorModule):
+    """(B, ...) -> (B, everything else)."""
+
+    def __call__(self, x: Tensor) -> Tensor:
+        return x.reshape((x.shape[0], x.numel // x.shape[0]))
 
 
 class TensorConv2D(TensorModule):

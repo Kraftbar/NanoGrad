@@ -361,6 +361,10 @@ def scale(x: list[float], factor: float) -> list[float]:
     return [value * factor for value in x]
 
 
+def exp(x: list[float]) -> list[float]:
+    return [math.exp(value) for value in x]
+
+
 def dropout_mask(count: int, p: float, seed: int) -> list[float]:
     keep, mask, bits = 1.0 / (1.0 - p), [], (1 << 64) - 1
     for i in range(count):                                    # splitmix64, as in kernels.c
