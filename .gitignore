@@ -39,3 +39,4 @@ runs/
 data/wikitext-2/*.txt
 data/ptb/*.txt
 data/cora/cora.*
+data/ag_news/*.csv
