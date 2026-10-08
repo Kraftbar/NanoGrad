@@ -254,7 +254,13 @@ Adam and binary cross entropy. 32 factors, MLP 256-128-64-32, 20 epochs:
 | GMF | 0.710 | 0.426 | PyTorch reproduction: 0.708 / 0.429 |
 | MLP | 0.691 | 0.419 | NCF authors' code: 0.692 / 0.425 |
 | NeuMF | 0.695 | 0.421 | 0.701 / 0.425 |
-| NeuMF, pre-trained from GMF + MLP | running | | 0.726 / 0.445 |
+| NeuMF, pre-trained from GMF + MLP | 0.698 | 0.429 | 0.726 / 0.445 |
+
+GMF and MLP land on the published numbers, and plain NeuMF is within one
+point of them. Pre-training NeuMF from the trained GMF and MLP helps a
+little here (0.695 -> 0.698), not the 2.5 points the paper reports. The
+fine-tuning stage is plain SGD at lr 0.001, as in the reproduction; from
+our pre-trained parts it peaks early and then slowly overfits.
 
 *Added*: nothing in the core: embeddings are row gathers, and the pair
 losses are the existing BCE with logits.
