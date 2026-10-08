@@ -215,14 +215,14 @@ class LBFGSTests(unittest.TestCase):
         from tensor import Tensor, matmul
 
         rng = random.Random(0)
-        xs = [[rng.uniform(-1, 1) for _ in range(3)] for _ in range(10)]
-        ys = [sum(row) ** 2 for row in xs]
-        w1, w2 = [rng.uniform(-0.5, 0.5) for _ in range(12)], [rng.uniform(-0.5, 0.5) for _ in range(4)]
-        ours = [Tensor(w1, (3, 4), requires_grad=True), Tensor(w2, (4, 1), requires_grad=True)]
-        theirs = [torch.tensor(w1, dtype=torch.float64).reshape(3, 4).requires_grad_(),
-                  torch.tensor(w2, dtype=torch.float64).reshape(4, 1).requires_grad_()]
-        x_ours, y_ours = Tensor([v for row in xs for v in row], (10, 3)), Tensor(ys, (10, 1))
-        x_torch, y_torch = torch.tensor(xs, dtype=torch.float64), torch.tensor(ys, dtype=torch.float64).reshape(10, 1)
+        xs = [[rng.uniform(-1, 1) for _ in range(3)] for _ in range(20)]
+        ys = [sum(row) ** 2 + 0.3 for row in xs]
+        w1, w2 = [rng.uniform(-0.5, 0.5) for _ in range(24)], [rng.uniform(-0.5, 0.5) for _ in range(8)]
+        ours = [Tensor(w1, (3, 8), requires_grad=True), Tensor(w2, (8, 1), requires_grad=True)]
+        theirs = [torch.tensor(w1, dtype=torch.float64).reshape(3, 8).requires_grad_(),
+                  torch.tensor(w2, dtype=torch.float64).reshape(8, 1).requires_grad_()]
+        x_ours, y_ours = Tensor([v for row in xs for v in row], (20, 3)), Tensor(ys, (20, 1))
+        x_torch, y_torch = torch.tensor(xs, dtype=torch.float64), torch.tensor(ys, dtype=torch.float64).reshape(20, 1)
         optimizer_ours, optimizer_torch = TensorLBFGS(ours, lr=0.8), torch.optim.LBFGS(theirs, lr=0.8)
 
         def closure_ours() -> float:
