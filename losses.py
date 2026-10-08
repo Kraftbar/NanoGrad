@@ -88,12 +88,12 @@ def softmax_cross_entropy(
     rows, cols = logits.shape
     classes = _class_indices(targets, rows, cols)
     probabilities = kernels.softmax_rows(logits.data, cols)
-    loss = -sum(math.log(probabilities[row * cols + target]) for row, target in enumerate(classes))
+    loss = sum(_target_nll(logits.data, probabilities, row, cols, target) for row, target in enumerate(classes))
     if label_smoothing:
         # logsumexp(x) = x_target - log p_target, so the smooth part needs only row sums.
         x = logits.data
         smooth = sum(
-            x[row * cols + target] - math.log(probabilities[row * cols + target])
+            x[row * cols + target] + _target_nll(x, probabilities, row, cols, target)
             - sum(x[row * cols : (row + 1) * cols]) / cols
             for row, target in enumerate(classes)
         )
@@ -111,6 +111,18 @@ def softmax_cross_entropy(
 
     _set_backward(out, _backward)
     return out
+
+
+def _target_nll(x, probabilities, row: int, cols: int, target: int) -> float:
+    """-log p_target. When p_target underflows to 0 (a confident, wrong
+    prediction), compute it from the logits instead: logsumexp(x) - x_target."""
+
+    p = probabilities[row * cols + target]
+    if p > 0.0:
+        return -math.log(p)
+    values = x[row * cols : (row + 1) * cols]
+    top = max(values)
+    return top + math.log(math.fsum(math.exp(value - top) for value in values)) - x[row * cols + target]
 
 
 def _require_same_shape(left: Tensor, right: Tensor) -> None:

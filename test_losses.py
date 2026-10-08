@@ -154,5 +154,19 @@ def finite_difference(tensor: Tensor, index: int, loss_fn, eps: float = 1e-6) ->
     return (plus - minus) / (2 * eps)
 
 
+class StableCrossEntropyTests(unittest.TestCase):
+    def test_confident_wrong_prediction_gives_a_finite_loss(self) -> None:
+        import math
+
+        from losses import softmax_cross_entropy
+        from tensor import Tensor
+
+        logits = Tensor([0.0, 900.0], (1, 2), requires_grad=True)     # p(target) underflows to 0
+        loss = softmax_cross_entropy(logits, [0])
+        self.assertAlmostEqual(loss.item(), 900.0 + math.log1p(math.exp(-900.0)), places=9)
+        loss.backward()
+        self.assertEqual(list(logits.grad), [-1.0, 1.0])
+
+
 if __name__ == "__main__":
     unittest.main()
