@@ -44,6 +44,19 @@ class SuperResolutionTest(unittest.TestCase):
             u = (x + 1) / 2 + 0.5 * (1 - 1 / 2) - 1          # output centre in 0-based input coordinates
             self.assertAlmostEqual(out[x], u / 10)
 
+    def test_strips_match_the_whole_image(self) -> None:
+        import random
+
+        model = sr.srcnn(5, seed=1)
+        runner = sr.NanoGradRunner(model, 1e-3)
+        rng = random.Random(0)
+        image = [[rng.random() for _ in range(13)] for _ in range(37)]
+        whole = runner.predict(image)
+        strips = sr.in_strips(runner.predict, image, rows=10, margin=8)
+        for a, b in zip(whole, strips):
+            for x, y in zip(a, b):
+                self.assertAlmostEqual(x, y, places=12)
+
     def test_psnr(self) -> None:
         a = [[0.0, 0.0], [0.0, 0.0]]
         b = [[1 / 255, 0.0], [0.0, 0.0]]

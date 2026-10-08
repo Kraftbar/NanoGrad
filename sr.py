@@ -238,6 +238,20 @@ class TorchRunner:
         return [p.detach().reshape(-1).tolist() for p in self.twin.parameters]
 
 
+def in_strips(predict, image: Image, rows: int = 64, margin: int = 8) -> Image:
+    """``predict`` on horizontal strips of ``rows`` rows, each with ``margin``
+    extra rows of context above and below that are cut off again. The margin
+    covers SRCNN's receptive field (4 + 2 + 2 pixels for 9-5-5), so the result
+    is exactly the whole-image prediction, without one huge im2col buffer."""
+
+    out = []
+    for top in range(0, len(image), rows):
+        start, stop = max(0, top - margin), min(len(image), top + rows + margin)
+        strip = predict(image[start:stop])
+        out += strip[top - start : top - start + min(rows, len(image) - top)]
+    return out
+
+
 def evaluate(predict, images, scale: int) -> float:
     """Mean PSNR over a test set (dB); ``predict`` maps the blurry image to the estimate."""
 
@@ -259,7 +273,8 @@ def train(runner, patches, test_sets, args) -> dict:
             batches += 1
         steps += batches
         training += perf_counter() - began
-        scores = {name: evaluate(runner.predict, images, args.scale) for name, images in test_sets.items()}
+        scores = {name: evaluate(lambda image: in_strips(runner.predict, image), images, args.scale)
+                  for name, images in test_sets.items()}
         history.append((total / batches, scores))
         print(f"  epoch {epoch:3d}: loss {total / batches:.6f}, "
               + ", ".join(f"{name} {score:.2f} dB" for name, score in scores.items())
