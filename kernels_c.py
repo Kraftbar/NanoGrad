@@ -66,17 +66,21 @@ def _keep_freed_memory() -> None:
     has to fault its memory back in page by page: about a fifth of a small
     ResNet's training step. Raising glibc's thresholds keeps those blocks
     in the heap for reuse (PyTorch's caching allocator exists for the same
-    reason). The cost is that the process keeps its peak memory. Does
-    nothing on systems without glibc's ``mallopt``.
+    reason), and a large top pad makes the heap grow in big steps of
+    address space, so a batch of 100 MB activations does not keep growing
+    and shrinking it (a quarter of a prototypical-network episode). The
+    cost is that the process keeps its peak memory. Does nothing on
+    systems without glibc's ``mallopt``.
     """
 
     try:
         mallopt = ctypes.CDLL(None).mallopt
     except (OSError, AttributeError):
         return
-    m_trim_threshold, m_mmap_threshold = -1, -3   # constants from <malloc.h>
+    m_trim_threshold, m_top_pad, m_mmap_threshold = -1, -2, -3   # constants from <malloc.h>
     mallopt(m_mmap_threshold, 1 << 30)
     mallopt(m_trim_threshold, 1 << 30)
+    mallopt(m_top_pad, 1 << 30)
 
 
 
