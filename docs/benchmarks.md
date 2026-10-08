@@ -86,7 +86,50 @@ on a CPU, not to reach state-of-the-art accuracy.
 
 ## Speed
 
-running
+Time per training step on the same work, both on one core, measured once
+the long benchmark runs were done (two other jobs still running). Every
+row trains from the same weights on the same batches; in float64 the two
+reach the same loss and accuracy.
+
+| model | NanoGrad | PyTorch | NanoGrad / PyTorch |
+| --- | ---: | ---: | ---: |
+| LeNet, MNIST | 10.1 ms | 12.6 ms | 0.80x |
+| LeNet, MNIST, float32 | 6.8 ms | 13.6 ms | 0.50x |
+| LeNet, CIFAR-10 | 20.0 ms | 30.6 ms | 0.65x |
+| small ResNet, MNIST | 73.0 ms | 71.3 ms | 1.02x |
+| small ResNet, MNIST, float32 | 53.5 ms | 39.5 ms | 1.35x |
+| small ResNet, CIFAR-10 | 97.9 ms | 95.9 ms | 1.02x |
+| ResNet-8, CIFAR-10 | 212 ms | 202 ms | 1.05x |
+| tiny ViT, MNIST | 18.1 ms | 16.5 ms | 1.10x |
+| tiny ViT, CIFAR-10 | 24.9 ms | 22.5 ms | 1.11x |
+| VAE, MNIST | 26.7 ms | 24.9 ms | 1.07x |
+| BERT-style encoder, Tiny Shakespeare | 76.6 ms | 52.3 ms | 1.46x |
+| WikiText-2 LSTM (2 x 200, 33K vocabulary) | 1,432 ms | 950 ms | 1.51x |
+| WikiText-2 LSTM, float32 | 741 ms | 461 ms | 1.61x |
+
+The convolutional models and the vision transformer run at PyTorch's
+speed or faster in float64. The gap is in large matrix products: the
+language models spend most of their step on the 200 -> 33,278 output
+layer, where NanoGrad's tiled float32 product reaches about 65-80 GFLOP/s
+on one core and PyTorch's (oneDNN) about 100. Op by op (`benchmark.py
+--torch`, float64):
+
+| op | NanoGrad C | PyTorch | ratio |
+| --- | ---: | ---: | ---: |
+| matmul 768x128 @ 128x512 | 9.54 ms | 6.11 ms | 1.6x |
+| linear 768x128 -> 512 | 11.06 ms | 9.06 ms | 1.2x |
+| layer norm 768x128 | 0.86 ms | 0.39 ms | 2.2x |
+| GELU 768x512 | 6.22 ms | 5.03 ms | 1.2x |
+| softmax 12x4x64x64 | 1.45 ms | 1.46 ms | 1.0x |
+| cross entropy 768x65 | 0.75 ms | 0.71 ms | 1.1x |
+| conv2d 32x6x12x12 * 16x6x5x5 | 2.00 ms | 2.35 ms | 0.8x |
+| conv2d 3x3 pad 1, 32x8x28x28 * 8x8x3x3 | 12.91 ms | 10.83 ms | 1.2x |
+| conv2d 3x3 stride 2 | 4.57 ms | 5.55 ms | 0.8x |
+| batch norm 32x8x28x28 | 1.12 ms | 1.38 ms | 0.8x |
+| max pool 2x2 | 0.27 ms | 0.96 ms | 0.3x |
+
+(The pure-Python reference path, kept to be read, is 30-300x slower than
+the C kernels on the same ops.)
 
 ## How The Gap Closed
 
