@@ -955,6 +955,16 @@ void reciprocal_vector(const real *x, real *out, long count)
     for (long i = 0; i < count; i++) out[i] = 1.0 / x[i];
 }
 
+void log_vector(const real *x, real *out, long count)
+{
+    for (long i = 0; i < count; i++) out[i] = log(x[i]);
+}
+
+void sqrt_vector(const real *x, real *out, long count)
+{
+    for (long i = 0; i < count; i++) out[i] = sqrt(x[i]);
+}
+
 /* out = x + factor * y: an SGD step without a temporary for factor * y */
 void add_scaled(const real *x, const real *y, double factor, real *out, long count)
 {

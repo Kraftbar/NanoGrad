@@ -188,6 +188,8 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.scale_vector.argtypes = [pointer, ctypes.c_double, pointer, count]
     library.exp_vector.argtypes = [pointer, pointer, count]
     library.reciprocal_vector.argtypes = [pointer, pointer, count]
+    library.log_vector.argtypes = [pointer, pointer, count]
+    library.sqrt_vector.argtypes = [pointer, pointer, count]
     for name in ("lstm_memory", "lstm_output"):
         getattr(library, name).argtypes = [pointer, pointer, pointer, count, count]
     for name in ("lstm_memory_backward", "lstm_output_backward"):
@@ -483,6 +485,18 @@ def scale(x: list[float], factor: float) -> array:
 def reciprocal(x) -> array:
     x_buffer, out = _reals(x), zeros(len(x))
     library.reciprocal_vector(_buffer(x_buffer), _buffer(out), len(x))
+    return out
+
+
+def log(x) -> array:
+    x_buffer, out = _reals(x), zeros(len(x))
+    library.log_vector(_buffer(x_buffer), _buffer(out), len(x))
+    return out
+
+
+def sqrt(x) -> array:
+    x_buffer, out = _reals(x), zeros(len(x))
+    library.sqrt_vector(_buffer(x_buffer), _buffer(out), len(x))
     return out
 
 

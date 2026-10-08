@@ -282,6 +282,12 @@ class KernelBackendTests(unittest.TestCase):
         python, c = self.run_both(lambda: kernels.sum_of_squares(x))
         self.assertAlmostEqual(python, c, places=12)
 
+    def test_log_and_sqrt_agree(self) -> None:
+        x = [abs(v) + 0.01 for v in values(50, 46)]
+        for kernel in (kernels.log, kernels.sqrt):
+            python, c = self.run_both(lambda: kernel(x))
+            self.assertListsClose(python, c)
+
     def test_projected_sign_step_agrees(self) -> None:
         delta, grad = values(60, 43), values(60, 44)
         grad[3] = 0.0

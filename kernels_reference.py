@@ -369,6 +369,14 @@ def exp(x: list[float]) -> list[float]:
     return [math.exp(value) for value in x]
 
 
+def log(x: list[float]) -> list[float]:
+    return [math.log(value) for value in x]
+
+
+def sqrt(x: list[float]) -> list[float]:
+    return [math.sqrt(value) for value in x]
+
+
 def dropout_mask(count: int, p: float, seed: int) -> list[float]:
     keep, mask, bits = 1.0 / (1.0 - p), [], (1 << 64) - 1
     for i in range(count):                                    # splitmix64, as in kernels.c

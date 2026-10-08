@@ -72,7 +72,7 @@ class MFCC:
             x = Tensor(frames, (len(clips) * FRAMES, WINDOW))
             real, imaginary = x @ self.cos, x @ self.sin
             power = real * real + imaginary * imaginary
-            magnitude = ((power + 1e-12).log() * 0.5).exp()                           # |X| = sqrt(power)
+            magnitude = power.sqrt()                                                  # |X|
             energy = (magnitude @ self.mel + 1e-6).log()                              # log-mel
             values = (energy @ self.dct).data
         size = FRAMES * COEFFICIENTS

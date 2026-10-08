@@ -339,6 +339,18 @@ def exp(x: list[float]) -> list[float]:
     return (kernels_c.exp if BACKEND == "c" else reference.exp)(x)
 
 
+def log(x: list[float]) -> list[float]:
+    """ln x, elementwise (x > 0)."""
+
+    return (kernels_c.log if BACKEND == "c" else reference.log)(x)
+
+
+def sqrt(x: list[float]) -> list[float]:
+    """The square root, elementwise (x >= 0)."""
+
+    return (kernels_c.sqrt if BACKEND == "c" else reference.sqrt)(x)
+
+
 def dropout_mask(count: int, p: float, seed: int) -> list[float]:
     """``count`` values, each 0 with probability ``p`` and 1 / (1 - p) otherwise,
     drawn from a 64-bit ``seed`` (the same mask on either backend)."""

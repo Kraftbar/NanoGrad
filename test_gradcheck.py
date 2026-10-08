@@ -72,6 +72,7 @@ class GradientCheckTests(unittest.TestCase):
                     [values],
                 )
         self.assertGradientsMatch(lambda: positive.log(), [positive])
+        self.assertGradientsMatch(lambda: positive.sqrt(), [positive])
         self.assertGradientsMatch(lambda: positive.reciprocal(), [positive])
         self.assertGradientsMatch(lambda: 1.5 / positive, [positive])
 
@@ -237,7 +238,7 @@ class GradientCheckTests(unittest.TestCase):
             mean = inputs.mean(axis=-1).reshape((2, 3, 1))
             centered = inputs - mean
             variance = (centered * centered).mean(axis=-1).reshape((2, 3, 1))
-            std = ((variance + 1e-5).log() * 0.5).exp()
+            std = (variance + 1e-5).sqrt()
             return (centered / std) * weight + bias
 
         fused = layer_norm(inputs, weight, bias, eps=1e-5)

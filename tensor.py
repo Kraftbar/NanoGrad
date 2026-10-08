@@ -250,6 +250,9 @@ class Tensor:
     def log(self) -> "Tensor":
         return tensor_log(self)
 
+    def sqrt(self) -> "Tensor":
+        return tensor_sqrt(self)
+
     def relu(self) -> "Tensor":
         return tensor_relu(self)
 
@@ -736,16 +739,26 @@ def tensor_exp(tensor: Tensor) -> Tensor:
     return _unary(tensor, out_data, lambda grad: kernels.multiply(grad, out_data), "exp")
 
 
+def tensor_sqrt(tensor: Tensor) -> Tensor:
+    """Elementwise square root: y = sqrt(x), dy/dx = 1 / (2 y)."""
+
+    if min(tensor.data) < 0:
+        raise ValueError("sqrt is only defined for non-negative values")
+    out_data = kernels.sqrt(tensor.data)
+    return _unary(tensor, out_data, lambda grad: kernels.scale(kernels.multiply(grad, kernels.reciprocal(out_data)), 0.5),
+                  "sqrt")
+
+
 def tensor_log(tensor: Tensor) -> Tensor:
     """Elementwise natural logarithm: y = ln x, dy/dx = 1 / x."""
 
-    if any(value <= 0 for value in tensor.data):
+    if min(tensor.data) <= 0:
         raise ValueError("log is only defined for positive values")
     inputs = tensor.data
     return _unary(
         tensor,
-        [math.log(value) for value in inputs],
-        lambda grad: [g / x for g, x in zip(grad, inputs)],
+        kernels.log(inputs),
+        lambda grad: kernels.multiply(grad, kernels.reciprocal(inputs)),
         "log",
     )
 
