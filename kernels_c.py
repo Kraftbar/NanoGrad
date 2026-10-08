@@ -81,11 +81,11 @@ def _keep_freed_memory() -> None:
 
 
 
-def _compile(compiler: str, flags: list[str]) -> Path | None:
+def _compile(compiler: str, flags: list[str], libraries: tuple[str, ...] = ("-lm",)) -> Path | None:
     """Build kernels.c with ``flags`` into the cache (once), or None if that fails."""
 
     source = SOURCE.read_bytes()
-    key = source + " ".join(flags).encode() + _cpu_signature().encode()
+    key = source + " ".join(flags + list(libraries)).encode() + _cpu_signature().encode()
     digest = hashlib.sha256(key).hexdigest()[:16]
     cache = Path(os.environ.get("NANOGRAD_CACHE", Path.home() / ".cache" / "nanograd"))
     library_path = cache / f"kernels-{digest}.so"
@@ -99,7 +99,7 @@ def _compile(compiler: str, flags: list[str]) -> Path | None:
         with tempfile.NamedTemporaryFile(dir=cache, suffix=".so", delete=False) as handle:
             partial = Path(handle.name)
         subprocess.run(
-            [compiler, *flags, "-shared", "-fPIC", str(SOURCE), "-o", str(partial), "-lm"],
+            [compiler, *flags, "-shared", "-fPIC", str(SOURCE), "-o", str(partial), *libraries],
             check=True,
             capture_output=True,
         )
@@ -139,8 +139,11 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     extra = os.environ.get("NANOGRAD_CFLAGS")
     attempts = [extra.split()] if extra is not None else [["-march=native"], []]
     real = "-DREAL=double" if code == "d" else "-DREAL=float"
+    # glibc's vector math library (libmvec) gives a vectorized erf for GELU;
+    # where it is missing, the plain build is used.
     for flags in attempts:
-        library_path = _compile(compiler, ["-O3", real, *flags])
+        library_path = (_compile(compiler, ["-O3", real, *flags, "-DNANOGRAD_LIBMVEC"], ("-lmvec", "-lm"))
+                        or _compile(compiler, ["-O3", real, *flags]))
         if library_path is not None:
             break
     else:

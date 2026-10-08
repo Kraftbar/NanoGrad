@@ -520,24 +520,70 @@ void depthwise_backward(const real *image, const long *index, const real *kernel
 }
 
 
+static inline double fast_exp(double x);      /* defined with softmax, below */
+
+/*
+ * erf over a block of doubles, in place. The C library's erf takes one
+ * number at a time; glibc (2.35+) also ships vector versions ("libmvec"),
+ * 8 or 4 numbers per call, within a few units in the last place. The build
+ * (kernels_c.py) defines NANOGRAD_LIBMVEC when it can link them.
+ */
+#if defined(NANOGRAD_LIBMVEC) && defined(__AVX512F__)
+#include <immintrin.h>
+__m512d _ZGVeN8v_erf(__m512d);
+static void erf_block(double *v, long n)
+{
+    long i = 0;
+    for (; i + 8 <= n; i += 8) _mm512_storeu_pd(v + i, _ZGVeN8v_erf(_mm512_loadu_pd(v + i)));
+    for (; i < n; i++) v[i] = erf(v[i]);
+}
+#elif defined(NANOGRAD_LIBMVEC) && defined(__AVX2__)
+#include <immintrin.h>
+__m256d _ZGVdN4v_erf(__m256d);
+static void erf_block(double *v, long n)
+{
+    long i = 0;
+    for (; i + 4 <= n; i += 4) _mm256_storeu_pd(v + i, _ZGVdN4v_erf(_mm256_loadu_pd(v + i)));
+    for (; i < n; i++) v[i] = erf(v[i]);
+}
+#else
+static void erf_block(double *v, long n)
+{
+    for (long i = 0; i < n; i++) v[i] = erf(v[i]);
+}
+#endif
+
 /*
  * GELU, exact erf form:  y = x * Phi(x),  dy/dx = Phi(x) + x * phi(x)
- * The forward pass also stores Phi(x) ("cdf") for the backward pass.
+ *     Phi(x) = (1 + erf(x / sqrt 2)) / 2,   phi(x) = e^(-x^2 / 2) / sqrt(2 pi)
+ * The forward pass also stores Phi(x) ("cdf") for the backward pass. Both
+ * work through a double buffer in chunks, so erf and exp run vectorized.
  */
 void gelu_forward(const real *x, real *y, real *cdf, long count)
 {
-    for (long i = 0; i < count; i++) {
-        cdf[i] = 0.5 * (1.0 + erf(x[i] / sqrt(2.0)));
-        y[i] = x[i] * cdf[i];
+    double buffer[256];
+    for (long start = 0; start < count; start += 256) {
+        long size = count - start < 256 ? count - start : 256;
+        for (long i = 0; i < size; i++) buffer[i] = (double) x[start + i] * 0.7071067811865476;
+        erf_block(buffer, size);
+        for (long i = 0; i < size; i++) {
+            double phi = 0.5 * (1.0 + buffer[i]);
+            cdf[start + i] = (real) phi;
+            y[start + i] = (real) (x[start + i] * phi);
+        }
     }
 }
 
 void gelu_backward(const real *x, const real *cdf, const real *grad, real *dx, long count)
 {
     const double inv_sqrt_two_pi = 0.3989422804014327;  /* 1 / sqrt(2 pi) */
-    for (long i = 0; i < count; i++) {
-        double pdf = exp(-0.5 * x[i] * x[i]) * inv_sqrt_two_pi;
-        dx[i] = grad[i] * (cdf[i] + x[i] * pdf);
+    double buffer[256];
+    for (long start = 0; start < count; start += 256) {
+        long size = count - start < 256 ? count - start : 256;
+        for (long i = 0; i < size; i++) buffer[i] = -0.5 * (double) x[start + i] * x[start + i];
+        for (long i = 0; i < size; i++) buffer[i] = fast_exp(buffer[i]);
+        for (long i = 0; i < size; i++)
+            dx[start + i] = (real) (grad[start + i] * (cdf[start + i] + x[start + i] * buffer[i] * inv_sqrt_two_pi));
     }
 }
 
