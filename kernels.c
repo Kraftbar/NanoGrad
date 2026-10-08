@@ -743,6 +743,36 @@ static inline double fast_sigmoid(double x)
     return x >= 0.0 ? s : e * s;
 }
 
+/* Single-precision tanh and sigmoid for the float32 build, from fast_expf;
+ * tanh's series near zero stops at a^11 (enough for 24 bits below 0.25). */
+static inline float fast_tanhf(float x)
+{
+    float a = fabsf(x), s = a * a;
+    float p = 1382.0f / 155925.0f;
+    p = p * s - 17.0f / 315.0f;
+    p = p * s + 2.0f / 15.0f;
+    p = p * s - 1.0f / 3.0f;
+    float near_zero = a + a * s * p;
+    float elsewhere = 1.0f - 2.0f / (fast_expf(2.0f * a) + 1.0f);
+    float t = a < 0.25f ? near_zero : elsewhere;
+    return x < 0.0f ? -t : t;
+}
+
+static inline float fast_sigmoidf(float x)
+{
+    float e = fast_expf(-fabsf(x));
+    float s = 1.0f / (1.0f + e);
+    return x >= 0.0f ? s : e * s;
+}
+
+/* y[i] = FN(x[i]) over floats, in place-free chunks the compiler vectorizes. */
+#define MAP_FLOATS(FN, x, y, count)                                                \
+    do {                                                                          \
+        const float *xf_ = (const float *)(x);                                    \
+        float *yf_ = (float *)(y);                                                \
+        for (long i_ = 0; i_ < (count); i_++) yf_[i_] = FN(xf_[i_]);             \
+    } while (0)
+
 /* y[i] = FN(x[i]) through a double buffer in chunks (see exp_shifted). */
 #define MAP_CHUNKED(FN, x, y, count)                                              \
     do {                                                                          \
@@ -907,7 +937,8 @@ void scatter_add_rows(const real *grad, const long *ids, real *table_grad, long 
  */
 void tanh_forward(const real *x, real *y, long count)
 {
-    MAP_CHUNKED(fast_tanh, x, y, count);
+    if (sizeof(real) == sizeof(float)) MAP_FLOATS(fast_tanhf, x, y, count);
+    else MAP_CHUNKED(fast_tanh, x, y, count);
 }
 
 void tanh_backward(const real *y, const real *grad, real *dx, long count)
@@ -1239,7 +1270,8 @@ void batch_norm_channels_backward(const real *grad, const real *x_hat, const rea
  */
 void sigmoid_forward(const real *x, real *y, long count)
 {
-    MAP_CHUNKED(fast_sigmoid, x, y, count);
+    if (sizeof(real) == sizeof(float)) MAP_FLOATS(fast_sigmoidf, x, y, count);
+    else MAP_CHUNKED(fast_sigmoid, x, y, count);
 }
 
 void sigmoid_backward(const real *y, const real *grad, real *dx, long count)
