@@ -282,8 +282,9 @@ splits (protein was not run):
 | wine (red) | 0.627 +- 0.008 | -0.95 +- 0.01 | 0.62 | -0.93 |
 | yacht | 2.89 +- 0.23 | -2.28 +- 0.07 | 1.11 | -1.55 |
 
-(+- is the standard error over splits, as the paper reports.) Six of eight
-match or beat the paper. Yacht, the smallest table (308 rows, three Adam
+(+- is the standard error over splits, as the paper reports.) Energy, kin8nm
+and naval beat the paper; Boston, concrete, power plant and wine come
+within a few percent of it. Yacht, the smallest table (308 rows, three Adam
 steps per epoch), is far from converged at 400 epochs.
 
 *Added*: nothing in the core. MC dropout is ordinary dropout left on, and
