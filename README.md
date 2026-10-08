@@ -15,6 +15,8 @@ model families from the standard benchmarks:
   mixture of experts, LoRA, weight quantization, speculative decoding
 - **generative**: a variational autoencoder and a diffusion model on MNIST
 - **graphs**: a graph convolutional network (GCN) on the Cora citation graph
+- **GANs and reinforcement learning**: a DCGAN drawing MNIST digits, and
+  REINFORCE and actor-critic agents balancing CartPole
 - **text and translation**: fastText's classifier on AG News, and the
   encoder-decoder transformer translating Multi30k German to English
 
@@ -230,6 +232,9 @@ quantize.py      # int8 / int4 weight quantization and what it costs in loss
 speculative.py   # speculative decoding: a small model drafts, the large one checks
 gcn.py           # graph convolutional network on Cora, NanoGrad vs PyTorch
 text_classify.py # fastText's bag of embeddings on AG News, NanoGrad vs PyTorch
+mobilenet.py     # depthwise separable convolutions (MobileNet) for CIFAR-10
+gan.py           # DCGAN on MNIST: transposed convolutions, adversarial training
+rl.py            # reinforcement learning: CartPole with REINFORCE and actor-critic
 seq2seq.py       # the encoder-decoder transformer (cross-attention, padding masks)
 translate.py     # German to English on Multi30k, BLEU, NanoGrad vs PyTorch
 profiler.py      # time per op type (forward and backward) for any training step

@@ -137,3 +137,21 @@ and a row scatter), but its 10.6-million-number table needed row-sparse
 gradients: `tensor.RowGrad` keeps just the rows a batch used, and SGD
 updates just those rows in place. One step went from 54 ms to 1.1 ms,
 faster than PyTorch's sparse embedding gradients (1.7 ms).
+
+## Reinforcement learning: CartPole (`rl.py`)
+
+No dataset: an agent balances a pole on a cart (Gym's CartPole-v1
+dynamics, rewritten in 30 lines) and learns from the rewards alone, with
+the two agents of PyTorch's `examples/reinforcement_learning`. REINFORCE
+makes each action more likely in proportion to the return that followed
+it; actor-critic also predicts the return and weights actions by how much
+better it turned out. Solved means a running return above 475 of 500:
+
+| agent | seeds solved within 1,000 episodes | episodes to solve (median) | time per run |
+| --- | ---: | ---: | ---: |
+| REINFORCE | 9 of 10 | about 300 | 2-6 s |
+| actor-critic | 10 of 10 | about 370 | 2-9 s |
+
+*Added*: nothing in the core; the policy-gradient loss is a gather of the
+log-probabilities of the actions taken, weighted by the returns, and a
+custom Huber loss op. Tests check both agents' gradients against PyTorch.
