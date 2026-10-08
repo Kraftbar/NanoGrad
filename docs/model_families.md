@@ -513,3 +513,32 @@ LSTM, and its last state is classified. 3 epochs of Adam: **97.67%**
 test accuracy (PyTorch, same weights: 96.80%; the runs drift apart over
 thousands of steps, because the fused gate kernels round differently).
 
+
+## Sequence labeling: a BiLSTM-CRF tagger (`tagger.py`)
+
+Part-of-speech tagging on Universal Dependencies' English Web Treebank
+(12.5K training sentences, 17 universal tags), scored as the share of
+test words tagged right. Each word is three embeddings joined together
+(the lowercased word, its last three letters, and its shape: lowercase,
+Capitalized, UPPER or with digits); a BiLSTM reads the sentence both
+ways, and a linear layer gives one score per tag. On top sits a
+linear-chain CRF (Huang et al., 2015; Lample et al., 2016), which scores
+whole tag sequences with learned transition scores. Its normalizer is the
+forward algorithm, `alpha_t[j] = logsumexp_i(alpha_t-1[i] + trans[i, j]) + e[t, j]`,
+written as a small matrix product of `e^alpha` and `e^trans` per word,
+shifted to stay in range; decoding is Viterbi. Sentences are batched by
+length, so there is no padding to mask.
+
+15 epochs of Adam with dropout 0.5, test accuracy at the best epoch on
+dev:
+
+| output layer | dev | test |
+| --- | ---: | ---: |
+| softmax per word | 94.04% | 94.45% |
+| CRF | 94.32% | **94.66%** |
+
+The model has no pretrained word vectors and no character model; the
+CRF's transitions add 0.2 points over a softmax per word.
+
+*Added*: `logsumexp` (the lane's largest value as a constant shift, so
+the gradient that comes out is the softmax).

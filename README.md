@@ -14,7 +14,8 @@ model families from the standard benchmarks:
   characters), a BERT-style encoder with pretraining and fine-tuning, LSTM
   and GRU char-rnns on Tiny Shakespeare; word-level LSTM and transformer
   language models on WikiText-2 and Penn Treebank; fastText on AG News; the
-  encoder-decoder transformer translating Multi30k German to English
+  encoder-decoder transformer translating Multi30k German to English; a
+  BiLSTM-CRF part-of-speech tagger on Universal Dependencies English
 - **LLM gears**: KV cache, grouped-query and sliding-window attention,
   mixture of experts, LoRA, weight quantization, speculative decoding,
   gradient checkpointing, DPO preference tuning, distillation

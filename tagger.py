@@ -29,6 +29,9 @@ sequence of the first t words that ends in tag j,
     alpha_t[j] = logsumexp_i(alpha_t-1[i] + trans[i, j]) + e[t, j]
     log Z      = logsumexp_j(alpha_T[j] + end[j])
 
+(each step's logsumexp is a small matrix product of e^alpha and e^trans,
+shifted to stay in floating-point range),
+
 and the loss is log Z - score(gold tags), whose gradient (through the
 logsumexps) is the expected count of each tag and transition minus the
 gold count. Decoding (Viterbi) is the same recursion with max instead of
@@ -36,10 +39,12 @@ logsumexp, remembering which i won. ``--no-crf`` trains the plain BiLSTM
 with a softmax per word, for comparison.
 
 Sentences are batched by length, so a batch has no padding and the math
-above holds as written.
+above holds as written. Dropout (0.5, on the embeddings and on the BiLSTM's
+output, as in Lample et al.) keeps the 1.1M weights from memorizing the
+training set; the test score reported is the one at the best epoch on dev.
 
     python3 tagger.py --epochs 10
-    .venv/bin/python tagger.py --frameworks nanograd torch --epochs 1 --train-limit 400
+    .venv/bin/python tagger.py --frameworks nanograd torch --epochs 1 --train-limit 400 --dropout 0
 
 Data: data/ud_ewt/en_ewt-ud-{train,dev,test}.conllu, from
 https://github.com/UniversalDependencies/UD_English-EWT (release r2.13).
@@ -57,7 +62,8 @@ from losses import softmax_cross_entropy
 from optim import TensorAdam
 from rnn import LSTM
 from tensor import Tensor, concat, no_grad
-from tensor_nn import TensorEmbedding, TensorLinear, TensorModule
+from tensor_nn import TensorDropout, TensorEmbedding, TensorLinear, TensorModule
+from train import evaluation_mode
 
 UNKNOWN = 0
 SHAPES = ("lower", "Title", "UPPER", "digit")
@@ -135,7 +141,7 @@ class Tagger(TensorModule):
     """Embeddings -> BiLSTM -> per-tag emissions, and a CRF's transition scores."""
 
     def __init__(self, vocab: Vocabulary, *, word_dim: int = 100, suffix_dim: int = 30, shape_dim: int = 5,
-                 hidden: int = 100, crf: bool = True, seed: int = 0) -> None:
+                 hidden: int = 100, crf: bool = True, dropout: float = 0.0, seed: int = 0) -> None:
         tags = len(vocab.tags)
         self.word = TensorEmbedding(len(vocab.words) + 1, word_dim, seed=seed)
         self.suffix = TensorEmbedding(len(vocab.suffixes) + 1, suffix_dim, seed=seed + 1)
@@ -145,6 +151,8 @@ class Tagger(TensorModule):
         self.backward_lstm = LSTM(inputs, hidden, seed=seed + 4)
         self.emit = TensorLinear(2 * hidden, tags, seed=seed + 5)
         self.crf = crf
+        self.dropout = dropout
+        self.drop = TensorDropout(dropout, seed=seed + 6)         # on the embeddings and the BiLSTM output
         # trans[i, j]: the score of tag j right after tag i. They start at zero:
         # with no transition scores the CRF begins as the plain tagger.
         self.transitions = Tensor.zeros((tags, tags), requires_grad=True)
@@ -154,13 +162,13 @@ class Tagger(TensorModule):
     def emissions(self, words: list[list[int]], suffixes: list[list[int]], shapes: list[list[int]]) -> Tensor:
         """e (B, T, tags) for a batch of equal-length sentences."""
 
-        x = concat([self.word(words), self.suffix(suffixes), self.shape(shapes)], axis=2)
+        x = self.drop(concat([self.word(words), self.suffix(suffixes), self.shape(shapes)], axis=2))
         length = x.shape[1]
         forward = self.forward_lstm(x)
         # The backward LSTM reads the sentence right to left; its outputs are
         # flipped back so position t holds what it saw of words t..T.
         backward = reverse_time(self.backward_lstm(reverse_time(x)))
-        h = concat([forward, backward], axis=2)                          # (B, T, 2H)
+        h = self.drop(concat([forward, backward], axis=2))              # (B, T, 2H)
         scores = self.emit(h.reshape((len(words) * length, h.shape[2])))
         return scores.reshape((len(words), length, scores.shape[1]))
 
@@ -173,15 +181,25 @@ class Tagger(TensorModule):
         return (self.log_partition(e) - self.gold_score(e, tags)).sum() * (1.0 / batch_size)
 
     def log_partition(self, e: Tensor) -> Tensor:
-        """log Z per sentence by the forward algorithm (see the module docstring)."""
+        """log Z per sentence by the forward algorithm (see the module docstring).
+
+        Each step's logsumexp over the previous tag is a matrix product in
+        probability space, shifted so the numbers stay in range:
+
+            logsumexp_i(alpha[i] + trans[i, j]) = m + log(sum_i e^(alpha[i] - m) * e^trans[i, j])
+
+        with m the row's largest alpha (any constant works; the largest makes
+        every e^(alpha - m) <= 1, with one of them exactly 1).
+        """
 
         batch_size, length, count = e.shape
         steps = [step.reshape((batch_size, count)) for step in e.split([1] * length, axis=1)]
-        to_from = self.transitions.T                                       # [j, i] = trans[i, j]
+        transition_weights = self.transitions.exp()                        # e^trans[i, j]
         alpha = steps[0] + self.start
         for step in steps[1:]:
-            # scores[b, j, i] = alpha[b, i] + trans[i, j]; sum out the previous tag i
-            alpha = (alpha.reshape((batch_size, 1, count)) + to_from).logsumexp(axis=2) + step
+            data = alpha.data
+            m = Tensor([max(data[b * count : (b + 1) * count]) for b in range(batch_size)], (batch_size, 1))
+            alpha = ((alpha - m).exp() @ transition_weights).log() + m + step
         return (alpha + self.end).logsumexp(axis=1)
 
     def gold_score(self, e: Tensor, tags: list[list[int]]) -> Tensor:
@@ -208,7 +226,7 @@ class Tagger(TensorModule):
 
     def decode(self, batch) -> list[list[int]]:
         words, suffixes, shapes = (list(column) for column in list(zip(*batch))[:3])
-        with no_grad():
+        with no_grad(), evaluation_mode(self):
             e = self.emissions(words, suffixes, shapes)
         batch_size, length, count = e.shape
         rows = [[list(e.data[(b * length + t) * count : (b * length + t + 1) * count]) for t in range(length)]
@@ -258,6 +276,7 @@ class NanoGradRunner:
         self.optimizer = TensorAdam(model.parameters(), lr=lr, max_grad_norm=clip)
 
     def train_step(self, batch) -> float:
+        self.model.train()
         self.optimizer.zero_grad()
         loss = self.model.loss(batch)
         loss.backward()
@@ -278,6 +297,7 @@ class TorchRunner:
         import torch
 
         self.torch, self.clip, self.crf = torch, clip, model.crf
+        self.drop = torch.nn.Dropout(model.dropout)       # its masks differ from NanoGrad's: compare at 0
 
         def p(tensor) -> "torch.Tensor":
             return torch.nn.Parameter(torch.tensor(list(tensor.data), dtype=torch.float64).reshape(tensor.shape))
@@ -304,11 +324,11 @@ class TorchRunner:
 
     def emissions(self, words, suffixes, shapes):
         torch = self.torch
-        x = torch.cat([self.word[torch.tensor(words)], self.suffix[torch.tensor(suffixes)],
-                       self.shape[torch.tensor(shapes)]], dim=2)
+        x = self.drop(torch.cat([self.word[torch.tensor(words)], self.suffix[torch.tensor(suffixes)],
+                                 self.shape[torch.tensor(shapes)]], dim=2))
         forward, _ = self.forward_lstm(x)
         backward, _ = self.backward_lstm(x.flip(1))
-        h = torch.cat([forward, backward.flip(1)], dim=2)
+        h = self.drop(torch.cat([forward, backward.flip(1)], dim=2))
         return h @ self.emit_weight.T + self.emit_bias
 
     def loss(self, batch):
@@ -327,6 +347,7 @@ class TorchRunner:
         return (log_z - gold).mean()
 
     def train_step(self, batch) -> float:
+        self.drop.train()
         self.optimizer.zero_grad()
         loss = self.loss(batch)
         loss.backward()
@@ -337,6 +358,7 @@ class TorchRunner:
     def decode(self, batch) -> list[list[int]]:
         torch = self.torch
         words, suffixes, shapes = (list(column) for column in list(zip(*batch))[:3])
+        self.drop.eval()
         with torch.no_grad():
             e = self.emissions(words, suffixes, shapes)
         if not self.crf:
@@ -366,6 +388,7 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--clip", type=float, default=5.0)
     parser.add_argument("--hidden", type=int, default=100)
+    parser.add_argument("--dropout", type=float, default=0.5)
     parser.add_argument("--no-crf", dest="crf", action="store_false", help="a softmax per word instead of the CRF")
     parser.add_argument("--train-limit", type=int, help="use only the first N training sentences")
     parser.add_argument("--seed", type=int, default=0)
@@ -383,7 +406,7 @@ def main(argv: list[str] | None = None) -> dict:
 
     results, runners = {}, {}
     for framework in args.frameworks:
-        model = Tagger(vocab, hidden=args.hidden, crf=args.crf, seed=args.seed)
+        model = Tagger(vocab, hidden=args.hidden, crf=args.crf, dropout=args.dropout, seed=args.seed)
         if framework == "torch":
             import torch
 
@@ -393,7 +416,7 @@ def main(argv: list[str] | None = None) -> dict:
             runners[framework] = runner = NanoGradRunner(model, args.lr, args.clip)
         print(framework, flush=True)
         rng, start, training, steps = random.Random(args.seed), perf_counter(), 0.0, 0
-        history = []
+        history, best = [], (-1.0, 0, 0.0)          # (dev accuracy, epoch, test accuracy then)
         for epoch in range(1, args.epochs + 1):
             total = 0.0
             batches = length_batches(examples["train"], args.batch_size, rng)
@@ -404,12 +427,13 @@ def main(argv: list[str] | None = None) -> dict:
             steps += len(batches)
             dev = accuracy(runner, examples["dev"])
             history.append((epoch, total / len(batches), dev))
+            if dev > best[0]:                             # the test score of the best epoch on dev
+                best = (dev, epoch, accuracy(runner, examples["test"]))
             print(f"  epoch {epoch:2d}: loss {total / len(batches):.4f}, dev accuracy {100 * dev:.2f}%, "
                   f"{perf_counter() - start:.0f} s", flush=True)
-        test = accuracy(runner, examples["test"])
-        results[framework] = {"history": history, "dev": history[-1][2], "test": test,
+        results[framework] = {"history": history, "dev": best[0], "best_epoch": best[1], "test": best[2],
                               "ms_per_step": 1000 * training / max(1, steps)}
-        print(f"{framework:8s}: dev {100 * history[-1][2]:.2f}%, test {100 * test:.2f}% "
+        print(f"{framework:8s}: best dev {100 * best[0]:.2f}% (epoch {best[1]}), test then {100 * best[2]:.2f}% "
               f"({results[framework]['ms_per_step']:.1f} ms/step)", flush=True)
     if len(runners) == 2:
         difference = max(abs(a - b) for x, y in zip(runners["nanograd"].weights(), runners["torch"].weights())

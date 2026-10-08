@@ -29,6 +29,7 @@ and float64, and NanoGrad uses its C kernels.
 | Cora (link prediction) | GAE / VGAE, the authors' recipe, 5 edge splits | test AUC **91.8 / 92.4**, AP 92.6 / 93.4 | GAE paper: AUC 91.0 / 91.4, AP 92.0 / 92.6 |
 | Speech Commands (MLPerf Tiny keyword spotting) | DS-CNN, 12 classes, official test set, 24 epochs, no augmentation | **90.33%** test accuracy | MLPerf Tiny target: 90%; reference DS-CNN about 92% |
 | MNIST (adversarial robustness) | fast FGSM adversarial training (Wong et al.), eps 0.3 | 97.95% clean, **75.81%** under PGD-50 x 10 | PyTorch, same recipe: 98.7% / 88.8% |
+| UD English EWT (part-of-speech tagging) | BiLSTM-CRF, word + suffix + shape embeddings, 15 epochs | **94.66%** test accuracy (softmax output instead of the CRF: 94.45%) | |
 | CamVid (segmentation) | U-Net, half resolution, 20 epochs | 81.6% global accuracy, **36.9% mean IoU** | |
 | MNIST (density) | MAF(5) normalizing flow, 20 epochs | test log-likelihood **-1217.6** nats (logit space), 1.74 bits/dim | MAF paper: -1300.5 |
 | UCI regression (uncertainty) | MC dropout, Gal's protocol, 8 tables | beats the paper on 3 of 8 and is within a few percent on 4 (e.g. kin8nm RMSE 0.084, LL 1.07) | Gal and Ghahramani: kin8nm 0.10, 0.95 |
@@ -150,6 +151,7 @@ weight difference after those steps):
 | FGSM training on MNIST | 99.8 | 106.1 | 0.9x | 1.1e-13 |
 | CNN on spoken digits | 193.9 | 176.0 | 1.1x | 2.4e-13 |
 | DS-CNN keyword spotting | 295.9 | 406.7 | 0.7x | 7.8e-13 |
+| BiLSTM-CRF tagger on UD EWT | 65.1 | 47.3 | 1.4x | 6.5e-13 |
 | U-Net on CamVid | 2724.8 | 2541.0 | 1.1x | 1.2e-12 |
 
 (The pure-Python reference path, kept to be read, is 30-300x slower than

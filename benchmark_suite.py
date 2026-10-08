@@ -53,7 +53,7 @@ def family_rows(steps: int) -> list[dict]:
     """Every newer family, briefly, through its own script's --frameworks nanograd torch.
     Each entry: (name, module, data that must exist, arguments, ms per step from the results)."""
 
-    import adversarial, audio, fewshot, flow, kws, linkpred, recommend, segment, sr
+    import adversarial, audio, fewshot, flow, kws, linkpred, recommend, segment, sr, tagger
 
     both = ["--frameworks", "nanograd", "torch"]
     families = [
@@ -83,6 +83,9 @@ def family_rows(steps: int) -> list[dict]:
          lambda r: r["ms_per_step"]),
         ("DS-CNN keyword spotting", kws, "data/speech_commands/mfcc.pkl",
          both + ["--epochs", "1", "--train-limit", str(steps * 100), "--test-limit", "500"],
+         lambda r: r["ms_per_step"]),
+        ("BiLSTM-CRF tagger on UD EWT", tagger, "data/ud_ewt/en_ewt-ud-train.conllu",
+         both + ["--epochs", "1", "--train-limit", str(steps * 32), "--dropout", "0"],
          lambda r: r["ms_per_step"]),
         ("U-Net on CamVid", segment, "data/camvid/camvid_176x240.pkl",
          both + ["--epochs", "1", "--train-limit", str(max(2, steps // 10) * 4), "--test-limit", "4"],
