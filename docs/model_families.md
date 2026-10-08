@@ -315,8 +315,7 @@ at 1e-4, batch 100, 20 epochs:
 | MAF(5), MAF paper | -1300.5 | |
 
 Higher log-likelihood is better. Stacking five MADEs with batch norm gains
-134 nats over one, about as much as the paper's 80 plus the advantage of
-the longer training here. MAF here also starts each MADE as the
+134 nats over one (80 in the paper). MAF here also starts each MADE as the
 identity (zero output layers), which keeps the first steps stable on logit
 pixels that span about +-14.
 
