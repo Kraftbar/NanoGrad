@@ -27,6 +27,7 @@ and float64, and NanoGrad uses its C kernels.
 | Cora (citation graph) | GCN, pygcn's recipe, 10 seeds | **83.1% +- 0.6** test accuracy (PyTorch, own dropout masks: 82.9% +- 0.7) | GCN paper: 81.5% (on the Planetoid split) |
 | AG News (text classification) | fastText's model, words / words + bigrams, 5 epochs | **91.38% / 91.76%** | fastText paper: 91.5% / 92.5% |
 | Cora (link prediction) | GAE / VGAE, the authors' recipe, 5 edge splits | test AUC **91.8 / 92.4**, AP 92.6 / 93.4 | GAE paper: AUC 91.0 / 91.4, AP 92.0 / 92.6 |
+| Speech Commands (MLPerf Tiny keyword spotting) | DS-CNN, 12 classes, official test set, 24 epochs, no augmentation | **90.33%** test accuracy | MLPerf Tiny target: 90%; reference DS-CNN about 92% |
 | FSDD (spoken digits) | log-mel spectrogram + 3-block CNN, 20 epochs | **99.33%** test accuracy | |
 | MNIST (distillation) | 2 x 800 student, alone / distilled from a 2 x 1,200 teacher, 20 epochs | **176 / 159** test errors (teacher 163) | Hinton et al.: 146 / 74 (teacher 67) |
 | Cora | GAT (8 heads), early stopping, 5 seeds | 81.6% +- 1.6 | GAT paper: 83.0% +- 0.7 |

@@ -347,6 +347,12 @@ IoU on the 233 test frames.
 MLPerf Tiny's audio benchmark: 12 classes (10 commands, unknown and
 silence) from one-second clips, using 49 x 10 MFCCs. The model is a
 MobileNet with a 10 x 4 stride-2 stem: the same `mobilenet.py`, with
-different arguments.
+different arguments. Trained for 24 epochs with Adam (the reference's
+schedule), but without its dropout or its noise and time-shift
+augmentation, it reaches **90.33%** on the official 4,890-clip test set.
+MLPerf Tiny's quality target is 90%; the reference DS-CNN gets about 92%
+with augmentation.
 
-(results running)
+*Added*: separate row and column padding in `conv2d` / `pad2d` (the
+10 x 4 stem), and MFCCs: the log-mel spectrogram followed by a DCT, both
+matrix products.
