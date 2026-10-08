@@ -1021,6 +1021,18 @@ class TensorTests(unittest.TestCase):
         self.assertEqual(y.tolist()[1], [1 / 3, 1 / 3, 1 / 3])
         self.assertEqual(x.softmax(axis=1).tolist(), y.tolist())
 
+    def test_logsumexp_is_stable_and_its_gradient_is_the_softmax(self) -> None:
+        x = Tensor.from_list([[1000.0, 1001.0, 999.0], [-3.0, 0.5, 2.0]], requires_grad=True)
+        y = x.logsumexp(axis=1)
+        for row, value in zip(x.tolist(), y.tolist()):
+            largest = max(row)
+            self.assertAlmostEqual(value, largest + math.log(sum(math.exp(v - largest) for v in row)))
+        y.sum().backward()
+        softmax = tensor_softmax(x, axis=1).data
+        for a, b in zip(x.grad, softmax):
+            self.assertAlmostEqual(a, b)
+        self.assertEqual(x.logsumexp(axis=0).shape, (3,))
+
     def test_softmax_over_first_axis(self) -> None:
         x = Tensor.from_list([
             [1.0, 2.0],

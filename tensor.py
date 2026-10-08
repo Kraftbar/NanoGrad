@@ -245,6 +245,9 @@ class Tensor:
     def softmax(self, axis: int = -1) -> "Tensor":
         return tensor_softmax(self, axis=axis)
 
+    def logsumexp(self, axis: int = -1) -> "Tensor":
+        return tensor_logsumexp(self, axis=axis)
+
     def exp(self) -> "Tensor":
         return tensor_exp(self)
 
@@ -1497,6 +1500,25 @@ def tensor_mean(tensor: Tensor, axis: int | None = None) -> Tensor:
 
     axis = _normalize_axis(axis, len(tensor.shape))
     return tensor_sum(tensor, axis=axis) * (1 / tensor.shape[axis])
+
+
+def tensor_logsumexp(tensor: Tensor, axis: int = -1) -> Tensor:
+    """log(sum_i e^(x_i)) along one axis, without overflow:
+
+        logsumexp(x) = m + log(sum_i e^(x_i - m))     for any constant m
+
+    with m the lane's largest value, so every exponent is <= 0. Since the
+    result does not depend on m, m is a constant to the backward pass, and
+    the gradient that comes out of the composed ops is e^(x_i - logsumexp),
+    the softmax.
+    """
+
+    axis = _normalize_axis(axis, len(tensor.shape))
+    data = tensor.data
+    largest = [max(data[lane]) for lane in _axis_lanes(tensor.shape, axis)]
+    kept = tensor.shape[:axis] + (1,) + tensor.shape[axis + 1 :]
+    shifted = tensor - Tensor(largest, kept)
+    return shifted.exp().sum(axis=axis).log() + Tensor(largest, _reduced_shape(tensor.shape, axis))
 
 
 def tensor_softmax(tensor: Tensor, axis: int = -1) -> Tensor:
