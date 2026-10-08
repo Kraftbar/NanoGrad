@@ -105,8 +105,8 @@ reach the same loss and accuracy.
 | tiny ViT, CIFAR-10 | 24.9 ms | 22.5 ms | 1.11x |
 | VAE, MNIST | 26.7 ms | 24.9 ms | 1.07x |
 | BERT-style encoder, Tiny Shakespeare | 76.6 ms | 52.3 ms | 1.46x |
-| WikiText-2 LSTM (2 x 200, 33K vocabulary) | 1,395 ms | 1,089 ms | 1.28x |
-| WikiText-2 LSTM, float32 | 749 ms | 471 ms | 1.59x |
+| WikiText-2 LSTM (2 x 200, 33K vocabulary) | 1,275 ms | 987 ms | 1.29x |
+| WikiText-2 LSTM, float32 | 635 ms | 464 ms | 1.37x |
 
 The convolutional models and the vision transformer run at PyTorch's
 speed or faster in float64. The gap is in large matrix products: the
@@ -114,7 +114,9 @@ language models spend most of their step on the 200 -> 33,278 output
 layer. On one core of this Xeon (2.8 GHz, AVX-512), NanoGrad's tiled
 product reaches about 47 GFLOP/s in float64 and 95-110 in float32 on a
 512^3 product; PyTorch's reaches about 62 and 125-135. (The two WikiText
-rows were re-measured on an idle machine after unrolling the tile loop.) Op by op, forward plus backward
+rows were re-measured after tuning that output layer: a vectorized row max
+for the 33,278-wide softmax, a one-pass cross-entropy gradient, and
+packing a transposed A row by row for the weight gradient.) Op by op, forward plus backward
 (`benchmark.py --torch`, float64, median of 20; these small ops vary by
 10-20% between runs):
 
