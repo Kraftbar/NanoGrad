@@ -131,6 +131,22 @@ rows were re-measured on an idle machine after unrolling the tile loop.) Op by o
 | batch norm 32x8x28x28 | 1.12 ms | 1.38 ms | 0.8x |
 | max pool 2x2 | 0.27 ms | 0.96 ms | 0.3x |
 
+The newer families, a few steps each in both frameworks
+(`benchmark_suite.py`; float64, one core; the last column is the largest
+weight difference after those steps):
+
+| comparison | NanoGrad ms/step | PyTorch ms/step | ratio | max weight difference |
+| --- | ---: | ---: | ---: | ---: |
+| NeuMF on MovieLens-1M | 24.7 | 18.2 | 1.4x | 1.9e-15 |
+| VGAE on Cora | 430.9 | 306.2 | 1.4x | 2.9e-14 |
+| MAF on MNIST | 199.1 | 120.0 | 1.7x | 2.8e-09 |
+| SRCNN on 91-image | 162.4 | 125.8 | 1.3x | 1.4e-17 |
+| prototypical net on Omniglot | 635.7 | 473.5 | 1.3x | 7.4e-11 |
+| FGSM training on MNIST | 107.9 | 128.3 | 0.8x | 7.8e-15 |
+| CNN on spoken digits | 213.7 | 186.6 | 1.1x | 2.4e-13 |
+| DS-CNN keyword spotting | 336.8 | 449.7 | 0.7x | 2.8e-13 |
+| U-Net on CamVid | 6650.0 | 2464.4 | 2.7x | 6.4e-13 |
+
 (The pure-Python reference path, kept to be read, is 30-300x slower than
 the C kernels on the same ops.)
 

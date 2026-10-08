@@ -49,6 +49,56 @@ def vae_row(steps: int) -> dict:
     return _row("VAE on mnist", vae_compare.run, args, per_framework=lambda r: r[0])
 
 
+def family_rows(steps: int) -> list[dict]:
+    """Every newer family, briefly, through its own script's --frameworks nanograd torch.
+    Each entry: (name, module, data that must exist, arguments, ms per step from the results)."""
+
+    import adversarial, audio, fewshot, flow, kws, linkpred, recommend, segment, sr
+
+    both = ["--frameworks", "nanograd", "torch"]
+    families = [
+        ("NeuMF on MovieLens-1M", recommend, "data/ml-1m",
+         both + ["--epochs", "1", "--step-limit", str(steps), "--limit-users", "300"],
+         lambda r: r["ms_per_step"]),
+        ("VGAE on Cora", linkpred, "data/cora",
+         both + ["--epochs", str(steps), "--log-every", str(steps)],
+         lambda r: 1000 * r["seconds"] / steps),
+        ("MAF on MNIST", flow, "data/mnist",
+         both + ["--epochs", "1", "--train-limit", str(steps * 20), "--test-limit", "200", "--hidden", "256",
+                 "--layers", "3", "--calibration", "500"],
+         lambda r: r["ms_per_step"]),
+        ("SRCNN on 91-image", sr, "data/sr",
+         both + ["--epochs", "1", "--patch-limit", str(steps * 16), "--test-sets", "set5"],
+         lambda r: r["ms_per_step"]),
+        ("prototypical net on Omniglot", fewshot, "data/omniglot/omniglot28.pkl",
+         both + ["--episodes", str(max(1, steps // 5)), "--train-way", "20", "--test-episodes", "50",
+                 "--log-every", str(steps)],
+         lambda r: r["ms_per_episode"]),
+        ("FGSM training on MNIST", adversarial, "data/mnist",
+         both + ["--epochs", "1", "--train-limit", str(steps * 100), "--test-limit", "100", "--pgd-steps", "5",
+                 "--restarts", "1"],
+         lambda r: 1000 * r["train_seconds"] / steps),
+        ("CNN on spoken digits", audio, "data/fsdd/recordings",
+         both + ["--epochs", "1"],
+         lambda r: r["ms_per_step"]),
+        ("DS-CNN keyword spotting", kws, "data/speech_commands/mfcc.pkl",
+         both + ["--epochs", "1", "--train-limit", str(steps * 100), "--test-limit", "500"],
+         lambda r: r["ms_per_step"]),
+        ("U-Net on CamVid", segment, "data/camvid/camvid_176x240.pkl",
+         both + ["--epochs", "1", "--train-limit", str(max(2, steps // 10) * 4), "--test-limit", "4"],
+         lambda r: r["ms_per_step"]),
+    ]
+    rows = []
+    for name, module, data, argv, ms in families:
+        if not Path(data).exists():
+            continue
+        with contextlib.redirect_stdout(io.StringIO()):
+            results = module.main(argv)
+        rows.append({"name": name, "nanograd": ms(results["nanograd"]), "torch": ms(results["torch"]),
+                     "difference": results.get("max_weight_difference", float("nan"))})
+    return rows
+
+
 def _row(name: str, run, args, *, per_framework) -> dict:
     with contextlib.redirect_stdout(io.StringIO()):          # keep the table readable
         results = run(args)
@@ -78,7 +128,8 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("benchmark_suite needs PyTorch: python3 -m venv .venv && .venv/bin/pip install torch")
 
     rows = []
-    for make in (lambda: image_rows(args.steps), lambda: [bert_row(args.steps)], lambda: [vae_row(args.steps)]):
+    for make in (lambda: image_rows(args.steps), lambda: [bert_row(args.steps)], lambda: [vae_row(args.steps)],
+                 lambda: family_rows(args.steps)):
         for row in make():
             rows.append(row)
             print(f"done: {row['name']}", flush=True)
