@@ -17,9 +17,10 @@ epoch; binary cross entropy on the scores.
 Evaluation is the paper's leave-one-out protocol: each user's latest
 movie was held out; rank it among 99 movies the user never saw. HR@10 is
 how often it lands in the top 10, NDCG@10 also rewards placing it higher
-(1 / log2(rank + 2)). The paper reports HR@10 0.70 / NDCG@10 0.42 for
-GMF with 8 factors, 0.69 / 0.42 for MLP, 0.73 / 0.45 for NeuMF with
-pre-training (about 0.70 without).
+(1 / log2(rank + 2)). With 32 factors (MLP layers 256-128-64-32), the
+authors' Keras code gets HR@10 0.692 / NDCG@10 0.425 for MLP and
+0.701 / 0.425 for NeuMF without pre-training (a PyTorch reproduction,
+guoyang9/NCF: GMF 0.708 / 0.429).
 
     python3 recommend.py --model gmf
     python3 recommend.py --model neumf --epochs 20
@@ -90,8 +91,8 @@ def embedding(rows: int, dim: int, rng: random.Random) -> Tensor:
 class NCF(TensorModule):
     """GMF, MLP or NeuMF (both, side by side), as in the paper's code."""
 
-    def __init__(self, users: int, items: int, *, model: str = "neumf", factors: int = 8,
-                 layers: tuple[int, ...] = (64, 32, 16, 8), seed: int = 0) -> None:
+    def __init__(self, users: int, items: int, *, model: str = "neumf", factors: int = 32,
+                 layers: tuple[int, ...] = (256, 128, 64, 32), seed: int = 0) -> None:
         rng = random.Random(seed)
         self.model = model
         self.gmf = model in ("gmf", "neumf")
@@ -246,8 +247,8 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--data", default="data/ml-1m")
     parser.add_argument("--model", choices=("gmf", "mlp", "neumf"), default="neumf")
     parser.add_argument("--frameworks", nargs="+", choices=("nanograd", "torch"), default=["nanograd"])
-    parser.add_argument("--factors", type=int, default=8)
-    parser.add_argument("--layers", type=int, nargs="+", default=[64, 32, 16, 8])
+    parser.add_argument("--factors", type=int, default=32)
+    parser.add_argument("--layers", type=int, nargs="+", default=[256, 128, 64, 32])
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--negatives", type=int, default=4)
