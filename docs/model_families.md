@@ -356,9 +356,25 @@ Per-pixel classification of street scenes into 11 classes. An
 encoder-decoder with skip connections (transposed convolutions and
 concatenation) is trained on the 367 SegNet training frames at half
 resolution. Reported: global accuracy, class-average accuracy and mean
-IoU on the 233 test frames.
+IoU on the 233 test frames. 20 epochs of Adam (lr 1e-3, batch 4, random
+flips), float32, plain cross entropy:
 
-(results running)
+| global accuracy | class average | mean IoU |
+| ---: | ---: | ---: |
+| 81.6% | 45.7% | 36.9% |
+
+Per class IoU: sky 88, road 87, building 69, pavement 62, tree 53, car 39,
+sign 6, pole 1, fence 0, pedestrian 0, bicyclist 0. The large classes are
+learned well. The thin and rare ones are not: poles, pedestrians and
+cyclists are a few percent of the pixels, and unweighted cross entropy
+ignores them. SegNet weights the loss by inverse class frequency for this
+reason ("median frequency balancing"), which mainly raises the class
+average.
+
+*Added*: nothing in the core. Skip connections are `concat` along the
+channel axis, upsampling is the existing transposed convolution, and the
+void label is skipped by gathering the labelled pixels' rows before the
+cross entropy.
 
 ## Keyword spotting: DS-CNN on Speech Commands (`kws.py`)
 
