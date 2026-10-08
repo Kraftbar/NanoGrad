@@ -168,6 +168,26 @@ class StableCrossEntropyTests(unittest.TestCase):
         self.assertEqual(list(logits.grad), [-1.0, 1.0])
 
 
+class WeightedCrossEntropyTests(unittest.TestCase):
+    def test_matches_a_weighted_average_and_its_gradient(self) -> None:
+        import random
+
+        from test_gradcheck import max_gradient_error
+
+        rng = random.Random(3)
+        x = Tensor([rng.uniform(-2, 2) for _ in range(15)], (5, 3), requires_grad=True)
+        targets, weights = [0, 2, 2, 1, 0], [0.5, 2.0, 1.0]
+        per_row = [softmax_cross_entropy(Tensor(list(x.data[3 * r : 3 * r + 3]), (1, 3)), [t]).item()
+                   for r, t in enumerate(targets)]
+        expected = sum(weights[t] * l for t, l in zip(targets, per_row)) / sum(weights[t] for t in targets)
+        got = softmax_cross_entropy(x, targets, class_weights=weights)
+        self.assertAlmostEqual(got.item(), expected, places=12)
+        self.assertLess(max_gradient_error(lambda: softmax_cross_entropy(x, targets, class_weights=weights), [x]),
+                        1e-8)
+        same = softmax_cross_entropy(x, targets, class_weights=[1.0, 1.0, 1.0]).item()
+        self.assertAlmostEqual(same, softmax_cross_entropy(x, targets).item(), places=12)
+
+
 class SoftCrossEntropyTests(unittest.TestCase):
     def test_one_hot_targets_give_the_usual_cross_entropy(self) -> None:
         values = [0.3, -1.2, 2.0, 0.5, 0.1, -0.4]

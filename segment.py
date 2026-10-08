@@ -167,7 +167,26 @@ class UNet(TensorModule):
         return [p for part in parts for p in part.parameters()]
 
 
-def pixel_loss(scores: Tensor, labels: list[int]) -> Tensor:
+def median_frequency_weights(pairs) -> list[float]:
+    """SegNet's class weights: median(freq) / freq(c), where freq(c) is class c's
+    share of the pixels in the images that contain it. Rare classes get large weights."""
+
+    counts, image_pixels = [0] * len(CLASSES), [0] * len(CLASSES)
+    for _, label in pairs:
+        present = [0] * len(CLASSES)
+        for value in label:
+            if value != VOID:
+                present[value] += 1
+        for c, count in enumerate(present):
+            if count:
+                counts[c] += count
+                image_pixels[c] += len(label)
+    frequencies = [counts[c] / image_pixels[c] if image_pixels[c] else 0.0 for c in range(len(CLASSES))]
+    median = sorted(f for f in frequencies if f)[len([f for f in frequencies if f]) // 2]
+    return [median / f if f else 0.0 for f in frequencies]
+
+
+def pixel_loss(scores: Tensor, labels: list[int], class_weights: list[float] | None = None) -> Tensor:
     """Mean cross entropy over the non-void pixels; scores are (B, C, H, W)."""
 
     batch, classes, height, width = scores.shape
@@ -175,18 +194,19 @@ def pixel_loss(scores: Tensor, labels: list[int]) -> Tensor:
     keep = [i for i, label in enumerate(labels) if label != VOID]
     if not keep:
         raise ValueError("every pixel in the batch is void")
-    return softmax_cross_entropy(gather_rows(per_pixel, keep), [labels[i] for i in keep])
+    return softmax_cross_entropy(gather_rows(per_pixel, keep), [labels[i] for i in keep], class_weights=class_weights)
 
 
 class NanoGradRunner:
-    def __init__(self, model: UNet, lr: float) -> None:
+    def __init__(self, model: UNet, lr: float, class_weights: list[float] | None = None) -> None:
         self.model = model
         self.optimizer = TensorAdam(model.parameters(), lr=lr)
+        self.class_weights = class_weights
 
     def train_step(self, pixels: list[float], labels: list[int], batch: int) -> float:
         self.model.train()
         self.optimizer.zero_grad()
-        loss = pixel_loss(self.model(Tensor(pixels, (batch, 3, HEIGHT, WIDTH))), labels)
+        loss = pixel_loss(self.model(Tensor(pixels, (batch, 3, HEIGHT, WIDTH))), labels, self.class_weights)
         loss.backward()
         self.optimizer.step()
         return loss.item()
@@ -202,13 +222,14 @@ class NanoGradRunner:
 
 
 class TorchRunner:
-    def __init__(self, model: UNet, lr: float) -> None:
+    def __init__(self, model: UNet, lr: float, class_weights: list[float] | None = None) -> None:
         import torch
         from torch_twin import TorchTwin
 
         self.torch = torch
         self.twin = TorchTwin(model)
         self.optimizer = torch.optim.Adam(self.twin.parameters, lr=lr)
+        self.class_weights = None if class_weights is None else torch.tensor(class_weights, dtype=torch.float64)
 
     def train_step(self, pixels, labels, batch: int) -> float:
         torch = self.torch
@@ -216,7 +237,7 @@ class TorchRunner:
         self.optimizer.zero_grad()
         scores = self.twin(torch.tensor(pixels, dtype=torch.float64).reshape(batch, 3, HEIGHT, WIDTH))
         loss = torch.nn.functional.cross_entropy(scores, torch.tensor(labels).reshape(batch, HEIGHT, WIDTH),
-                                                 ignore_index=VOID)
+                                                 ignore_index=VOID, weight=self.class_weights)
         loss.backward()
         self.optimizer.step()
         return loss.item()
@@ -279,6 +300,7 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--test-limit", type=int)
+    parser.add_argument("--balance", action="store_true", help="weight classes by median frequency (SegNet)")
     parser.add_argument("--dtype", choices=("float64", "float32"), help="NanoGrad's precision (PyTorch stays float64)")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)
@@ -289,6 +311,9 @@ def main(argv: list[str] | None = None) -> dict:
     splits = load_camvid(args.data)
     train_pairs, test_pairs = splits["train"][: args.train_limit], splits["test"][: args.test_limit]
     stats = channel_stats(train_pairs)
+    weights = median_frequency_weights(train_pairs) if args.balance else None
+    if weights:
+        print("class weights: " + ", ".join(f"{name} {w:.2f}" for name, w in zip(CLASSES, weights)), flush=True)
     print(f"{len(train_pairs)} training and {len(test_pairs)} test images at {HEIGHT} x {WIDTH} "
           f"({perf_counter() - start:.0f} s to load)", flush=True)
     results, runners = {}, {}
@@ -298,9 +323,9 @@ def main(argv: list[str] | None = None) -> dict:
             import torch
 
             torch.set_num_threads(1)
-            runners[framework] = runner = TorchRunner(model, args.lr)
+            runners[framework] = runner = TorchRunner(model, args.lr, weights)
         else:
-            runners[framework] = runner = NanoGradRunner(model, args.lr)
+            runners[framework] = runner = NanoGradRunner(model, args.lr, weights)
         print(framework, flush=True)
         rng, order, steps, start = random.Random(args.seed), list(range(len(train_pairs))), 0, perf_counter()
         for epoch in range(1, args.epochs + 1):

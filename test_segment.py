@@ -64,7 +64,8 @@ class SegmentTest(unittest.TestCase):
         pairs = self.pairs(4, seed=2)
         stats = segment.channel_stats(pairs)
         model = segment.UNet(seed=3)
-        runners = [segment.NanoGradRunner(model, 1e-3), segment.TorchRunner(model, 1e-3)]
+        weights = segment.median_frequency_weights(pairs)
+        runners = [segment.NanoGradRunner(model, 1e-3, weights), segment.TorchRunner(model, 1e-3, weights)]
         for step in range(2):
             pixels, labels = segment.batch_arrays(pairs[2 * step : 2 * step + 2], stats, [step == 1, False])
             losses = [runner.train_step(pixels, labels, 2) for runner in runners]

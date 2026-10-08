@@ -69,8 +69,13 @@ def binary_cross_entropy_with_logits(logits: Tensor, targets: Tensor, *, reducti
 
 def softmax_cross_entropy(
     logits: Tensor, targets: Tensor | list[int], *, label_smoothing: float = 0.0,
+    class_weights: list[float] | None = None,
 ) -> Tensor:
     """Mean softmax cross entropy for 2D class logits.
+
+    ``class_weights`` (one per class) makes each row count w[target] times,
+    and divides by the sum of those weights instead of the number of rows
+    (PyTorch's ``weight=``): rare classes can count as much as common ones.
 
     With label smoothing e, the target is no longer all-or-nothing: the true
     class gets 1 - e and every class (including it) shares e equally. Per
@@ -88,6 +93,27 @@ def softmax_cross_entropy(
     rows, cols = logits.shape
     classes = _class_indices(targets, rows, cols)
     probabilities = kernels.softmax_rows(logits.data, cols)
+    if class_weights is not None:
+        if label_smoothing:
+            raise ValueError("class_weights and label_smoothing cannot be combined")
+        if len(class_weights) != cols:
+            raise ValueError("class_weights needs one weight per class")
+        row_weights = [class_weights[target] for target in classes]
+        total = sum(row_weights)
+        loss = sum(w * _target_nll(logits.data, probabilities, row, cols, target)
+                   for row, (w, target) in enumerate(zip(row_weights, classes)))
+        out = _op_result([loss / total], (1,), (logits,), "softmax_cross_entropy")
+
+        def _weighted_backward() -> None:
+            # d(loss)/d(logits) row r = w_r (softmax - one_hot(target)) / sum of w
+            grad = probabilities[:]
+            for row, target in enumerate(classes):
+                grad[row * cols + target] -= 1.0
+            scale = kernels.storage([w / total for w in row_weights for _ in range(cols)])
+            _add_grad(logits, kernels.scale(kernels.multiply(grad, scale), _grad_data(out)[0]))
+
+        _set_backward(out, _weighted_backward)
+        return out
     loss = sum(_target_nll(logits.data, probabilities, row, cols, target) for row, target in enumerate(classes))
     if label_smoothing:
         # logsumexp(x) = x_target - log p_target, so the smooth part needs only row sums.
