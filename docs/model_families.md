@@ -124,6 +124,14 @@ on this CPU.
 product with a dense matrix, a C kernel whose backward pass multiplies by
 the stored transpose; Adam's L2 form of weight decay (`TensorAdam(l2=)`).
 
+`gat.py` is the graph attention network (Velickovic et al., 2018): each
+node learns how much to weight each neighbour, with 8 attention heads.
+The softmax runs over each node's own neighbours (a different number for
+every node) and is built from ops the core already had: gather each
+edge's endpoints, exp, scatter-add the totals onto the nodes, divide.
+81.6% +- 1.6 test accuracy over 5 seeds (paper: 83.0% +- 0.7), about 80
+seconds per run with early stopping.
+
 ## Text classification: fastText (`text_classify.py`)
 
 The bag-of-tricks baseline of Joulin et al. (2016) on AG News: average

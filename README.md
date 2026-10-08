@@ -231,6 +231,8 @@ lora.py          # LoRA adapters for fine-tuning frozen attention weights
 quantize.py      # int8 / int4 weight quantization and what it costs in loss
 speculative.py   # speculative decoding: a small model drafts, the large one checks
 gcn.py           # graph convolutional network on Cora, NanoGrad vs PyTorch
+gat.py           # graph attention network on Cora (softmax over each node's neighbours)
+sine.py          # sine-wave prediction with an LSTM trained by L-BFGS, NanoGrad vs PyTorch
 text_classify.py # fastText's bag of embeddings on AG News, NanoGrad vs PyTorch
 mobilenet.py     # depthwise separable convolutions (MobileNet) for CIFAR-10
 gan.py           # DCGAN on MNIST: transposed convolutions, adversarial training
