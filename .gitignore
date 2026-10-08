@@ -42,3 +42,4 @@ data/cora/cora.*
 data/ag_news/*.csv
 data/multi30k/*.de
 data/multi30k/*.en
+data/ett/*.csv
