@@ -1,6 +1,6 @@
 import unittest
 
-from losses import binary_cross_entropy, mse_loss, softmax_cross_entropy
+from losses import binary_cross_entropy, mse_loss, soft_cross_entropy, softmax_cross_entropy
 from tensor import Tensor
 
 
@@ -166,6 +166,24 @@ class StableCrossEntropyTests(unittest.TestCase):
         self.assertAlmostEqual(loss.item(), 900.0 + math.log1p(math.exp(-900.0)), places=9)
         loss.backward()
         self.assertEqual(list(logits.grad), [-1.0, 1.0])
+
+
+class SoftCrossEntropyTests(unittest.TestCase):
+    def test_one_hot_targets_give_the_usual_cross_entropy(self) -> None:
+        values = [0.3, -1.2, 2.0, 0.5, 0.1, -0.4]
+        hard = softmax_cross_entropy(Tensor(values, (2, 3)), [2, 0]).item()
+        soft = soft_cross_entropy(Tensor(values, (2, 3)), Tensor([0, 0, 1, 1, 0, 0], (2, 3))).item()
+        self.assertAlmostEqual(hard, soft, places=12)
+
+    def test_gradient_is_softmax_minus_targets(self) -> None:
+        import random
+
+        from test_gradcheck import max_gradient_error
+
+        rng = random.Random(0)
+        x = Tensor([rng.uniform(-3, 3) for _ in range(12)], (3, 4), requires_grad=True)
+        q = Tensor([0.1, 0.2, 0.3, 0.4, 0, 0, 1, 0, 0.25, 0.25, 0.25, 0.25], (3, 4))
+        self.assertLess(max_gradient_error(lambda: soft_cross_entropy(x, q), [x]), 1e-8)
 
 
 if __name__ == "__main__":

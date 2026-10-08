@@ -113,6 +113,36 @@ def softmax_cross_entropy(
     return out
 
 
+def soft_cross_entropy(logits: Tensor, targets: Tensor) -> Tensor:
+    """Mean cross entropy against target distributions instead of class ids:
+
+        loss = mean over rows of  -sum_c q_c log softmax(x)_c  =  logsumexp(x) - sum_c q_c x_c
+        dloss/dx = softmax(x) - q                              (per row, over rows)
+
+    (rows of ``targets`` sum to 1). Used for knowledge distillation, where
+    the targets are a teacher's softened predictions.
+    """
+
+    _require_same_shape(logits, targets)
+    rows, cols = logits.shape
+    x, q = logits.data, targets.data
+    probabilities = kernels.softmax_rows(x, cols)
+    loss = 0.0
+    for row in range(rows):
+        values = x[row * cols : (row + 1) * cols]
+        top = max(values)
+        log_total = top + math.log(sum(math.exp(v - top) for v in values))
+        loss += sum(q[row * cols + c] * (log_total - values[c]) for c in range(cols))
+    out = _op_result([loss / rows], (1,), (logits,), "soft_cross_entropy")
+
+    def _backward() -> None:
+        grad = kernels.add(probabilities, kernels.scale(q, -1.0))
+        _add_grad(logits, kernels.scale(grad, _grad_data(out)[0] / rows))
+
+    _set_backward(out, _backward)
+    return out
+
+
 def _target_nll(x, probabilities, row: int, cols: int, target: int) -> float:
     """-log p_target. When p_target underflows to 0 (a confident, wrong
     prediction), compute it from the logits instead: logsumexp(x) - x_target."""
