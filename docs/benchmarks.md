@@ -9,7 +9,7 @@ float64 the two then compute the same thing, so a comparison checks
 correctness (the weights at the end agree to rounding) and measures
 speed on identical work.
 
-All runs are on one 4-core Intel Xeon at 2.1 GHz (AVX-512), PyTorch
+All runs are on one 4-core Intel Xeon at 2.8 GHz (AVX-512), PyTorch
 2.14 for CPU. Unless a row says otherwise both frameworks use one core
 and float64, and NanoGrad uses its C kernels.
 
