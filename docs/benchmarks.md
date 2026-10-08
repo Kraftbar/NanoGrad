@@ -24,6 +24,7 @@ and float64, and NanoGrad uses its C kernels.
 | Penn Treebank | Zaremba et al.'s small LSTM, 13 epochs | running | paper: test perplexity 114.5 |
 | WikiText-2 | PyTorch's `word_language_model` LSTM, 6 epochs | running | |
 | WikiText-2 | 2-layer GPT, same recipe | running | |
+| Cora (citation graph) | GCN, pygcn's recipe, 10 seeds | **83.1% +- 0.6** test accuracy (PyTorch, own dropout masks: 82.9% +- 0.7) | GCN paper: 81.5% (on the Planetoid split) |
 | Tiny Shakespeare | nanoGPT's baby GPT, 2,000 steps | val loss **1.921** | nanoGPT, same recipe: 1.886 |
 | Tiny Shakespeare | BERT-style encoder, masked characters | identical in both | |
 | MNIST | VAE, 3 epochs | **117.3** nats per image (negative ELBO) | |

@@ -14,6 +14,7 @@ model families from the standard benchmarks:
 - **LLM gears**: KV cache, grouped-query and sliding-window attention,
   mixture of experts, LoRA, weight quantization, speculative decoding
 - **generative**: a variational autoencoder and a diffusion model on MNIST
+- **graphs**: a graph convolutional network (GCN) on the Cora citation graph
 
 Every family is checked against PyTorch running the same architecture from
 the same weights: in float64 the two train to the same numbers (weights
@@ -34,7 +35,7 @@ and each can be read on its own:
 +---------------------------------------------------------------------+
 | Model families                      | LLM gears                     |
 | lenet | resnet | vit | GPT | bert   | moe | lora | quantize |      |
-| lstm / gru | vae | diffusion        | speculative | bpe            |
+| lstm / gru | vae | diffusion | gcn  | speculative | bpe            |
 +---------------------------------------------------------------------+
 | Layers, losses, optimizers, training                                |
 | tensor_nn | losses | optim | schedules | train | parallel           |
@@ -225,6 +226,7 @@ moe.py           # mixture-of-experts feed-forward layer (router + experts)
 lora.py          # LoRA adapters for fine-tuning frozen attention weights
 quantize.py      # int8 / int4 weight quantization and what it costs in loss
 speculative.py   # speculative decoding: a small model drafts, the large one checks
+gcn.py           # graph convolutional network on Cora, NanoGrad vs PyTorch
 profiler.py      # time per op type (forward and backward) for any training step
 vae.py           # variational autoencoder (generative model)
 vae_compare.py   # the VAE on MNIST in NanoGrad and PyTorch

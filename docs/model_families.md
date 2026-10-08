@@ -109,3 +109,17 @@ double it back, with skip connections and a sinusoidal time embedding.
 
 *Added*: nearest-neighbour upsampling (an index-table gather), concat
 through index tables.
+
+## Graph networks: GCN (`gcn.py`)
+
+Kipf and Welling's graph convolutional network on the Cora citation graph:
+each layer averages every paper's features with those of the papers it
+cites or is cited by, then applies a linear layer. Two layers classify
+2,708 papers into 7 topics from the labels of 140. With pygcn's recipe it
+reaches 83% test accuracy, trains identically to PyTorch (weights equal to
+9e-13 after 200 steps), and runs 3x faster than PyTorch's sparse product
+on this CPU.
+
+*Added*: a sparse matrix (`SparseMatrix`, rows of nonzeros) and its
+product with a dense matrix, a C kernel whose backward pass multiplies by
+the stored transpose; Adam's L2 form of weight decay (`TensorAdam(l2=)`).
