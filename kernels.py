@@ -239,6 +239,17 @@ def conv_kernel_grad(
     return kernel_fn(image, index, grad, batches, image_size, filters, patch_size, positions)
 
 
+def conv_direct(
+    image: list[float], kernel: list[float], *, batches: int, channels: int, height: int, width: int,
+    filters: int, kernel_rows: int, kernel_cols: int,
+) -> list[float]:
+    """Stride-1 valid convolution computed directly, without patches (fast
+    for few filters): out[b, f, y, x] = sum of kernel[f, c, i, j] * image[b, c, y+i, x+j]."""
+
+    kernel_fn = kernels_c.conv_direct if BACKEND == "c" else reference.conv_direct
+    return kernel_fn(image, kernel, batches, channels, height, width, filters, kernel_rows, kernel_cols)
+
+
 def conv_input_grad(
     grad: list[float], kernel: list[float], index: Sequence[int], *,
     batches: int, image_size: int, filters: int, patch_size: int, positions: int,

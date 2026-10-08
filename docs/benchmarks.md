@@ -104,7 +104,7 @@ reach the same loss and accuracy.
 | tiny ViT, MNIST | 18.1 ms | 16.5 ms | 1.10x |
 | tiny ViT, CIFAR-10 | 24.9 ms | 22.5 ms | 1.11x |
 | VAE, MNIST | 26.7 ms | 24.9 ms | 1.07x |
-| BERT-style encoder, Tiny Shakespeare | 76.6 ms | 52.3 ms | 1.46x |
+| BERT-style encoder, Tiny Shakespeare | 67.3 ms | 56.1 ms | 1.20x |
 | WikiText-2 LSTM (2 x 200, 33K vocabulary) | 1,275 ms | 987 ms | 1.29x |
 | WikiText-2 LSTM, float32 | 635 ms | 464 ms | 1.37x |
 

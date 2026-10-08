@@ -176,6 +176,7 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.conv_forward.argtypes = [pointer, index_pointer, pointer, pointer] + [count, count] + [ctypes.c_int] * 3
     library.conv_kernel_grad.argtypes = [pointer, index_pointer, pointer, pointer] + [count, count] + [ctypes.c_int] * 3
     library.conv_input_grad.argtypes = [pointer, pointer, index_pointer, pointer] + [count, count] + [ctypes.c_int] * 3
+    library.conv_direct.argtypes = [pointer, pointer, pointer, count] + [ctypes.c_int] * 6
     for name in ("gather_indexed", "scatter_add_indexed"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer, count, count, count]
     library.depthwise_forward.argtypes = [pointer, index_pointer, pointer, pointer] + [count] * 5
@@ -386,6 +387,15 @@ def conv_input_grad(grad, kernel, index, batches: int, image_size: int,
     library.conv_input_grad(_buffer(grad_buffer), _buffer(kernel_buffer), index_buffer, _buffer(image_grad),
                             batches, image_size, filters, patch_size, positions)
     return image_grad
+
+
+def conv_direct(image, kernel, batches: int, channels: int, height: int, width: int,
+                filters: int, kernel_rows: int, kernel_cols: int) -> array:
+    image_buffer, kernel_buffer = _reals(image), _reals(kernel)
+    out = zeros(batches * filters * (height - kernel_rows + 1) * (width - kernel_cols + 1))
+    library.conv_direct(_buffer(image_buffer), _buffer(kernel_buffer), _buffer(out), batches,
+                        channels, height, width, filters, kernel_rows, kernel_cols)
+    return out
 
 
 def gather_indexed(

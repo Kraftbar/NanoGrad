@@ -235,6 +235,26 @@ def conv_forward(
     return out
 
 
+def conv_direct(
+    image: list[float], kernel: list[float], batches: int, channels: int, height: int, width: int,
+    filters: int, kernel_rows: int, kernel_cols: int,
+) -> list[float]:
+    """out[b, f, y, x] = sum over c, i, j of kernel[f, c, i, j] * image[b, c, y+i, x+j]."""
+
+    out_rows, out_cols = height - kernel_rows + 1, width - kernel_cols + 1
+    out = []
+    for b in range(batches):
+        for f in range(filters):
+            for y in range(out_rows):
+                for x in range(out_cols):
+                    out.append(math.fsum(
+                        kernel[((f * channels + c) * kernel_rows + i) * kernel_cols + j]
+                        * image[((b * channels + c) * height + y + i) * width + x + j]
+                        for c in range(channels) for i in range(kernel_rows) for j in range(kernel_cols)
+                    ))
+    return out
+
+
 def conv_kernel_grad(
     image: list[float], index: Sequence[int], grad: list[float],
     batches: int, image_size: int, filters: int, patch_size: int, positions: int,

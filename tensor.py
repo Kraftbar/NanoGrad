@@ -1777,11 +1777,18 @@ def conv2d_valid(image: Tensor, kernel: Tensor, *, stride: int = 1) -> Tensor:
 
     # out_b = kernels (O x K) @ patches_b^T  ->  (O x P) per image. The C
     # kernel reads every patch straight from the image through the index
-    # table (no patch matrix is built for the forward pass).
-    data = kernels.conv_forward(
-        image.data, patch_index, kernel.data, batches=batches, image_size=image_size,
-        filters=filters, patch_size=patch_size, positions=positions,
-    )
+    # table (no patch matrix is built for the forward pass). With few
+    # filters and stride 1, the direct loop is faster still.
+    if stride == 1 and filters <= _DIRECT_FILTERS:
+        data = kernels.conv_direct(
+            image.data, kernel.data, batches=batches, channels=channels, height=image_rows, width=image_cols,
+            filters=filters, kernel_rows=kernel_rows, kernel_cols=kernel_cols,
+        )
+    else:
+        data = kernels.conv_forward(
+            image.data, patch_index, kernel.data, batches=batches, image_size=image_size,
+            filters=filters, patch_size=patch_size, positions=positions,
+        )
     out = _op_result(data, out_shape, (image, kernel), "conv2d_valid")
 
     def _backward() -> None:
@@ -1793,9 +1800,14 @@ def conv2d_valid(image: Tensor, kernel: Tensor, *, stride: int = 1) -> Tensor:
                 image.data, patch_index, grad, batches=batches, image_size=image_size,
                 filters=filters, patch_size=patch_size, positions=positions,
             ))
-        # Large stride-1 images: the gradient as a full convolution (faster there; on
-        # small images the padding and flipping cost more than the scatter they save).
-        if image.requires_grad and stride == 1 and kernel.ndim == 4 and image_rows * image_cols >= 4096:
+        # Stride 1: the gradient as a full convolution, when that runs on the direct
+        # loop (few channels) or the image is large; on small images with many
+        # channels the padding and flipping cost more than the scatter they save.
+        # The full convolution also multiplies the zero border: only worth it
+        # while the image is not much larger than the output (3x3, not 5x5 on 8x8).
+        image_pixels, out_pixels = image_rows * image_cols, out_shape[-2] * out_shape[-1]
+        if (image.requires_grad and stride == 1 and kernel.ndim == 4 and image_pixels <= 1.5 * out_pixels
+                and (channels <= _DIRECT_FILTERS or image_pixels >= 4096)):
             _add_grad(image, _conv2d_input_grad_full(grad, kernel, batches, image_rows, image_cols, out_shape))
         elif image.requires_grad:
             # dPatches_b = dOut_b^T (P x O) @ K (O x K), then col2im: add each
@@ -1807,6 +1819,12 @@ def conv2d_valid(image: Tensor, kernel: Tensor, *, stride: int = 1) -> Tensor:
 
     _set_backward(out, _backward)
     return out
+
+
+# Up to this many filters, a stride-1 convolution runs on kernels.conv_direct
+# (one vector of output pixels times 8 filters at a time) instead of the
+# patch-table matrix product, which pays more to pack patches than to multiply.
+_DIRECT_FILTERS = 16
 
 
 def _conv2d_input_grad_full(grad, kernel: Tensor, batches: int, image_rows: int, image_cols: int, out_shape):
@@ -1835,6 +1853,11 @@ def _conv2d_input_grad_full(grad, kernel: Tensor, batches: int, image_rows: int,
         k[((f * channels + c) * kernel_rows + kernel_rows - 1 - i) * kernel_cols + kernel_cols - 1 - j]
         for c in range(channels) for f in range(filters) for i in range(kernel_rows) for j in range(kernel_cols)
     ])
+    if channels <= _DIRECT_FILTERS:                              # C filters of this convolution
+        return kernels.conv_direct(
+            padded, flipped, batches=batches, channels=filters, height=padded_rows, width=padded_cols,
+            filters=channels, kernel_rows=kernel_rows, kernel_cols=kernel_cols,
+        )
     index = _conv2d_patch_index(filters, padded_rows, padded_cols, kernel_rows, kernel_cols, 1)
     return kernels.conv_forward(
         padded, index, flipped, batches=batches, image_size=filters * padded_rows * padded_cols,

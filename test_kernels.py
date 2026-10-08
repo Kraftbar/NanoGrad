@@ -122,6 +122,19 @@ class KernelBackendTests(unittest.TestCase):
                     ))
                     self.assertListsClose(python, c)
 
+    def test_conv_direct_agrees(self) -> None:
+        # Rows longer and shorter than a vector, a partial filter group (5, 11),
+        # and outputs that end exactly at the end of the buffer.
+        for batches, channels, height, width, filters, kh, kw in [
+            (2, 3, 7, 21, 5, 3, 3), (1, 2, 6, 40, 11, 3, 2), (3, 1, 9, 9, 8, 5, 5), (2, 4, 5, 18, 16, 1, 1),
+        ]:
+            shape = dict(batches=batches, channels=channels, height=height, width=width,
+                         filters=filters, kernel_rows=kh, kernel_cols=kw)
+            image = values(batches * channels * height * width, 61)
+            kernel = values(filters * channels * kh * kw, 62)
+            python, c = self.run_both(lambda: kernels.conv_direct(image, kernel, **shape))
+            self.assertListsClose(python, c)
+
     def test_conv_forward_agrees_with_gather_then_gemm(self) -> None:
         from tensor import _conv2d_patch_index
 

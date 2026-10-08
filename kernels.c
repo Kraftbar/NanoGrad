@@ -516,6 +516,113 @@ void conv_input_grad(const real *grad, const real *kernel, const long *index, re
 #endif
 }
 
+/*
+ * Direct convolution, stride 1, for layers with few filters. With 8
+ * filters, packing patches for the matrix product above costs more than
+ * the multiplications; here nothing is packed. Each output row is cut into
+ * vectors of VECTOR_WIDTH pixels, and for 8 filters at once
+ *
+ *     out[f, y, x:x+V] += kernel[f, c, i, j] * image[c, y+i, x+j : x+j+V]
+ *
+ * over every (c, i, j): one vector load serves 8 multiply-adds, and the 8
+ * sums stay in registers until the row segment is done.
+ * image (B, C, H, W), kernel (F, C, kh, kw), out (B, F, H-kh+1, W-kw+1).
+ */
+#define DIRECT_GROUP 8
+
+#ifdef VECTOR_WIDTH
+/* V values from src, or the ones before `end` (zeros after) near the end of the buffer. */
+static inline vec load_until(const real *src, const real *end)
+{
+    vec v;
+    if (src + VECTOR_WIDTH <= end) {
+        VEC_LOAD(v, src);
+    } else {
+        real tmp[VECTOR_WIDTH] = {0};
+        for (long l = 0; src + l < end; l++) tmp[l] = src[l];
+        VEC_LOAD(v, tmp);
+    }
+    return v;
+}
+
+/* One row segment of `valid` <= V outputs for a group of 8 filters, of
+ * which the first `stored` are written; weights are packed [c][i][j][g]. */
+static inline void direct_segment(
+    const real *image, const real *end, const real *weights, real *out, long out_plane,
+    int channels, int height, int width, int kh, int kw, int y, int x0, int valid, int stored)
+{
+    const int group = DIRECT_GROUP;
+    vec acc[DIRECT_GROUP];
+    memset(acc, 0, sizeof acc);
+    const real *w = weights;
+    for (int c = 0; c < channels; c++)
+        for (int i = 0; i < kh; i++) {
+            const real *row = image + ((long)c * height + y + i) * width + x0;
+            for (int j = 0; j < kw; j++, w += group) {
+                vec v = load_until(row + j, end);     /* lanes past the row only feed outputs not stored */
+                for (int g = 0; g < group; g++) acc[g] += w[g] * v;
+            }
+        }
+    for (int g = 0; g < stored; g++) {
+        real *dst = out + g * out_plane;
+        if (valid == VECTOR_WIDTH) {
+            VEC_STORE(dst, acc[g]);
+        } else {
+            real tmp[VECTOR_WIDTH];
+            VEC_STORE(tmp, acc[g]);
+            for (int l = 0; l < valid; l++) dst[l] = tmp[l];
+        }
+    }
+}
+#endif
+
+void conv_direct(const real *image, const real *kernel, real *out, long batches,
+                 int channels, int height, int width, int filters, int kh, int kw)
+{
+    int oh = height - kh + 1, ow = width - kw + 1;
+    long patch = (long)channels * kh * kw, image_size = (long)channels * height * width;
+#ifdef VECTOR_WIDTH
+    /* Weights of each group of 8 filters, as [c][i][j][g]. A last, partial
+     * group is padded with zero filters: computing them costs less than a
+     * loop whose length the compiler does not know (its sums would not stay
+     * in registers). */
+    int groups = (filters + DIRECT_GROUP - 1) / DIRECT_GROUP;
+    real *weights = calloc((size_t)groups * DIRECT_GROUP * patch, sizeof(real));
+    if (weights == NULL) abort();
+    for (int f = 0; f < filters; f++)
+        for (long q = 0; q < patch; q++)
+            weights[(f / DIRECT_GROUP * patch + q) * DIRECT_GROUP + f % DIRECT_GROUP] = kernel[f * patch + q];
+    const real *end = image + batches * image_size;
+    for (long b = 0; b < batches; b++) {
+        const real *img = image + b * image_size;
+        for (int f0 = 0; f0 < filters; f0 += DIRECT_GROUP) {
+            int group = filters - f0 < DIRECT_GROUP ? filters - f0 : DIRECT_GROUP;
+            real *dst = out + (b * filters + f0) * (long)oh * ow;
+            for (int y = 0; y < oh; y++)
+                for (int x0 = 0; x0 < ow; x0 += VECTOR_WIDTH) {
+                    int valid = ow - x0 < VECTOR_WIDTH ? ow - x0 : VECTOR_WIDTH;
+                    direct_segment(img, end, weights + f0 * patch, dst + (long)y * ow + x0, (long)oh * ow,
+                                   channels, height, width, kh, kw, y, x0, valid, group);
+                }
+        }
+    }
+    free(weights);
+#else
+    for (long b = 0; b < batches; b++)
+        for (int f = 0; f < filters; f++)
+            for (int y = 0; y < oh; y++)
+                for (int x = 0; x < ow; x++) {
+                    double total = 0.0;
+                    for (int c = 0; c < channels; c++)
+                        for (int i = 0; i < kh; i++)
+                            for (int j = 0; j < kw; j++)
+                                total += kernel[f * patch + ((long)c * kh + i) * kw + j]
+                                       * image[b * image_size + ((long)c * height + y + i) * width + x + j];
+                    out[((b * filters + f) * oh + y) * (long)ow + x] = (real) total;
+                }
+#endif
+}
+
 #undef A_AT
 
 /*
