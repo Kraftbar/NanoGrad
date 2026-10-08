@@ -34,7 +34,8 @@ import random
 from time import perf_counter
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from functools import lru_cache
+from collections import OrderedDict
+from functools import lru_cache, wraps
 from typing import Callable, NamedTuple
 
 import kernels
@@ -1865,7 +1866,36 @@ def _conv2d_shapes(
     return batches, channels, image_rows, image_cols, filters, out_shape
 
 
-@lru_cache(maxsize=64)
+def _size_bounded_cache(max_numbers: int):
+    """Like ``lru_cache``, but bounded by the total length of the cached
+    tables: a convolution's patch table holds positions x patch size numbers,
+    hundreds of MB for a large image, and every new image size adds one."""
+
+    def decorate(function):
+        cache: OrderedDict = OrderedDict()
+        total = 0
+
+        @wraps(function)
+        def cached(*args):
+            nonlocal total
+            if args in cache:
+                cache.move_to_end(args)
+                return cache[args]
+            value = function(*args)
+            cache[args] = value
+            total += len(value)
+            while total > max_numbers and len(cache) > 1:          # drop the least recently used
+                _, old = cache.popitem(last=False)
+                total -= len(old)
+            return value
+
+        cached.cache_clear = lambda: (cache.clear(), None)[1]
+        return cached
+
+    return decorate
+
+
+@_size_bounded_cache(64_000_000)                   # 64M indices: 512 MB
 def _conv2d_patch_index(
     channels: int,
     image_rows: int,
