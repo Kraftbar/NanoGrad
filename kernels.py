@@ -447,6 +447,12 @@ def bce_with_logits_sum(x: list[float], t: list[float]) -> float:
     return (kernels_c.bce_with_logits_sum if BACKEND == "c" else reference.bce_with_logits_sum)(x, t)
 
 
+def bce_with_logits_backward(x: list[float], t: list[float], g: float) -> list[float]:
+    """Its gradient for the logits, times the output gradient g: g * (sigmoid(x) - t)."""
+
+    return (kernels_c.bce_with_logits_backward if BACKEND == "c" else reference.bce_with_logits_backward)(x, t, g)
+
+
 def relu(x: list[float]) -> list[float]:
     return (kernels_c.relu if BACKEND == "c" else reference.relu)(x)
 

@@ -57,9 +57,8 @@ def binary_cross_entropy_with_logits(logits: Tensor, targets: Tensor, *, reducti
 
     def _backward() -> None:
         g = _grad_data(out)[0] * scale
-        difference = kernels.add(kernels.sigmoid(logits.data), kernels.scale(targets.data, -1.0))
         if logits.requires_grad:
-            _add_grad(logits, kernels.scale(difference, g))
+            _add_grad(logits, kernels.bce_with_logits_backward(logits.data, targets.data, g))
         if targets.requires_grad:   # d/dt = -x
             _add_grad(targets, kernels.scale(logits.data, -g))
 

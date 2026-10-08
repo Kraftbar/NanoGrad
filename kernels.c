@@ -1375,16 +1375,73 @@ void lstm_output_backward(const real *gates, const real *c_new, const real *grad
 }
 
 /*
+ * log(1 + u) for u in [0, 1], written to vectorize like fast_exp:
+ *
+ *     log y = 2 atanh(s) = 2 (s + s^3/3 + s^5/5 + ...),   s = (y - 1) / (y + 1)
+ *
+ * y = 1 + u stays in [1, sqrt 2], or is halved into [sqrt 2 / 2, 1] (adding
+ * ln 2), so |s| <= 0.172 and the series to s^21 reaches double precision.
+ * s is computed from u directly ((y - 1) / (y + 1) = u / (2 + u), or
+ * (u - 1) / (u + 3) for y / 2), so 1 + u is never rounded.
+ */
+static inline double fast_log1p_unit(double u)
+{
+    const double ln2 = 0.6931471805599453;
+    int halve = u > 0.41421356237309503;                       /* sqrt 2 - 1 */
+    double s = (halve ? u - 1.0 : u) / (halve ? u + 3.0 : u + 2.0);   /* one division */
+    double s2 = s * s;
+    double p = 1.0 / 21.0;                                     /* Horner down to 1 */
+    p = p * s2 + 1.0 / 19.0;
+    p = p * s2 + 1.0 / 17.0;
+    p = p * s2 + 1.0 / 15.0;
+    p = p * s2 + 1.0 / 13.0;
+    p = p * s2 + 1.0 / 11.0;
+    p = p * s2 + 1.0 / 9.0;
+    p = p * s2 + 1.0 / 7.0;
+    p = p * s2 + 1.0 / 5.0;
+    p = p * s2 + 1.0 / 3.0;
+    p = p * s2 + 1.0;
+    return (halve ? ln2 : 0.0) + 2.0 * s * p;
+}
+
+/*
  * Binary cross entropy on logits, summed:
  *     sum of max(x, 0) - x * t + log(1 + e^-|x|)
  * (the stable form of -[t log p + (1 - t) log(1 - p)] with p = sigmoid(x)).
+ * In chunks through a double buffer, as in exp_shifted, so the exp and log
+ * vectorize, with 8 running totals.
  */
 double bce_with_logits_sum(const real *x, const real *t, long count)
 {
-    double total = 0.0;
-    for (long i = 0; i < count; i++) {
-        double value = x[i];
-        total += (value > 0.0 ? value : 0.0) - value * t[i] + log1p(exp(-fabs(value)));
+    enum { CHUNK = 256, LANES = 8 };
+    double buffer[CHUNK], lanes[LANES] = {0};
+    for (long start = 0; start < count; start += CHUNK) {
+        long size = count - start < CHUNK ? count - start : CHUNK;
+        for (long i = 0; i < size; i++) buffer[i] = -fabs((double) x[start + i]);
+        for (long i = 0; i < size; i++) buffer[i] = fast_exp(buffer[i]);
+        for (long i = 0; i < size; i++) buffer[i] = fast_log1p_unit(buffer[i]);
+        for (long i = 0; i < size; i++) {
+            double value = x[start + i];
+            buffer[i] += (value > 0.0 ? value : 0.0) - value * t[start + i];
+        }
+        long i = 0;
+        for (; i + LANES <= size; i += LANES)
+            for (int l = 0; l < LANES; l++) lanes[l] += buffer[i + l];
+        for (; i < size; i++) lanes[0] += buffer[i];
     }
+    double total = 0.0;
+    for (int l = 0; l < LANES; l++) total += lanes[l];
     return total;
+}
+
+/* Its gradient, scaled by the output's gradient g:  dx = g * (sigmoid(x) - t). */
+void bce_with_logits_backward(const real *x, const real *t, double g, real *dx, long count)
+{
+    double buffer[256];
+    for (long start = 0; start < count; start += 256) {
+        long size = count - start < 256 ? count - start : 256;
+        for (long i = 0; i < size; i++) buffer[i] = x[start + i];
+        for (long i = 0; i < size; i++) buffer[i] = fast_sigmoid(buffer[i]);
+        for (long i = 0; i < size; i++) dx[start + i] = (real) (g * (buffer[i] - t[start + i]));
+    }
 }

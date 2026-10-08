@@ -488,6 +488,10 @@ def bce_with_logits_sum(x: list[float], t: list[float]) -> float:
     return math.fsum(max(v, 0.0) - v * target + math.log1p(math.exp(-abs(v))) for v, target in zip(x, t))
 
 
+def bce_with_logits_backward(x: list[float], t: list[float], g: float) -> list[float]:
+    return [g * (p - target) for p, target in zip(sigmoid(x), t)]
+
+
 def relu(x: list[float]) -> list[float]:
     return [value if value > 0.0 else 0.0 for value in x]
 

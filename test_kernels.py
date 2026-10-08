@@ -232,10 +232,13 @@ class KernelBackendTests(unittest.TestCase):
         self.assertListsClose(python, c)
 
     def test_bce_with_logits_sum_agrees(self) -> None:
-        x = [value * 40.0 for value in values(30, 37)]       # large |x| must stay stable
-        t = [abs(value) for value in values(30, 38)]
+        # 600 values: more than one 256-value chunk, and a partial one; large |x| must stay stable.
+        x = [value * 40.0 for value in values(600, 37)] + [1e-3, -0.4, 0.88, 0.881, 0.0]
+        t = [abs(value) for value in values(len(x), 38)]
         python, c = self.run_both(lambda: kernels.bce_with_logits_sum(x, t))
-        self.assertAlmostEqual(python, c, places=9)
+        self.assertAlmostEqual(python, c, delta=1e-13 * abs(python))
+        python, c = self.run_both(lambda: kernels.bce_with_logits_backward(x, t, 0.7))
+        self.assertListsClose(python, c)
 
     def test_gather_and_scatter_rows_agree(self) -> None:
         table, ids = values(5 * 4, 43), [3, 0, 3, 4]
