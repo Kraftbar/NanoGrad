@@ -143,3 +143,58 @@ def greedy_translate(model: Seq2SeqTransformer, source: list[list[int]], *, max_
             if all(done):
                 break
     return [[token for token in row[1:] if token not in (PAD,)] for row in outputs]
+
+
+def beam_translate(model: Seq2SeqTransformer, source: list[int], *, beam: int = 4, max_length: int,
+                   length_penalty: float = 1.0) -> list[int]:
+    """Beam search: keep the ``beam`` most likely partial translations at
+    every step instead of only the single most likely next token.
+
+    Every candidate is scored by its total log-probability divided by
+    length ** ``length_penalty`` (otherwise short outputs win simply for
+    having fewer probabilities multiplied together). A candidate that
+    writes EOS is finished; the search stops when the best finished one
+    beats every unfinished one.
+    """
+
+    import math
+
+    from tensor import no_grad
+    from train import evaluation_mode
+
+    def score(log_probability: float, length: int) -> float:
+        return log_probability / max(1, length) ** length_penalty
+
+    with no_grad(), evaluation_mode(model):
+        encoded = {}                                    # the source encoded once per row count
+        alive = [([BOS], 0.0)]
+        finished: list[tuple[list[int], float]] = []
+        for _ in range(max_length):
+            rows = len(alive)
+            if rows not in encoded:
+                encoded[rows] = model.encode([source] * rows)
+            scores = model.decode([tokens for tokens, _ in alive], *encoded[rows])
+            length, vocab = scores.shape[1], scores.shape[2]
+            candidates = []
+            for row, (tokens, total) in enumerate(alive):
+                start = (row * length + length - 1) * vocab
+                logits = scores.data[start : start + vocab]
+                top = max(logits)
+                log_sum = top + math.log(sum(math.exp(value - top) for value in logits))
+                best = sorted(range(vocab), key=logits.__getitem__, reverse=True)[:beam]
+                candidates += [(tokens + [token], total + logits[token] - log_sum) for token in best]
+            candidates.sort(key=lambda c: score(c[1], len(c[0]) - 1), reverse=True)
+            alive = []
+            for tokens, total in candidates:
+                if tokens[-1] == EOS:
+                    finished.append((tokens, total))
+                elif len(alive) < beam:
+                    alive.append((tokens, total))
+                if len(alive) == beam:
+                    break
+            best_finished = max((score(t, len(s) - 1) for s, t in finished), default=-math.inf)
+            if not alive or best_finished >= max(score(t, len(s) - 1) for s, t in alive):
+                break
+        pool = finished or alive
+        tokens, _ = max(pool, key=lambda c: score(c[1], len(c[0]) - 1))
+    return [token for token in tokens[1:] if token not in (PAD, EOS)] + ([EOS] if tokens[-1] == EOS else [])

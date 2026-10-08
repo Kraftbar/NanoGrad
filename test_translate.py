@@ -3,7 +3,7 @@ import random
 import unittest
 
 from optim import TensorAdam
-from seq2seq import EOS, Seq2SeqTransformer, greedy_translate, pad
+from seq2seq import EOS, Seq2SeqTransformer, beam_translate, greedy_translate, pad
 from translate import batch_loss, bleu, tokenize
 
 
@@ -47,6 +47,8 @@ class Seq2SeqTests(unittest.TestCase):
         tests = [[3, 4, 5], [9, 8, 7, 6], [5, 9]]
         outputs = greedy_translate(model, [words + [EOS] for words in tests], max_length=6)
         self.assertEqual([out[:-1] for out in outputs], [words[::-1] for words in tests])
+        for words in tests:
+            self.assertEqual(beam_translate(model, words + [EOS], beam=3, max_length=6)[:-1], words[::-1])
 
     @unittest.skipUnless(HAS_TORCH, "PyTorch not installed")
     def test_pytorch_twin_computes_the_same_scores_and_gradients(self) -> None:

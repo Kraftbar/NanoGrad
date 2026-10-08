@@ -30,7 +30,7 @@ from time import perf_counter
 from losses import softmax_cross_entropy
 from optim import TensorAdam
 from schedules import warmup_cosine
-from seq2seq import BOS, EOS, PAD, Seq2SeqTransformer, greedy_translate, pad
+from seq2seq import BOS, EOS, PAD, Seq2SeqTransformer, beam_translate, greedy_translate, pad
 from tensor import Tensor, gather_rows, no_grad
 from train import evaluation_mode
 
@@ -116,8 +116,13 @@ def bleu(hypotheses: list[list[str]], references: list[list[str]], max_n: int = 
     return 100.0 * math.exp(log_precision + brevity)
 
 
-def evaluate(model, pairs, source_vocab: Vocab, target_vocab: Vocab, *, limit: int | None = None) -> float:
+def evaluate(model, pairs, source_vocab: Vocab, target_vocab: Vocab, *, limit: int | None = None,
+             beam: int = 1) -> float:
     pairs = pairs[:limit]
+    if beam > 1:
+        hypotheses = [target_vocab.decode(beam_translate(model, source_vocab.encode(src) + [EOS], beam=beam,
+                                                         max_length=len(src) + 10)) for src, _ in pairs]
+        return bleu(hypotheses, [tgt for _, tgt in pairs])
     hypotheses = []
     for start in range(0, len(pairs), 100):
         chunk = pairs[start : start + 100]
@@ -174,7 +179,10 @@ def run(args) -> dict:
               f"valid BLEU {score:.1f}, {minutes:.1f} min", flush=True)
         history.append({"epoch": epoch, "valid_bleu": score, "valid_loss": valid_loss})
     test = evaluate(model, test_words, source_vocab, target_vocab)
-    print(f"test 2016 BLEU {test:.1f}", flush=True)
+    print(f"test 2016 BLEU {test:.1f} (greedy)", flush=True)
+    if args.beam > 1:
+        beam_test = evaluate(model, test_words, source_vocab, target_vocab, beam=args.beam)
+        print(f"test 2016 BLEU {beam_test:.1f} (beam {args.beam})", flush=True)
     for src, tgt in test_words[:3]:
         out = greedy_translate(model, [source_vocab.encode(src) + [EOS]], max_length=len(src) + 10)[0]
         print(f"  {' '.join(src)}\n  -> {' '.join(target_vocab.decode(out))}\n     ({' '.join(tgt)})")
@@ -253,6 +261,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--label-smoothing", type=float, default=0.1)
     parser.add_argument("--bleu-limit", type=int, default=300, help="validation sentences scored each epoch")
+    parser.add_argument("--beam", type=int, default=4, help="beam width for the final test score (1: greedy only)")
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--compare", action="store_true", help="NanoGrad vs PyTorch on the same steps")
     parser.add_argument("--steps", type=int, default=20, help="--compare: training steps")
