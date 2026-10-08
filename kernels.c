@@ -1066,6 +1066,49 @@ void rms_norm_rows_backward(const real *grad, const real *x, const real *inv_rms
  *     dx = inv_std_c * (g - mean(g) - x_hat * mean(g * x_hat))
  *     dweight_c = sum dy * x_hat,   dbias_c = sum dy
  */
+/*
+ * Sums over a plane with 8 independent partial sums. One running total is
+ * a chain of adds, each waiting for the last; separate partials let the
+ * compiler vectorize the loop (the result differs only in rounding).
+ */
+#define PARTIALS 8
+
+static double plane_sum(const real *x, long n)
+{
+    double part[PARTIALS] = {0};
+    long i = 0;
+    for (; i + PARTIALS <= n; i += PARTIALS)
+        for (int k = 0; k < PARTIALS; k++) part[k] += x[i + k];
+    double total = 0.0;
+    for (; i < n; i++) total += x[i];
+    for (int k = 0; k < PARTIALS; k++) total += part[k];
+    return total;
+}
+
+static double plane_squares(const real *x, long n, double m)       /* sum of (x - m)^2 */
+{
+    double part[PARTIALS] = {0};
+    long i = 0;
+    for (; i + PARTIALS <= n; i += PARTIALS)
+        for (int k = 0; k < PARTIALS; k++) part[k] += (x[i + k] - m) * (x[i + k] - m);
+    double total = 0.0;
+    for (; i < n; i++) total += (x[i] - m) * (x[i] - m);
+    for (int k = 0; k < PARTIALS; k++) total += part[k];
+    return total;
+}
+
+static double plane_dot(const real *a, const real *b, long n)
+{
+    double part[PARTIALS] = {0};
+    long i = 0;
+    for (; i + PARTIALS <= n; i += PARTIALS)
+        for (int k = 0; k < PARTIALS; k++) part[k] += (double) a[i + k] * b[i + k];
+    double total = 0.0;
+    for (; i < n; i++) total += (double) a[i] * b[i];
+    for (int k = 0; k < PARTIALS; k++) total += part[k];
+    return total;
+}
+
 void batch_norm_channels(const real *x, const real *weight, const real *bias,
                          real *y, real *x_hat, real *inv_std, real *mean, real *variance,
                          long batch, long channels, long plane, double eps)
@@ -1073,15 +1116,9 @@ void batch_norm_channels(const real *x, const real *weight, const real *bias,
     double count = (double)(batch * plane);
     for (long c = 0; c < channels; c++) {
         double total = 0.0;
-        for (long b = 0; b < batch; b++) {
-            const real *in = x + (b * channels + c) * plane;
-            for (long i = 0; i < plane; i++) total += in[i];
-        }
+        for (long b = 0; b < batch; b++) total += plane_sum(x + (b * channels + c) * plane, plane);
         double m = total / count, squares = 0.0;
-        for (long b = 0; b < batch; b++) {
-            const real *in = x + (b * channels + c) * plane;
-            for (long i = 0; i < plane; i++) squares += (in[i] - m) * (in[i] - m);
-        }
+        for (long b = 0; b < batch; b++) squares += plane_squares(x + (b * channels + c) * plane, plane, m);
         double v = squares / count, scale = 1.0 / sqrt(v + eps);
         mean[c] = m;
         variance[c] = v;
@@ -1106,10 +1143,8 @@ void batch_norm_channels_backward(const real *grad, const real *x_hat, const rea
         double sum_dy = 0.0, sum_dy_h = 0.0;
         for (long b = 0; b < batch; b++) {
             long offset = (b * channels + c) * plane;
-            for (long i = 0; i < plane; i++) {
-                sum_dy += grad[offset + i];
-                sum_dy_h += grad[offset + i] * x_hat[offset + i];
-            }
+            sum_dy += plane_sum(grad + offset, plane);
+            sum_dy_h += plane_dot(grad + offset, x_hat + offset, plane);
         }
         dweight[c] = sum_dy_h;
         dbias[c] = sum_dy;

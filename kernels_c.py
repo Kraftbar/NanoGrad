@@ -616,7 +616,7 @@ def window_max(
     keep, index_buffer = _index_buffer(index)
     windows = len(index) // window_size
     out = zeros(planes * windows)
-    argmax, argmax_buffer = _index_buffer([0] * (planes * windows))
+    argmax, argmax_buffer = _index_buffer(array("l", [0]) * (planes * windows))
     library.window_max(
         _buffer(image_buffer), index_buffer, _buffer(out), argmax_buffer,
         planes, plane_size, windows, window_size,
