@@ -226,3 +226,44 @@ identical. On the baby GPT at batch 32 (`--recompute`):
 A third of the memory for half again the time; the theory says a third
 more time (one extra forward pass of each block), and the rest is
 Python building each block's graph twice.
+
+## Results: context past the training length (`context.py`)
+
+The LLaMA-style baby GPT was trained on 64-character windows, with
+rotary positions. It is read at 128 and 256 characters in two ways.
+*Extrapolating* uses the raw positions, so the rotation angles go past
+those seen in training. *Interpolating* (Chen et al., 2023) scales
+positions by 64 / L, so every angle is a trained one. Each way is also
+fine-tuned for 300 steps at the new length. The control is the same
+fine-tune at 64. Validation loss is in nats per character, over the
+whole window and over its last quarter (the positions with the most
+history):
+
+| length | method | loss | last quarter |
+| ---: | --- | ---: | ---: |
+| 64 | as trained | 1.671 | 1.647 |
+| 64 | + 300 steps (control) | 1.706 | 1.683 |
+| 128 | extrapolate | 1.748 | 1.951 |
+| 128 | interpolate | 2.627 | 2.634 |
+| 128 | extrapolate + 300 steps | **1.665** | **1.634** |
+| 128 | interpolate + 300 steps | 1.679 | 1.653 |
+| 256 | extrapolate | 2.005 | 2.373 |
+| 256 | interpolate | 3.234 | 3.213 |
+| 256 | extrapolate + 300 steps | **1.639** | 1.646 |
+| 256 | interpolate + 300 steps | 1.702 | 1.694 |
+
+The control matters. The same 300 steps do not help at 64 characters
+(1.671 -> 1.706), so the gains at 128 and 256 come from the longer
+history, not from extra training.
+
+Without fine-tuning, both methods get worse. Extrapolation degrades
+gradually, mostly at the late positions, where the angles are new.
+Interpolation is much worse everywhere, because it squeezes the
+fastest-rotating pairs that encode which character came just before.
+
+After a short fine-tune, both use the longer context. At this scale
+extrapolation comes out ahead, unlike in the paper. The likely reason is
+that with 32-dimensional heads, the slowest rotary pairs turn by only
+about 0.05 radians over 256 positions, so extrapolating creates few
+truly unseen angles. LLaMA's long-range pairs, at 2K -> 32K tokens, do.
+
