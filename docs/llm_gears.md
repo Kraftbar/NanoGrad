@@ -267,3 +267,36 @@ that with 32-dimensional heads, the slowest rotary pairs turn by only
 about 0.05 radians over 256 positions, so extrapolating creates few
 truly unseen angles. LLaMA's long-range pairs, at 2K -> 32K tokens, do.
 
+
+## Results: preference tuning with DPO (`dpo.py`)
+
+The LLaMA-style baby GPT writes many plausible-looking non-words. The
+"labeler" prefers whichever of two sampled continuations has the higher
+real-word score (+1 for each complete word found in Shakespeare's text,
+-1 for each invented one). 2,000 such pairs, each two 40-character
+continuations of a 16-character prompt sampled from the model itself, then
+one DPO epoch (beta 0.1, Adam at 1e-4, batches of 16 pairs, 125 steps):
+
+| | word score per continuation (200 held-out prompts) |
+| --- | ---: |
+| before | +3.89 |
+| after DPO | **+7.51** |
+
+The DPO loss fell from log 2 (0.693) to 0.44, and the policy ranked 81%
+of training pairs right by the end. The log-probability ratio to the
+reference, a KL estimate, is 13.4 nats per 40-character continuation:
+a large move for one epoch. A smaller beta or fewer steps trade score for
+staying closer.
+
+Samples after tuning (prompt + continuation):
+
+```text
+ee with thy yard be to out is to man:\nYou ha! you, we wa
+ncharitable dog! cry, --O kin is the honour.\nSo I be ere
+ure, I will so eve up him him get, and not but do it\nOr
+```
+
+It works as DPO should: more real, short words. They are still in a
+loose order, because the preference asked for real words, not for
+sense. The PyTorch check (`--compare`) runs the same DPO loss and
+gradient through the twin; they agree to 1e-15.
