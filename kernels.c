@@ -814,6 +814,49 @@ void softmax_rows_backward(const real *y, const real *grad, real *dx, long rows,
 }
 
 /*
+ * Sums over a plane with 8 independent partial sums. One running total is
+ * a chain of adds, each waiting for the last; separate partials let the
+ * compiler vectorize the loop (the result differs only in rounding).
+ */
+#define PARTIALS 8
+
+static double plane_sum(const real *x, long n)
+{
+    double part[PARTIALS] = {0};
+    long i = 0;
+    for (; i + PARTIALS <= n; i += PARTIALS)
+        for (int k = 0; k < PARTIALS; k++) part[k] += x[i + k];
+    double total = 0.0;
+    for (; i < n; i++) total += x[i];
+    for (int k = 0; k < PARTIALS; k++) total += part[k];
+    return total;
+}
+
+static double plane_squares(const real *x, long n, double m)       /* sum of (x - m)^2 */
+{
+    double part[PARTIALS] = {0};
+    long i = 0;
+    for (; i + PARTIALS <= n; i += PARTIALS)
+        for (int k = 0; k < PARTIALS; k++) part[k] += (x[i + k] - m) * (x[i + k] - m);
+    double total = 0.0;
+    for (; i < n; i++) total += (x[i] - m) * (x[i] - m);
+    for (int k = 0; k < PARTIALS; k++) total += part[k];
+    return total;
+}
+
+static double plane_dot(const real *a, const real *b, long n)
+{
+    double part[PARTIALS] = {0};
+    long i = 0;
+    for (; i + PARTIALS <= n; i += PARTIALS)
+        for (int k = 0; k < PARTIALS; k++) part[k] += (double) a[i + k] * b[i + k];
+    double total = 0.0;
+    for (; i < n; i++) total += (double) a[i] * b[i];
+    for (int k = 0; k < PARTIALS; k++) total += part[k];
+    return total;
+}
+
+/*
  * LayerNorm over each contiguous row of `width` values:
  *     x_hat = (x - mean) / sqrt(var + eps),   y = x_hat * weight + bias
  * Saves x_hat and inv_std = 1 / sqrt(var + eps) for the backward pass:
@@ -827,11 +870,8 @@ void layer_norm_rows(const real *x, const real *weight, const real *bias,
 {
     for (long r = 0; r < rows; r++) {
         const real *in = x + r * width;
-        double mean = 0.0, variance = 0.0;
-        for (long i = 0; i < width; i++) mean += in[i];
-        mean /= width;
-        for (long i = 0; i < width; i++) variance += (in[i] - mean) * (in[i] - mean);
-        variance /= width;
+        double mean = plane_sum(in, width) / width;
+        double variance = plane_squares(in, width, mean) / width;
         double scale = 1.0 / sqrt(variance + eps);
         inv_std[r] = scale;
         for (long i = 0; i < width; i++) {
@@ -1173,48 +1213,6 @@ void rms_norm_rows_backward(const real *grad, const real *x, const real *inv_rms
  *     dx = inv_std_c * (g - mean(g) - x_hat * mean(g * x_hat))
  *     dweight_c = sum dy * x_hat,   dbias_c = sum dy
  */
-/*
- * Sums over a plane with 8 independent partial sums. One running total is
- * a chain of adds, each waiting for the last; separate partials let the
- * compiler vectorize the loop (the result differs only in rounding).
- */
-#define PARTIALS 8
-
-static double plane_sum(const real *x, long n)
-{
-    double part[PARTIALS] = {0};
-    long i = 0;
-    for (; i + PARTIALS <= n; i += PARTIALS)
-        for (int k = 0; k < PARTIALS; k++) part[k] += x[i + k];
-    double total = 0.0;
-    for (; i < n; i++) total += x[i];
-    for (int k = 0; k < PARTIALS; k++) total += part[k];
-    return total;
-}
-
-static double plane_squares(const real *x, long n, double m)       /* sum of (x - m)^2 */
-{
-    double part[PARTIALS] = {0};
-    long i = 0;
-    for (; i + PARTIALS <= n; i += PARTIALS)
-        for (int k = 0; k < PARTIALS; k++) part[k] += (x[i + k] - m) * (x[i + k] - m);
-    double total = 0.0;
-    for (; i < n; i++) total += (x[i] - m) * (x[i] - m);
-    for (int k = 0; k < PARTIALS; k++) total += part[k];
-    return total;
-}
-
-static double plane_dot(const real *a, const real *b, long n)
-{
-    double part[PARTIALS] = {0};
-    long i = 0;
-    for (; i + PARTIALS <= n; i += PARTIALS)
-        for (int k = 0; k < PARTIALS; k++) part[k] += (double) a[i + k] * b[i + k];
-    double total = 0.0;
-    for (; i < n; i++) total += (double) a[i] * b[i];
-    for (int k = 0; k < PARTIALS; k++) total += part[k];
-    return total;
-}
 
 void batch_norm_channels(const real *x, const real *weight, const real *bias,
                          real *y, real *x_hat, real *inv_std, real *mean, real *variance,
