@@ -262,6 +262,7 @@ class CausalSelfAttention(TensorModule):
         self.group_size = num_heads // num_kv_heads   # query heads per key/value head
         self.causal = causal
         self.rotary = rotary          # rotate queries and keys by position (RoPE)
+        self.rope_scale = 1.0         # < 1 after position interpolation (CharTransformerModel.extend_context)
         self.window = window          # sliding-window attention: how far back a token sees
         self.head_dim = embedding_dim // num_heads
         self._mask_cache: dict[int, Tensor] = {}
@@ -337,7 +338,8 @@ class CausalSelfAttention(TensorModule):
         query = project(self.queries, inputs)
         key, value = project(self.keys, source), project(self.values, source)
         if self.rotary and memory is None:    # positions rotate queries and keys, never values
-            query, key = rotary_embedding(query), rotary_embedding(key)
+            query = rotary_embedding(query, scale=self.rope_scale)
+            key = rotary_embedding(key, scale=self.rope_scale)
         query = query.reshape((batch * kv_heads, group * length, head_dim))  # a no-op when G = 1
         scores = matmul(query, key.permute((0, 2, 1))) * scale             # (B * KV, G * T, S)
         if mask is not None:
@@ -368,7 +370,7 @@ class CausalSelfAttention(TensorModule):
         for kv_head, (key_layer, value_layer) in enumerate(zip(self.keys, self.values)):
             key, value = key_layer(inputs), value_layer(inputs)            # (1, 1, D)
             if self.rotary:
-                key = rotary_embedding(key, start=position)
+                key = rotary_embedding(key, start=position, scale=self.rope_scale)
             if cache["keys"][kv_head] is not None:
                 key = concat([cache["keys"][kv_head], key], axis=1)      # (1, t, D)
                 value = concat([cache["values"][kv_head], value], axis=1)
@@ -379,7 +381,7 @@ class CausalSelfAttention(TensorModule):
             for query_layer in group:                                    # the heads sharing this key/value
                 query = query_layer(inputs)
                 if self.rotary:
-                    query = rotary_embedding(query, start=position)
+                    query = rotary_embedding(query, start=position, scale=self.rope_scale)
                 scores = matmul(query, key.permute((0, 2, 1))) * scale   # (1, 1, t)
                 head_outputs.append(matmul(scores.softmax(axis=-1), value))       # (1, 1, D)
         return self.projection(concat(head_outputs, axis=-1))
@@ -793,6 +795,24 @@ class CharTransformerModel(TensorModule):
         for block in self.blocks:
             hidden = recompute(block, hidden) if self.recompute_blocks and is_grad_enabled() else block(hidden)
         return self.projection(self.norm(hidden))
+
+    def extend_context(self, context_size: int, *, interpolate: bool = True) -> None:
+        """Accept sequences up to ``context_size`` (rotary positions only).
+
+        Extrapolating runs the new positions with rotation angles the model
+        never saw in training. Interpolating (Chen et al., 2023) scales every
+        position by old size / new size, so the longer sequence spans the
+        trained range of angles, with positions closer together.
+        """
+
+        if self.embedding.position_embedding is not None:
+            raise ValueError("learned positions cannot be extended; train with positions='rope'")
+        scale = self.context_size / context_size if interpolate else 1.0
+        for block in self.blocks:
+            block.attention.rope_scale = block.attention.rope_scale * scale
+            block.attention.context_size = block.context_size = context_size
+        self.embedding.context_size = context_size
+        self.context_size = context_size
 
     def auxiliary_loss(self) -> Tensor | None:
         """The experts' load-balancing losses from the last forward pass, summed

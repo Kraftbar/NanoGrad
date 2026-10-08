@@ -952,7 +952,7 @@ def _matmul_plan(
     )
 
 
-def rotary_embedding(tensor: Tensor, *, start: int = 0, base: float = 10000.0) -> Tensor:
+def rotary_embedding(tensor: Tensor, *, start: int = 0, base: float = 10000.0, scale: float = 1.0) -> Tensor:
     """Rotary position embedding (RoPE, used by LLaMA) for (..., T, D) tensors.
 
     Instead of adding a learned position vector to each token, RoPE rotates
@@ -964,7 +964,10 @@ def rotary_embedding(tensor: Tensor, *, start: int = 0, base: float = 10000.0) -
         out[2i+1] = x[2i] sin + x[2i+1] cos
 
     A query-key dot product then depends only on how far apart the two
-    tokens are. Written with whole arrays: out = x * C + swap(x) * S, where
+    tokens are. ``scale`` multiplies every position first: position
+    interpolation (Chen et al., 2023) uses scale = trained context / new
+    context, so a longer context reuses the angles the model was trained on
+    instead of new, larger ones. Written with whole arrays: out = x * C + swap(x) * S, where
     swap exchanges the two values of each pair and S holds (-sin, +sin).
     A rotation's gradient is the opposite rotation:
 
@@ -974,7 +977,7 @@ def rotary_embedding(tensor: Tensor, *, start: int = 0, base: float = 10000.0) -
     length, width = tensor.shape[-2:]
     if width % 2:
         raise ValueError("rotary_embedding needs an even last axis")
-    cos_table, sin_table = _rotary_tables(length, width, start, base)
+    cos_table, sin_table = _rotary_tables(length, width, start, base, scale)
     repeats = tensor.numel // (length * width)
     cos_full = kernels.storage(cos_table * repeats)     # in the current precision
     sin_full = kernels.storage(sin_table * repeats)
@@ -995,13 +998,13 @@ def rotary_embedding(tensor: Tensor, *, start: int = 0, base: float = 10000.0) -
 
 
 @lru_cache(maxsize=64)
-def _rotary_tables(length: int, width: int, start: int, base: float):
+def _rotary_tables(length: int, width: int, start: int, base: float, scale: float = 1.0):
     """Flat (T x D) tables of cos and signed sin (-sin at even, +sin at odd)."""
 
     cos_values, sin_values = [], []
     for position in range(start, start + length):
         for pair in range(width // 2):
-            angle = position * base ** (-2 * pair / width)
+            angle = position * scale * base ** (-2 * pair / width)
             cos_values += [math.cos(angle), math.cos(angle)]
             sin_values += [-math.sin(angle), math.sin(angle)]
     return tuple(cos_values), tuple(sin_values)    # plain floats: valid in any precision
