@@ -265,11 +265,29 @@ Gal and Ghahramani showed that keeping dropout on at test time and
 averaging many stochastic passes approximates a Bayesian network's
 predictive distribution. The UCI benchmark (Hernandez-Lobato and Adams)
 measures it: 9 small regression tables, fixed 90/10 splits, test RMSE and
-predictive log-likelihood. The protocol is followed exactly: a grid search
+predictive log-likelihood. The protocol follows Gal's code: a grid search
 over the dropout rate and tau on a held-out fifth of each training split,
-a 50-unit ReLU layer, and 10,000 MC samples at test time.
+a 50-unit ReLU layer, and 10,000 MC samples at test time. Training is 400
+epochs (Gal's code's 40 x 10); the three larger tables use 5 of their 20
+splits (protein was not run):
 
-(results running)
+| dataset | RMSE | log-likelihood | paper RMSE | paper log-likelihood |
+| --- | ---: | ---: | ---: | ---: |
+| Boston | 3.15 +- 0.20 | -2.57 +- 0.07 | 2.97 | -2.46 |
+| concrete | 5.42 +- 0.12 | -3.09 +- 0.02 | 5.23 | -3.04 |
+| energy | 1.54 +- 0.05 | -1.87 +- 0.04 | 1.66 | -1.99 |
+| kin8nm | 0.084 +- 0.002 | 1.07 +- 0.02 | 0.10 | 0.95 |
+| naval | 0.002 +- 0.000 | 4.35 +- 0.01 | 0.01 | 3.80 |
+| power plant | 4.11 +- 0.08 | -2.83 +- 0.02 | 4.02 | -2.80 |
+| wine (red) | 0.627 +- 0.008 | -0.95 +- 0.01 | 0.62 | -0.93 |
+| yacht | 2.89 +- 0.23 | -2.28 +- 0.07 | 1.11 | -1.55 |
+
+(+- is the standard error over splits, as the paper reports.) Six of eight
+match or beat the paper. Yacht, the smallest table (308 rows, three Adam
+steps per epoch), is far from converged at 400 epochs.
+
+*Added*: nothing in the core. MC dropout is ordinary dropout left on, and
+10,000 samples run as one batch of repeated rows (in chunks).
 
 ## Normalizing flows: MADE and MAF (`flow.py`)
 
