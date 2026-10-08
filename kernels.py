@@ -126,14 +126,18 @@ def gemm(
     c_step: int,
     trans_a: bool = False,
     trans_b: bool = False,
+    initial: list[float] | None = None,
 ) -> list[float]:
     """Batched ``C = op(A) @ op(B)``; see ``kernels.c`` for the conventions.
 
     A ``c_step`` of 0 sums all batch products into one (m x n) result.
+    With ``initial`` the products are added to a copy of it instead of to
+    zeros (``C = initial + op(A) @ op(B)``, which is how a linear layer adds
+    its bias without a separate pass).
     """
 
     kernel = kernels_c.gemm if BACKEND == "c" else reference.gemm
-    return kernel(a, b, batches, m, k, n, a_step, b_step, c_step, trans_a, trans_b)
+    return kernel(a, b, batches, m, k, n, a_step, b_step, c_step, trans_a, trans_b, initial)
 
 
 def gelu(x: list[float]) -> tuple[list[float], list[float]]:

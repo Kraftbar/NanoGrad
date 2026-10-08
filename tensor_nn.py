@@ -554,7 +554,31 @@ def linear(inputs: Tensor, weight: Tensor, bias: Tensor) -> Tensor:
         raise ValueError("linear input features must match weight columns")
     if weight.shape[0] != bias.shape[0]:
         raise ValueError("bias shape must match linear output columns")
-    return matmul(inputs, weight.T) + bias
+
+    # One fused op (PyTorch's addmm): every row of x, times W^T read in
+    # place (no transposed copy), added onto a copy of the bias.
+    #     dx = dy @ W        dW = dy^T @ x        db = dy summed over rows
+    outputs, features = weight.shape
+    rows = inputs.numel // features
+    data = kernels.gemm(
+        inputs.data, weight.data, batches=1, m=rows, k=features, n=outputs,
+        a_step=0, b_step=0, c_step=0, trans_b=True, initial=kernels.storage(bias.data) * rows,
+    )
+    out = _op_result(data, (*inputs.shape[:-1], outputs), (inputs, weight, bias), "linear")
+
+    def _backward() -> None:
+        grad = _grad_data(out)
+        if inputs.requires_grad:
+            _add_grad(inputs, kernels.gemm(grad, weight.data, batches=1, m=rows, k=outputs, n=features,
+                                           a_step=0, b_step=0, c_step=0))
+        if weight.requires_grad:
+            _add_grad(weight, kernels.gemm(grad, inputs.data, batches=1, m=outputs, k=rows, n=features,
+                                           a_step=0, b_step=0, c_step=0, trans_a=True))
+        if bias.requires_grad:
+            _add_grad(bias, kernels.sum_repeated(grad, outer=rows, size=outputs, inner=1))
+
+    _set_backward(out, _backward)
+    return out
 
 
 def layer_norm(

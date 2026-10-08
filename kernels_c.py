@@ -227,11 +227,14 @@ def gemm(
     c_step: int,
     trans_a: bool,
     trans_b: bool,
+    initial=None,
 ) -> array:
     size = c_step * (batches - 1) + m * n if c_step else m * n
     a_buffer = _reals(a)
     b_buffer = _reals(b)
-    c_buffer = zeros(size)
+    c_buffer = zeros(size) if initial is None else array(typecode, initial)   # a copy: the kernel adds into it
+    if len(c_buffer) != size:
+        raise ValueError("gemm initial values have the wrong size")
     library.gemm(
         _buffer(a_buffer), _buffer(b_buffer), _buffer(c_buffer),
         batches, m, k, n,

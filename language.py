@@ -14,6 +14,7 @@ from tensor_nn import (
     TensorLinear,
     TensorModule,
     TensorRMSNorm,
+    linear,
 )
 
 
@@ -311,7 +312,7 @@ class CausalSelfAttention(TensorModule):
         def project(layers: list[TensorLinear]) -> Tensor:
             weight = concat([layer.weight for layer in layers], axis=0)     # (n * D, C)
             bias = concat([layer.bias for layer in layers], axis=0)         # (n * D,)
-            out = matmul(inputs, weight.T) + bias                           # (B, T, n * D)
+            out = linear(inputs, weight, bias)                              # (B, T, n * D)
             out = out.reshape((batch, length, len(layers), head_dim)).permute((0, 2, 1, 3))
             return out.reshape((batch * len(layers), length, head_dim))     # (B * n, T, D)
 

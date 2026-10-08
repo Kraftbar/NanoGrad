@@ -35,6 +35,7 @@ def gemm(
     c_step: int,
     trans_a: bool,
     trans_b: bool,
+    initial: list[float] | None = None,
 ) -> list[float]:
     """Reference ``gemm``: every output entry is one dot product.
 
@@ -44,7 +45,7 @@ def gemm(
     """
 
     size = c_step * (batches - 1) + m * n if c_step else m * n
-    c = [0.0] * size
+    c = [0.0] * size if initial is None else list(initial)
     for batch in range(batches):
         a_start = batch * a_step
         b_start = batch * b_step
