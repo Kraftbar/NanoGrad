@@ -38,6 +38,7 @@ import random
 from pathlib import Path
 from time import perf_counter
 
+import kernels
 from images import read_png
 from losses import softmax_cross_entropy
 from optim import TensorAdam
@@ -276,8 +277,11 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--test-limit", type=int)
+    parser.add_argument("--dtype", choices=("float64", "float32"), help="NanoGrad's precision (PyTorch stays float64)")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)
+    if args.dtype:
+        kernels.set_default_dtype(args.dtype)
 
     start = perf_counter()
     splits = load_camvid(args.data)
