@@ -20,10 +20,14 @@ how often it lands in the top 10, NDCG@10 also rewards placing it higher
 (1 / log2(rank + 2)). With 32 factors (MLP layers 256-128-64-32), the
 authors' Keras code gets HR@10 0.692 / NDCG@10 0.425 for MLP and
 0.701 / 0.425 for NeuMF without pre-training (a PyTorch reproduction,
-guoyang9/NCF: GMF 0.708 / 0.429).
+guoyang9/NCF: GMF 0.708 / 0.429). ``--model neumf-pre`` is the paper's
+best: train GMF and MLP first, start NeuMF from their vectors and layers
+(the output layer is half of each one's), then fine-tune it with plain
+SGD; 0.726 / 0.445.
 
     python3 recommend.py --model gmf
     python3 recommend.py --model neumf --epochs 20
+    python3 recommend.py --model neumf-pre
     .venv/bin/python recommend.py --model mlp --frameworks nanograd torch --epochs 2
 
 Data: data/ml-1m/ (see data/ml-1m/README.md).
@@ -38,7 +42,7 @@ from pathlib import Path
 from time import perf_counter
 
 from losses import binary_cross_entropy_with_logits
-from optim import TensorAdam
+from optim import TensorAdam, TensorSGD
 from tensor import Tensor, concat, gather_rows, no_grad
 from tensor_nn import TensorLinear, TensorModule
 
@@ -130,10 +134,25 @@ class NCF(TensorModule):
         return found + self.output.parameters()
 
 
+def combine(gmf: NCF, mlp: NCF) -> NCF:
+    """NeuMF started from a trained GMF and MLP: their vectors and layers as
+    they are, and an output layer that is the average of their two."""
+
+    model = NCF(1, 1, model="neumf", factors=1, layers=(2, 1))       # placeholder sizes, replaced below
+    model.gmf_user, model.gmf_item = gmf.gmf_user, gmf.gmf_item
+    model.mlp_user, model.mlp_item, model.hidden = mlp.mlp_user, mlp.mlp_item, mlp.hidden
+    weight = concat([gmf.output.weight, mlp.output.weight], axis=1).data
+    bias = gmf.output.bias.data[0] + mlp.output.bias.data[0]
+    model.output = TensorLinear(len(weight), 1,
+                                weight=Tensor([0.5 * w for w in weight], (1, len(weight)), requires_grad=True),
+                                bias=Tensor([0.5 * bias], (1,), requires_grad=True))
+    return model
+
+
 class NanoGradRunner:
-    def __init__(self, model: NCF, lr: float) -> None:
+    def __init__(self, model: NCF, lr: float, *, sgd: bool = False) -> None:
         self.model = model
-        self.optimizer = TensorAdam(model.parameters(), lr=lr)
+        self.optimizer = TensorSGD(model.parameters(), lr=lr) if sgd else TensorAdam(model.parameters(), lr=lr)
 
     def train_step(self, users, items, labels) -> float:
         self.optimizer.zero_grad()
@@ -242,10 +261,27 @@ def train(runner, ratings: Ratings, args) -> dict:
             "ms_per_step": 1000 * training / max(1, steps)}
 
 
+def pretrained(ratings: Ratings, args) -> dict:
+    """GMF, then MLP, then NeuMF started from both (NanoGrad only)."""
+
+    parts, results = {}, {}
+    for name in ("gmf", "mlp"):
+        parts[name] = NCF(ratings.users, ratings.items, model=name, factors=args.factors, layers=tuple(args.layers),
+                          seed=args.seed + len(parts))
+        print(f"pre-training {name}", flush=True)
+        results[name] = train(NanoGradRunner(parts[name], args.lr), ratings, args)
+    print("neumf from both, plain SGD", flush=True)
+    results["nanograd"] = result = train(NanoGradRunner(combine(parts["gmf"], parts["mlp"]), args.lr, sgd=True),
+                                         ratings, args)
+    print(f"nanograd neumf-pre: best HR@10 {result['hr']:.4f}, NDCG@10 {result['ndcg']:.4f} "
+          f"(GMF {results['gmf']['hr']:.4f}, MLP {results['mlp']['hr']:.4f})", flush=True)
+    return results
+
+
 def main(argv: list[str] | None = None) -> dict:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--data", default="data/ml-1m")
-    parser.add_argument("--model", choices=("gmf", "mlp", "neumf"), default="neumf")
+    parser.add_argument("--model", choices=("gmf", "mlp", "neumf", "neumf-pre"), default="neumf")
     parser.add_argument("--frameworks", nargs="+", choices=("nanograd", "torch"), default=["nanograd"])
     parser.add_argument("--factors", type=int, default=32)
     parser.add_argument("--layers", type=int, nargs="+", default=[256, 128, 64, 32])
@@ -261,6 +297,8 @@ def main(argv: list[str] | None = None) -> dict:
     ratings = Ratings(args.data, limit_users=args.limit_users)
     print(f"{len(ratings.train)} training pairs, {ratings.users} users, {ratings.items} items", flush=True)
     results, runners = {}, {}
+    if args.model == "neumf-pre":
+        return pretrained(ratings, args)
     for framework in args.frameworks:
         model = NCF(ratings.users, ratings.items, model=args.model, factors=args.factors,
                     layers=tuple(args.layers), seed=args.seed)

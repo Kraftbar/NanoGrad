@@ -50,6 +50,14 @@ class RecommendTest(unittest.TestCase):
                                  "--lr", "0.01", "--layers", "16", "8"])
         self.assertGreater(result["nanograd"]["hr"], 0.9)
 
+    def test_combined_neumf_starts_as_the_average_of_gmf_and_mlp(self) -> None:
+        gmf = recommend.NCF(5, 7, model="gmf", factors=4, seed=1)
+        mlp = recommend.NCF(5, 7, model="mlp", layers=(8, 4), seed=2)
+        users, items = [0, 1, 4], [6, 2, 3]
+        both = recommend.combine(gmf, mlp)(users, items).data
+        for score, a, b in zip(both, gmf(users, items).data, mlp(users, items).data):
+            self.assertAlmostEqual(score, 0.5 * (a + b))
+
     def test_matches_torch(self) -> None:
         try:
             import torch  # noqa: F401
