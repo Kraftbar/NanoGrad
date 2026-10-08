@@ -163,3 +163,18 @@ better it turned out. Solved means a running return above 475 of 500:
 *Added*: nothing in the core; the policy-gradient loss is a gather of the
 log-probabilities of the actions taken, weighted by the returns, and a
 custom Huber loss op. Tests check both agents' gradients against PyTorch.
+
+## Time-series forecasting: DLinear and a patch transformer (`timeseries.py`)
+
+ETTh1, the long-horizon forecasting benchmark of Informer, Autoformer,
+DLinear and PatchTST: from 336 hours of 7 electricity-transformer series,
+predict the next 96 to 720. DLinear splits the input into a moving-average
+trend and the rest and applies one linear map to each; the moving average
+is a fixed 336 x 336 matrix, so the model is three matrix products. It
+reaches test MSE 0.370 at horizon 96 (paper: 0.375), trained identically
+to the authors' PyTorch formulation. `--model patchtst` cuts every series
+into overlapping 16-hour patches and runs them as tokens through the
+language models' transformer encoder.
+
+*Added*: nothing; both models are the core's linear layers and transformer
+blocks.

@@ -15,6 +15,7 @@ model families from the standard benchmarks:
   mixture of experts, LoRA, weight quantization, speculative decoding
 - **generative**: a variational autoencoder and a diffusion model on MNIST
 - **graphs**: a graph convolutional network (GCN) on the Cora citation graph
+- **time series**: DLinear and a patch transformer forecasting ETTh1
 - **GANs and reinforcement learning**: a DCGAN drawing MNIST digits, and
   REINFORCE and actor-critic agents balancing CartPole
 - **text and translation**: fastText's classifier on AG News, and the
@@ -233,6 +234,7 @@ speculative.py   # speculative decoding: a small model drafts, the large one che
 gcn.py           # graph convolutional network on Cora, NanoGrad vs PyTorch
 gat.py           # graph attention network on Cora (softmax over each node's neighbours)
 sine.py          # sine-wave prediction with an LSTM trained by L-BFGS, NanoGrad vs PyTorch
+timeseries.py    # ETTh1 forecasting: DLinear and a patch transformer, NanoGrad vs PyTorch
 text_classify.py # fastText's bag of embeddings on AG News, NanoGrad vs PyTorch
 mobilenet.py     # depthwise separable convolutions (MobileNet) for CIFAR-10
 gan.py           # DCGAN on MNIST: transposed convolutions, adversarial training
