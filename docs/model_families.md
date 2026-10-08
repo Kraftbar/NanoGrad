@@ -201,3 +201,38 @@ cosine decay, 10 epochs (about an hour):
 and padding masks), greedy and beam-search decoding, and corpus BLEU.
 `translate.py --compare` runs the same steps in PyTorch through the twin.
 
+
+## Link prediction: graph autoencoders (`linkpred.py`)
+
+Hide 15% of Cora's citations and tell them apart from random unlinked
+pairs. Kipf and Welling's graph autoencoder embeds every paper with a
+two-layer GCN and scores a pair by the dot product of their embeddings.
+It trains by reconstructing the whole 2,708 x 2,708 adjacency matrix:
+7.3 million pair scores per step (one matrix product, Z Z^T), with each
+real edge weighted up by the ratio of non-edges to edges. The variational
+version (VGAE) samples the embeddings and adds a KL term, as the VAE does.
+The authors' recipe (32 then 16 units, Adam lr 0.01, 200 full-graph steps),
+5 random edge splits:
+
+| model | test AUC | test average precision | paper |
+| --- | ---: | ---: | --- |
+| VGAE | 92.1 | 93.0 | 91.4 / 92.6 |
+
+*Added*: nothing in the core. The edge weighting is two calls of the
+existing BCE-with-logits op: one over every pair, and one over the edges
+alone, gathered by position.
+
+## Audio: spoken digits (`audio.py`)
+
+The Free Spoken Digit Dataset: 3,000 eight-kHz recordings of 0-9 by 6
+speakers, with recordings 0-4 of each speaker and digit as the test set.
+Each clip becomes a 40 x 100 log-mel spectrogram: 32 ms Hann-windowed
+frames every 10 ms, a power spectrum, 40 mel bands, and a log. The DFT is
+written as two matrix products with cosine and sine tables, so it runs
+on the same gemm as everything else. A three-block CNN (conv, batch
+norm, ReLU, pooling) then classifies the spectrogram like an image: **99.33%**
+test accuracy after 20 epochs (Adam, lr 1e-3), the same as PyTorch from
+the same weights.
+
+*Added*: a WAV reader (the standard library's `wave`), mel filters, and
+the `MaxPool2d` module.
