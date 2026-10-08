@@ -1288,11 +1288,14 @@ void sigmoid_backward(const real *y, const real *grad, real *dx, long count)
  * exps) instead of storing them, and write the gate columns they do not
  * use as zero.
  */
-static inline double sigmoid1(double x)
+static inline double gate_sigmoid(double x)        /* the fast, vectorizable forms, in the build's precision */
 {
-    if (x >= 0.0) return 1.0 / (1.0 + exp(-x));
-    double e = exp(x);
-    return e / (1.0 + e);
+    return sizeof(real) == sizeof(float) ? fast_sigmoidf((float)x) : fast_sigmoid(x);
+}
+
+static inline double gate_tanh(double x)
+{
+    return sizeof(real) == sizeof(float) ? fast_tanhf((float)x) : fast_tanh(x);
 }
 
 void lstm_memory(const real *gates, const real *c, real *c_new, long batch, long hidden)
@@ -1300,7 +1303,7 @@ void lstm_memory(const real *gates, const real *c, real *c_new, long batch, long
     for (long b = 0; b < batch; b++) {
         const real *gi = gates + b * 4 * hidden, *gf = gi + hidden, *gg = gf + hidden;
         for (long j = 0; j < hidden; j++)
-            c_new[b * hidden + j] = sigmoid1(gf[j]) * c[b * hidden + j] + sigmoid1(gi[j]) * tanh(gg[j]);
+            c_new[b * hidden + j] = gate_sigmoid(gf[j]) * c[b * hidden + j] + gate_sigmoid(gi[j]) * gate_tanh(gg[j]);
     }
 }
 
@@ -1311,7 +1314,7 @@ void lstm_memory_backward(const real *gates, const real *c, const real *grad,
         const real *gi = gates + b * 4 * hidden, *gf = gi + hidden, *gg = gf + hidden;
         real *di = dgates + b * 4 * hidden, *df = di + hidden, *dg = df + hidden, *d_o = dg + hidden;
         for (long j = 0; j < hidden; j++) {
-            double i = sigmoid1(gi[j]), f = sigmoid1(gf[j]), g = tanh(gg[j]), d = grad[b * hidden + j];
+            double i = gate_sigmoid(gi[j]), f = gate_sigmoid(gf[j]), g = gate_tanh(gg[j]), d = grad[b * hidden + j];
             di[j] = d * g * i * (1.0 - i);
             df[j] = d * c[b * hidden + j] * f * (1.0 - f);
             dg[j] = d * i * (1.0 - g * g);
@@ -1325,7 +1328,7 @@ void lstm_output(const real *gates, const real *c_new, real *h, long batch, long
 {
     for (long b = 0; b < batch; b++) {
         const real *go = gates + b * 4 * hidden + 3 * hidden;
-        for (long j = 0; j < hidden; j++) h[b * hidden + j] = sigmoid1(go[j]) * tanh(c_new[b * hidden + j]);
+        for (long j = 0; j < hidden; j++) h[b * hidden + j] = gate_sigmoid(go[j]) * gate_tanh(c_new[b * hidden + j]);
     }
 }
 
@@ -1337,7 +1340,7 @@ void lstm_output_backward(const real *gates, const real *c_new, const real *grad
         real *row = dgates + b * 4 * hidden;
         for (long j = 0; j < 3 * hidden; j++) row[j] = 0.0;
         for (long j = 0; j < hidden; j++) {
-            double o = sigmoid1(go[j]), t = tanh(c_new[b * hidden + j]), d = grad[b * hidden + j];
+            double o = gate_sigmoid(go[j]), t = gate_tanh(c_new[b * hidden + j]), d = grad[b * hidden + j];
             row[3 * hidden + j] = d * t * o * (1.0 - o);
             dc_new[b * hidden + j] = d * o * (1.0 - t * t);
         }
