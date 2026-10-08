@@ -1,40 +1,10 @@
 import random
-import struct
 import unittest
-import zlib
 
 import fewshot
 
 
-def make_png(rows: list[list[int]], depth: int, filters: list[int]) -> bytes:
-    """A greyscale PNG of the given bit depth; row y uses filter filters[y] (0: none, 2: up)."""
-
-    width, top = len(rows[0]), (1 << depth) - 1
-    stride = (width * depth + 7) // 8
-    raw, previous = b"", bytes(stride)
-    for row, kind in zip(rows, filters):
-        line = bytearray(stride)
-        for x, value in enumerate(row):
-            line[(x * depth) // 8] |= (value * top // 255) << (8 - depth - (x * depth) % 8)
-        encoded = bytes((line[i] - previous[i]) & 255 for i in range(stride)) if kind == 2 else bytes(line)
-        raw += bytes([kind]) + encoded
-        previous = bytes(line)
-
-    def chunk(kind: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
-
-    header = struct.pack(">IIBBBBB", width, len(rows), depth, 0, 0, 0, 0)
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
-
-
 class FewShotTest(unittest.TestCase):
-    def test_read_png(self) -> None:
-        rng = random.Random(0)
-        binary = [[255 * rng.randrange(2) for _ in range(11)] for _ in range(5)]
-        self.assertEqual(fewshot.read_png(make_png(binary, 1, [0, 2, 2, 0, 2])), binary)
-        grey = [[rng.randrange(256) for _ in range(6)] for _ in range(4)]
-        self.assertEqual(fewshot.read_png(make_png(grey, 8, [2, 0, 2, 2])), grey)
-
     def test_rotate_and_shrink(self) -> None:
         image = [[1, 2], [3, 4]]
         self.assertEqual(fewshot.rotate(image, 90), [[2, 4], [1, 3]])       # counter-clockwise

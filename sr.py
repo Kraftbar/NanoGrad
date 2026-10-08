@@ -43,6 +43,7 @@ import struct
 from pathlib import Path
 from time import perf_counter
 
+from images import read_bmp
 from optim import TensorAdam
 from tensor import Tensor, no_grad
 from tensor_nn import ReLU, Sequential, TensorConv2D
@@ -51,28 +52,6 @@ Image = list[list[float]]          # rows of values
 
 
 # -- images -------------------------------------------------------------------
-
-
-def read_bmp(path: str | Path) -> list[list[tuple[int, int, int]]]:
-    """Rows of (R, G, B) from an uncompressed 24-bit or 8-bit palette BMP."""
-
-    raw = Path(path).read_bytes()
-    offset = struct.unpack("<I", raw[10:14])[0]
-    header = struct.unpack("<I", raw[14:18])[0]
-    width, height, _, bits = struct.unpack("<iiHH", raw[18:30])
-    palette = []
-    if bits == 8:
-        colors = (offset - 14 - header) // 4
-        palette = [tuple(raw[14 + header + 4 * i : 14 + header + 4 * i + 3][::-1]) for i in range(colors)]
-    stride = (width * bits // 8 + 3) // 4 * 4               # rows are padded to 4 bytes
-    rows = []
-    for y in range(abs(height)):
-        start = offset + y * stride
-        if bits == 24:                                     # stored as B, G, R
-            rows.append([(raw[start + 3 * x + 2], raw[start + 3 * x + 1], raw[start + 3 * x]) for x in range(width)])
-        else:
-            rows.append([palette[raw[start + x]] for x in range(width)])
-    return rows[::-1] if height > 0 else rows               # positive height: bottom row first
 
 
 def load_y(path: str | Path) -> Image:

@@ -35,12 +35,11 @@ from __future__ import annotations
 import argparse
 import pickle
 import random
-import struct
 import zipfile
-import zlib
 from pathlib import Path
 from time import perf_counter
 
+from images import read_png
 from losses import softmax_cross_entropy
 from optim import TensorAdam
 from tensor import Tensor, no_grad
@@ -50,43 +49,6 @@ SIZE = 28
 
 
 # -- data ---------------------------------------------------------------------
-
-
-def read_png(raw: bytes) -> list[list[int]]:
-    """Rows of grey values (0-255) from a non-interlaced greyscale PNG of 1 to 8 bits."""
-
-    width, height, depth, color = struct.unpack(">IIBB", raw[16:26])
-    if color != 0:
-        raise ValueError("only greyscale PNGs are supported")
-    position, compressed = 8, b""
-    while position < len(raw):                       # chunks: length, type, data, CRC
-        length = struct.unpack(">I", raw[position : position + 4])[0]
-        if raw[position + 4 : position + 8] == b"IDAT":
-            compressed += raw[position + 8 : position + 8 + length]
-        position += 12 + length
-    data = zlib.decompress(compressed)
-    stride = (width * depth + 7) // 8
-    rows, previous, step = [], bytes(stride), max(1, depth // 8)
-    for y in range(height):
-        kind, line = data[y * (stride + 1)], bytearray(data[y * (stride + 1) + 1 : (y + 1) * (stride + 1)])
-        for i in range(stride):                      # undo the row filter
-            left = line[i - step] if i >= step else 0
-            up, corner = previous[i], (previous[i - step] if i >= step else 0)
-            if kind == 1:
-                line[i] = (line[i] + left) & 255
-            elif kind == 2:
-                line[i] = (line[i] + up) & 255
-            elif kind == 3:
-                line[i] = (line[i] + (left + up) // 2) & 255
-            elif kind == 4:
-                guess = left + up - corner
-                near = min((abs(guess - left), 0, left), (abs(guess - up), 1, up), (abs(guess - corner), 2, corner))
-                line[i] = (line[i] + near[2]) & 255
-        previous = bytes(line)
-        top = (1 << depth) - 1
-        values = [(line[(x * depth) // 8] >> (8 - depth - (x * depth) % 8)) & top for x in range(width)]
-        rows.append([v * 255 // top for v in values])
-    return rows
 
 
 def rotate(image: list[list[int]], degrees: int) -> list[list[int]]:

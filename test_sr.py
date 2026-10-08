@@ -26,13 +26,6 @@ def pattern(height: int, width: int) -> list[list[tuple[int, int, int]]]:
 
 
 class SuperResolutionTest(unittest.TestCase):
-    def test_read_bmp_round_trip(self) -> None:
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "a.bmp"
-            rows = pattern(5, 7)                          # 21 bytes per row: exercises the padding
-            write_bmp(path, rows)
-            self.assertEqual(sr.read_bmp(path), rows)
-
     def test_resize_weights_sum_to_one_and_keep_constants(self) -> None:
         for size, scale in ((12, 1 / 3), (4, 3), (9, 2)):
             for taps in sr.resize_weights(size, scale):
