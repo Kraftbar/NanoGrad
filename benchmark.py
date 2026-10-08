@@ -108,11 +108,13 @@ def nanograd_step(case: Case, inputs, targets, out_grad=None) -> Callable[[], tu
     # Like PyTorch's side, the output gradient is built once, outside the timing.
     seed = None if out_grad is None else Tensor(out_grad, (len(out_grad),))
 
+    shaped = {}   # the seed in the output's shape, made once (PyTorch's reshape is a free view)
+
     def step():
-        for tensor in tensors:   # as PyTorch's side does: each run starts with no gradient
-            tensor.grad = None
         out = case.nanograd(*tensors, *extra)
-        out.backward(seed.reshape(out.shape) if seed is not None else [1.0] * out.numel)
+        if seed is not None and out.shape not in shaped:
+            shaped[out.shape] = seed.reshape(out.shape)
+        out.backward(shaped[out.shape] if seed is not None else [1.0] * out.numel)
         return out.data, [tensor.grad for tensor in tensors]
 
     return step

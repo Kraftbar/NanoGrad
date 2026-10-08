@@ -1471,23 +1471,19 @@ def tensor_sum(tensor: Tensor, axis: int | None = None) -> Tensor:
         _set_backward(out, _backward_all)
         return out
 
+    # Summing over an axis undoes broadcasting along it: the same reduction
+    # as a broadcast gradient, and its backward is that broadcast.
     axis = _normalize_axis(axis, len(tensor.shape))
-    lanes = _axis_lanes(tensor.shape, axis)
-    size = tensor.shape[axis]
-    data = tensor.data
+    kept = tensor.shape[:axis] + (1,) + tensor.shape[axis + 1 :]
     out = _op_result(
-        [sum(data[lane]) for lane in lanes],
+        _reduce_to_shape(tensor.data, tensor.shape, kept),
         _reduced_shape(tensor.shape, axis),
         (tensor,),
         "sum",
     )
 
     def _backward() -> None:
-        # Every value in a lane contributed once to that lane's sum.
-        tensor_grad = [0.0] * tensor.numel
-        for lane, value in zip(lanes, _grad_data(out)):
-            tensor_grad[lane] = [value] * size
-        _add_grad(tensor, tensor_grad)
+        _add_grad(tensor, _expand(Tensor(_grad_data(out), kept), tensor.shape))
 
     _set_backward(out, _backward)
     return out

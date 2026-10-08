@@ -42,7 +42,9 @@ class FewShotTest(unittest.TestCase):
             losses = [runner.train_step(*batch, 1e-3)[0] for runner in runners]
             self.assertAlmostEqual(losses[0], losses[1], places=9)
         difference = max(abs(a - b) for x, y in zip(runners[0].weights(), runners[1].weights()) for a, b in zip(x, y))
-        self.assertLess(difference, 1e-10)
+        # Adam divides by sqrt(v), so near-zero gradients turn summation-order
+        # rounding (about 1e-16) into weight differences of order 1e-10.
+        self.assertLess(difference, 1e-9)
 
 
 if __name__ == "__main__":

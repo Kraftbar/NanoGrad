@@ -114,22 +114,24 @@ language models spend most of their step on the 200 -> 33,278 output
 layer. On one core of this Xeon (2.8 GHz, AVX-512), NanoGrad's tiled
 product reaches about 47 GFLOP/s in float64 and 95-110 in float32 on a
 512^3 product; PyTorch's reaches about 62 and 125-135. (The two WikiText
-rows were re-measured on an idle machine after unrolling the tile loop.) Op by op (`benchmark.py
---torch`, float64):
+rows were re-measured on an idle machine after unrolling the tile loop.) Op by op, forward plus backward
+(`benchmark.py --torch`, float64, median of 20; these small ops vary by
+10-20% between runs):
 
 | op | NanoGrad C | PyTorch | ratio |
 | --- | ---: | ---: | ---: |
-| matmul 768x128 @ 128x512 | 9.54 ms | 6.11 ms | 1.6x |
-| linear 768x128 -> 512 | 11.06 ms | 9.06 ms | 1.2x |
-| layer norm 768x128 | 0.86 ms | 0.39 ms | 2.2x |
-| GELU 768x512 | 6.22 ms | 5.03 ms | 1.2x |
-| softmax 12x4x64x64 | 1.45 ms | 1.46 ms | 1.0x |
-| cross entropy 768x65 | 0.75 ms | 0.71 ms | 1.1x |
-| conv2d 32x6x12x12 * 16x6x5x5 | 2.00 ms | 2.35 ms | 0.8x |
-| conv2d 3x3 pad 1, 32x8x28x28 * 8x8x3x3 | 12.91 ms | 10.83 ms | 1.2x |
-| conv2d 3x3 stride 2 | 4.57 ms | 5.55 ms | 0.8x |
-| batch norm 32x8x28x28 | 1.12 ms | 1.38 ms | 0.8x |
-| max pool 2x2 | 0.27 ms | 0.96 ms | 0.3x |
+| matmul 768x128 @ 128x512 | 8.32 ms | 6.30 ms | 1.3x |
+| linear 768x128 -> 512 | 10.87 ms | 9.36 ms | 1.2x |
+| layer norm 768x128 | 0.53 ms | 0.40 ms | 1.3x |
+| GELU 768x512 | 4.75 ms | 4.52 ms | 1.1x |
+| softmax 12x4x64x64 | 1.22 ms | 1.48 ms | 0.8x |
+| cross entropy 768x65 | 0.73 ms | 0.57 ms | 1.3x |
+| conv2d 32x6x12x12 * 16x6x5x5 | 2.05 ms | 1.80 ms | 1.1x |
+| conv2d 3x3 pad 1, 32x8x28x28 * 8x8x3x3 | 12.65 ms | 15.36 ms | 0.8x |
+| conv2d 3x3 stride 2 | 6.08 ms | 6.21 ms | 1.0x |
+| batch norm 32x8x28x28 | 1.16 ms | 1.17 ms | 1.0x |
+| ReLU 32x8x28x28 | 0.58 ms | 0.42 ms | 1.4x |
+| max pool 2x2 | 0.28 ms | 0.99 ms | 0.3x |
 
 The newer families, a few steps each in both frameworks
 (`benchmark_suite.py`; float64, one core; the last column is the largest
