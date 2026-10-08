@@ -33,6 +33,17 @@ class DepthwiseTests(unittest.TestCase):
                                    [image, kernel])
         self.assertLess(error, 1e-8)
 
+    def test_generic_state_dict_round_trip_includes_running_statistics(self) -> None:
+        source, copy = MobileNet(image_shape=(3, 8, 8), stem=4, seed=1), MobileNet(image_shape=(3, 8, 8), stem=4, seed=2)
+        images = Tensor(values(2 * 3 * 8 * 8, 6), (2, 3, 8, 8))
+        source(images)                                  # training mode: updates the running statistics
+        copy.load_state_dict(source.state_dict())
+        source.eval()
+        copy.eval()
+        self.assertEqual(list(source(images).data), list(copy(images).data))
+        with self.assertRaises(ValueError):
+            copy.load_state_dict({"parameters": []})
+
     @unittest.skipUnless(HAS_TORCH, "PyTorch not installed")
     def test_mobilenet_matches_pytorch(self) -> None:
         import torch

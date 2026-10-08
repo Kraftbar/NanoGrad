@@ -65,11 +65,34 @@ class TensorModule:
             parameter.zero_grad()
 
     def state_dict(self) -> dict:
-        return {}
+        """Every parameter's values, in ``parameters()`` order, plus the
+        running statistics of any batch norm inside. Modules with their own
+        named format override this."""
+
+        parameters = self.parameters()
+        if not parameters:
+            return {}
+        return {
+            "parameters": [list(parameter.data) for parameter in parameters],
+            "buffers": [list(values) for module in self.modules() for values in _buffers(module)],
+        }
 
     def load_state_dict(self, state: dict) -> None:
-        if state:
-            raise ValueError("unexpected state for empty TensorModule")
+        parameters = self.parameters()
+        if not parameters:
+            if state:
+                raise ValueError("unexpected state for empty TensorModule")
+            return
+        saved = state.get("parameters")
+        if not isinstance(saved, list) or len(saved) != len(parameters):
+            raise ValueError("state does not have one entry per parameter")
+        for parameter, values in zip(parameters, saved):
+            if len(values) != parameter.numel:
+                raise ValueError("state parameter size does not match")
+            parameter.data = [float(value) for value in values]
+        buffers = [values for module in self.modules() for values in _buffers(module)]
+        for target, values in zip(buffers, state.get("buffers", []), strict=True):
+            target[:] = [float(value) for value in values]
 
     def save(self, path: str | Path) -> None:
         path = Path(path)
@@ -145,6 +168,14 @@ class TensorDepthwiseConv2D(TensorModule):
 
     def load_state_dict(self, state: dict) -> None:
         self.kernel.data = _state_data(state, "kernel", self.kernel.shape)
+
+
+def _buffers(module: TensorModule) -> list[list[float]]:
+    """State that is not a parameter but must be saved (batch norm's running statistics)."""
+
+    if isinstance(module, TensorBatchNorm2d):
+        return [module.running_mean, module.running_var]
+    return []
 
 
 class TensorConvTranspose2D(TensorModule):
