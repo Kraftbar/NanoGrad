@@ -337,9 +337,23 @@ that every super-resolution paper lists.
 Classify new Omniglot characters from 1 or 5 examples each. A
 four-block CNN embeds every image. Each class's prototype is the mean
 embedding of its examples, and a query goes to the nearest prototype.
-Training runs on random 60-way episodes that mimic the test.
+Training runs on random 60-way episodes that mimic the test: 5,000 1-shot
+episodes with Adam at 1e-3, halved every 2,000. Test accuracy is over 1,000
+random episodes of new characters, with 15 queries per class:
 
-(results running)
+| | 5-way 1-shot | 5-way 5-shot | 20-way 1-shot | 20-way 5-shot |
+| --- | ---: | ---: | ---: | ---: |
+| here | 98.3% | 99.6% | 94.4% | 98.6% |
+| prototypical networks paper | 98.8% | 99.7% | 96.0% | 98.9% |
+
+One model, trained with 1-shot episodes, is tested at both shot counts;
+the paper trains a separate model for each. The test set embeds once (in
+evaluation mode, batch norm does not depend on the batch), so 1,000
+episodes are distance computations on cached vectors.
+
+*Added*: a PNG decoder (`images.py`) and the `MaxPool2d` module. The
+prototype distances are a matrix product and two row sums:
+||q - c||^2 = ||q||^2 - 2 q . c + ||c||^2.
 
 ## Adversarial robustness: FGSM, PGD and fast adversarial training (`adversarial.py`)
 
