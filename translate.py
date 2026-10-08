@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import argparse
 import math
+import pickle
 import random
 import re
+from array import array
 from collections import Counter
 from pathlib import Path
 from time import perf_counter
@@ -152,11 +154,16 @@ def run(args) -> dict:
 
     model = build(args, source_vocab, target_vocab)
     print(f"model {model.num_parameters()} parameters", flush=True)
+    if args.load:                                   # evaluate a saved model, no training
+        with open(args.load, "rb") as handle:
+            for parameter, values in zip(model.parameters(), pickle.load(handle)):
+                parameter.data = values
+        args.epochs = 0
     optimizer = TensorAdam(model.parameters(), lr=args.lr, beta2=0.98, eps=1e-9, max_grad_norm=1.0)
     rng = random.Random(args.seed)
     steps_per_epoch = math.ceil(len(train_set) / args.batch_size)
     schedule = warmup_cosine(max_lr=args.lr, min_lr=args.lr / 10, warmup_steps=args.warmup,
-                             decay_steps=args.epochs * steps_per_epoch)
+                             decay_steps=max(args.epochs * steps_per_epoch, args.warmup + 1))
     step, history = 0, []
     for epoch in range(1, args.epochs + 1):
         start, losses = perf_counter(), []
@@ -178,6 +185,9 @@ def run(args) -> dict:
         print(f"epoch {epoch:2d}: train loss {sum(losses) / len(losses):.3f}, valid loss {valid_loss:.3f}, "
               f"valid BLEU {score:.1f}, {minutes:.1f} min", flush=True)
         history.append({"epoch": epoch, "valid_bleu": score, "valid_loss": valid_loss})
+    if args.save:
+        with open(args.save, "wb") as handle:
+            pickle.dump([array("d", parameter.data) for parameter in model.parameters()], handle)
     test = evaluate(model, test_words, source_vocab, target_vocab)
     print(f"test 2016 BLEU {test:.1f} (greedy)", flush=True)
     if args.beam > 1:
@@ -263,6 +273,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--bleu-limit", type=int, default=300, help="validation sentences scored each epoch")
     parser.add_argument("--beam", type=int, default=4, help="beam width for the final test score (1: greedy only)")
     parser.add_argument("--train-limit", type=int)
+    parser.add_argument("--save", help="write the trained weights here")
+    parser.add_argument("--load", help="evaluate weights saved with --save instead of training")
     parser.add_argument("--compare", action="store_true", help="NanoGrad vs PyTorch on the same steps")
     parser.add_argument("--steps", type=int, default=20, help="--compare: training steps")
     parser.add_argument("--seed", type=int, default=0)
