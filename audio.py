@@ -16,7 +16,7 @@ shows how much energy each frequency has over time:
     log       log(energy + 1e-6), since loudness is perceived logarithmically
 
 A clip becomes a 40 x 100 image (shorter clips padded with silence,
-longer ones cut at 1 s), and a small CNN classifies it like a picture: three
+longer ones cut at about 1 s), and a small CNN classifies it like a picture: three
 blocks of 3x3 convolution, batch norm, ReLU and 2x2 pooling, then a
 linear layer. Adam at lr 1e-3, batch 32.
 

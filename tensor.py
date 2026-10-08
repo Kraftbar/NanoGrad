@@ -1567,7 +1567,7 @@ def _axis_lanes(shape: tuple[int, ...], axis: int) -> tuple[slice, ...]:
 # ---------------------------------------------------------------------------
 
 
-def conv2d(image: Tensor, kernel: Tensor, *, stride: int = 1, padding: int = 0) -> Tensor:
+def conv2d(image: Tensor, kernel: Tensor, *, stride: int = 1, padding: int | tuple[int, int] = 0) -> Tensor:
     """Convolution with zero ``padding`` around the image and a ``stride``.
 
     Same shapes and convention as ``conv2d_valid``; padding just adds a
@@ -1580,21 +1580,23 @@ def conv2d(image: Tensor, kernel: Tensor, *, stride: int = 1, padding: int = 0) 
     return conv2d_valid(padded, kernel, stride=stride)
 
 
-def pad2d(image: Tensor, padding: int) -> Tensor:
-    """Add ``padding`` zeros on every side of the last two axes.
+def pad2d(image: Tensor, padding: int | tuple[int, int]) -> Tensor:
+    """Add ``padding`` zeros on every side of the last two axes (or
+    ``(rows, cols)``: that many above and below, and left and right).
 
     Every input pixel moves to a fixed place in the larger zero image, listed
     in an index table, so padding is a scatter into zeros and its backward
     pass is the matching gather (the same kernels im2col uses).
     """
 
-    if padding < 0:
+    pad_rows, pad_cols = (padding, padding) if isinstance(padding, int) else padding
+    if pad_rows < 0 or pad_cols < 0:
         raise ValueError("padding must be non-negative")
     if image.ndim < 2:
         raise ValueError("pad2d expects at least a 2D tensor")
     rows, cols = image.shape[-2:]
-    out_shape = (*image.shape[:-2], rows + 2 * padding, cols + 2 * padding)
-    index = _pad2d_index(rows, cols, padding)
+    out_shape = (*image.shape[:-2], rows + 2 * pad_rows, cols + 2 * pad_cols)
+    index = _pad2d_index(rows, cols, pad_rows, pad_cols)
     sizes = dict(batches=image.numel // (rows * cols), image_size=out_shape[-2] * out_shape[-1])
     out = _op_result(kernels.scatter_add_indexed(image.data, index, **sizes), out_shape, (image,), "pad2d")
 
@@ -1606,12 +1608,12 @@ def pad2d(image: Tensor, padding: int) -> Tensor:
 
 
 @lru_cache(maxsize=64)
-def _pad2d_index(rows: int, cols: int, padding: int) -> tuple[int, ...]:
+def _pad2d_index(rows: int, cols: int, pad_rows: int, pad_cols: int) -> tuple[int, ...]:
     """Where each pixel of a (rows, cols) plane lands in the padded plane."""
 
-    padded_cols = cols + 2 * padding
+    padded_cols = cols + 2 * pad_cols
     return kernels.index_table(
-        (row + padding) * padded_cols + col + padding
+        (row + pad_rows) * padded_cols + col + pad_cols
         for row in range(rows)
         for col in range(cols)
     )

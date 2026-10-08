@@ -2,8 +2,9 @@
 
 Only what the datasets here need: non-interlaced PNGs (greyscale at 1 to 8
 bits, or 8-bit RGB) and uncompressed BMPs (24-bit, or 8-bit with a
-palette). Both return rows of pixels: an int (0-255) per pixel for a grey
-image, an (R, G, B) tuple for a colour one.
+palette). Both return rows of pixels. ``read_png`` gives an int (0-255)
+per pixel for a grey image and an (R, G, B) tuple for a colour one;
+``read_bmp`` always gives tuples (a grey palette repeats the value).
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ def read_png(raw: bytes) -> list[list]:
 
     width, height, depth, color = struct.unpack(">IIBB", raw[16:26])
     channels = {0: 1, 2: 3}.get(color)
-    if channels is None or (channels == 3 and depth != 8):
+    if channels is None or depth > 8 or (channels == 3 and depth != 8):
         raise ValueError("only greyscale and 8-bit RGB PNGs are supported")
     position, compressed = 8, b""
     while position < len(raw):                       # chunks: length, type, data, CRC

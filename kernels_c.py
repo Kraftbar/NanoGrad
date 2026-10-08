@@ -507,6 +507,8 @@ def add_scaled(x: list[float], y: list[float], factor: float) -> array:
 
 
 def projected_sign_step(delta, grad, x, alpha: float, eps: float) -> array:
+    if not len(delta) == len(grad) == len(x):
+        raise ValueError("projected_sign_step needs equal lengths")
     buffers = [_reals(values) for values in (delta, grad, x)]
     out = zeros(len(delta))
     library.projected_sign_step(*map(_buffer, buffers), alpha, eps, _buffer(out), len(delta))

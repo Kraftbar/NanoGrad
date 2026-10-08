@@ -173,6 +173,8 @@ def pixel_loss(scores: Tensor, labels: list[int]) -> Tensor:
     batch, classes, height, width = scores.shape
     per_pixel = scores.permute((0, 2, 3, 1)).reshape((batch * height * width, classes))
     keep = [i for i, label in enumerate(labels) if label != VOID]
+    if not keep:
+        raise ValueError("every pixel in the batch is void")
     return softmax_cross_entropy(gather_rows(per_pixel, keep), [labels[i] for i in keep])
 
 

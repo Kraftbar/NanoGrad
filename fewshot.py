@@ -22,7 +22,9 @@ K support and 5 query images of each, and minimize the cross entropy of
 the queries. Adam runs at lr 1e-3, halved every 2,000 episodes.
 
 The paper reports test accuracy (1,000 episodes, 5-way and 20-way, 1 and
-5 shots): 98.8% / 99.7% for 5-way, 96.0% / 98.9% for 20-way.
+5 shots): 98.8% / 99.7% for 5-way, 96.0% / 98.9% for 20-way. Their 5-shot
+numbers come from a model trained on 5-shot episodes; here one model,
+trained with ``--train-shot`` (1 by default), is tested at both.
 
     python3 fewshot.py --episodes 5000
     .venv/bin/python fewshot.py --frameworks nanograd torch --episodes 20 --train-way 20

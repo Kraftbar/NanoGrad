@@ -71,7 +71,11 @@ def sequence_log_probs(model, sequences: list[list[int]], prompt_length: int) ->
     logits = model.sequence_logits(Tensor.from_list([s[:-1] for s in sequences]))     # (B, T - 1, V)
     vocab = logits.shape[-1]
     flat = logits.reshape((batch * (length - 1), vocab))
-    log_probs = flat.softmax(axis=-1).log()                                            # log softmax
+    # log softmax = x - log sum exp(x), with each row's max subtracted first so nothing overflows or underflows
+    rows = batch * (length - 1)
+    peaks = Tensor([max(flat.data[r * vocab : (r + 1) * vocab]) for r in range(rows)], (rows, 1))
+    shifted = flat - peaks
+    log_probs = shifted - shifted.exp().sum(axis=1).log().reshape((rows, 1))
     # Row b, position t predicts token t + 1; keep the continuation's tokens only.
     picks = [(b * (length - 1) + t) * vocab + sequences[b][t + 1]
              for b in range(batch) for t in range(prompt_length - 1, length - 1)]

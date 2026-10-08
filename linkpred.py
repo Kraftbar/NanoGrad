@@ -127,9 +127,12 @@ class GraphAutoencoder(TensorModule):
         z = mu + noise * log_sigma.exp() if self.variational else mu
         logits = (z @ z.T).reshape((n * n, 1))
         positives = len(graph.positives)
-        # Every edge counts pos_weight times: once in the full sum, pos_weight - 1 more times here.
-        pos_weight = (n * n - positives) / positives
-        norm = n * n / (2.0 * (n * n - positives))
+        # As in the authors' code, the weights count the edges without the self-loops
+        # (2 per undirected edge), though the targets include them (A + I).
+        edges_in_a = 2 * len(graph.train_edges)
+        pos_weight = (n * n - edges_in_a) / edges_in_a
+        norm = n * n / (2.0 * (n * n - edges_in_a))
+        # Every target 1 counts pos_weight times: once in the full sum, pos_weight - 1 more times here.
         full = binary_cross_entropy_with_logits(logits, graph.targets, reduction="sum")
         edges = binary_cross_entropy_with_logits(gather_rows(logits, graph.positives),
                                                  Tensor([1.0] * positives, (positives, 1)), reduction="sum")
@@ -207,8 +210,8 @@ class TorchRunner:
         n = graph.nodes
         self.targets = torch.zeros(n * n, dtype=torch.float64)
         self.targets[torch.tensor(graph.positives)] = 1.0
-        positives = len(graph.positives)
-        self.pos_weight, self.norm = (n * n - positives) / positives, n * n / (2.0 * (n * n - positives))
+        edges_in_a = 2 * len(graph.train_edges)
+        self.pos_weight, self.norm = (n * n - edges_in_a) / edges_in_a, n * n / (2.0 * (n * n - edges_in_a))
 
     def _encode(self):
         torch = self.torch

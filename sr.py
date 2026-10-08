@@ -135,7 +135,8 @@ def psnr(truth: Image, estimate: Image, shave: int) -> float:
 
     a, b = to_bytes(truth), to_bytes(estimate)
     errors = [(a[y][x] - b[y][x]) ** 2 for y in range(shave, len(a) - shave) for x in range(shave, len(a[0]) - shave)]
-    return 10 * math.log10(255 ** 2 / (sum(errors) / len(errors)))
+    mse = sum(errors) / len(errors)
+    return math.inf if mse == 0 else 10 * math.log10(255 ** 2 / mse)
 
 
 def degrade(image: Image, scale: int) -> Image:
