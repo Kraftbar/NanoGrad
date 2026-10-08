@@ -225,6 +225,7 @@ moe.py           # mixture-of-experts feed-forward layer (router + experts)
 lora.py          # LoRA adapters for fine-tuning frozen attention weights
 quantize.py      # int8 / int4 weight quantization and what it costs in loss
 speculative.py   # speculative decoding: a small model drafts, the large one checks
+profiler.py      # time per op type (forward and backward) for any training step
 vae.py           # variational autoencoder (generative model)
 vae_compare.py   # the VAE on MNIST in NanoGrad and PyTorch
 diffusion.py     # denoising diffusion (DDPM) with a small U-Net
