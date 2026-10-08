@@ -5,21 +5,29 @@ autograd in plain Python, with every heavy loop also written in C (and
 checked against the Python version). On top of that one core sit the
 model families from the standard benchmarks:
 
-- **vision**: LeNet, a ResNet (MLPerf Tiny's ResNet-8 shape), a vision
-  transformer; on MNIST, Fashion-MNIST and CIFAR-10
+- **vision**: LeNet, a ResNet (MLPerf Tiny's ResNet-8 shape), MobileNet, a
+  vision transformer (MNIST, Fashion-MNIST, CIFAR-10); a U-Net segmenting
+  CamVid street scenes; SRCNN super-resolution (Set5 / Set14); prototypical
+  networks for few-shot Omniglot; FGSM / PGD attacks and fast adversarial
+  training
 - **language**: a GPT (nanoGPT's recipe, with GPT-2 or LLaMA parts, BPE or
   characters), a BERT-style encoder with pretraining and fine-tuning, LSTM
-  and GRU char-rnns; on Tiny Shakespeare, and word-level LSTM and
-  transformer language models on WikiText-2 (PyTorch's own example recipe)
-- **LLM gears**: KV cache, grouped-query and sliding-window attention,
-  mixture of experts, LoRA, weight quantization, speculative decoding
-- **generative**: a variational autoencoder and a diffusion model on MNIST
-- **graphs**: a graph convolutional network (GCN) on the Cora citation graph
-- **time series**: DLinear and a patch transformer forecasting ETTh1
-- **GANs and reinforcement learning**: a DCGAN drawing MNIST digits, and
-  REINFORCE and actor-critic agents balancing CartPole
-- **text and translation**: fastText's classifier on AG News, and the
+  and GRU char-rnns on Tiny Shakespeare; word-level LSTM and transformer
+  language models on WikiText-2 and Penn Treebank; fastText on AG News; the
   encoder-decoder transformer translating Multi30k German to English
+- **LLM gears**: KV cache, grouped-query and sliding-window attention,
+  mixture of experts, LoRA, weight quantization, speculative decoding,
+  gradient checkpointing, DPO preference tuning, distillation
+- **generative**: a VAE, a DCGAN, a diffusion model and normalizing flows
+  (MADE / MAF) on MNIST
+- **graphs**: GCN and GAT node classification, and GAE / VGAE link
+  prediction, on the Cora citation graph
+- **recommendation**: neural collaborative filtering (GMF, MLP, NeuMF) on
+  MovieLens-1M
+- **audio**: spoken digits from log-mel spectrograms
+- **time series**: DLinear and a patch transformer forecasting ETTh1
+- **uncertainty**: MC dropout on the UCI regression benchmark
+- **reinforcement learning**: REINFORCE and actor-critic on CartPole
 
 Every family is checked against PyTorch running the same architecture from
 the same weights: in float64 the two train to the same numbers (weights
@@ -147,6 +155,10 @@ are in [docs/benchmarks.md](./docs/benchmarks.md).
   of experts, LoRA, weight quantization, speculative decoding](./docs/llm_gears.md)
 - [x] [WikiText-2 word-level language modeling with PyTorch's
   `word_language_model` recipe, LSTM and transformer, against PyTorch](./docs/benchmarks.md)
+- [x] [More fields, each on its standard benchmark against PyTorch](./docs/model_families.md):
+  graphs (GCN, GAT, GAE), text classification, translation, RL, time
+  series, recommendation, uncertainty, flows, super-resolution, few-shot,
+  adversarial robustness, audio, segmentation, distillation
 
 ### First Real Datasets
 
