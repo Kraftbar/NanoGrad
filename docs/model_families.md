@@ -330,9 +330,21 @@ Three convolutions turn a bicubic-upscaled image into a sharp one. SRCNN's
 protocol (Y channel, 3 border pixels shaved, PSNR in dB) depends on
 MATLAB's `imresize`, which is reimplemented exactly here. As a check,
 bicubic upscaling alone scores the 30.39 dB (Set5) and 27.54 dB (Set14)
-that every super-resolution paper lists.
+that every super-resolution paper lists. SRCNN 9-1-5 at x3, trained on the
+91-image set (21,884 patches of 33 x 33) for 50 epochs with Adam at 1e-4:
 
-(results running)
+| | Set5 | Set14 |
+| --- | ---: | ---: |
+| bicubic | 30.39 dB | 27.54 dB |
+| SRCNN 9-1-5, here | **32.11 dB** | **28.80 dB** |
+| SRCNN 9-1-5, paper (91 images) | 32.39 dB | 29.00 dB |
+
+The paper trains for about 10^8 patch steps with SGD; this is 50 epochs,
+about 70,000 steps, and still improving slowly at the end.
+
+*Added*: separable bicubic resizing with MATLAB's kernel, antialiasing
+and mirrored edges. Large test images are evaluated in overlapping strips,
+which gives the same result without one multi-GB patch table.
 
 ## Few-shot learning: prototypical networks (`fewshot.py`)
 
