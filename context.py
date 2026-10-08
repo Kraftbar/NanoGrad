@@ -78,7 +78,7 @@ def fine_tune(model, tokens: list[int], length: int, args) -> None:
 def main(argv: list[str] | None = None) -> dict:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--run", default="runs/baby_llama", help="a gpt_train.py --out-dir trained with RoPE")
-    parser.add_argument("--lengths", type=int, nargs="+", default=[128, 256])
+    parser.add_argument("--lengths", type=int, nargs="*", default=[128, 256])
     parser.add_argument("--windows", type=int, default=40, help="validation windows per measurement")
     parser.add_argument("--steps", type=int, default=300, help="fine-tuning steps at each new length")
     parser.add_argument("--batch-size", type=int, default=8)
@@ -98,6 +98,11 @@ def main(argv: list[str] | None = None) -> dict:
         print(f"{name:34s} loss {losses[0]:.4f}, last quarter {losses[1]:.4f}", flush=True)
 
     report(f"trained length ({trained})", window_losses(base, validation, trained, args.windows))
+    # The control: the baby model is not fully trained, so more steps help even at the
+    # trained length. Gains at longer lengths count only beyond this.
+    control = copy.deepcopy(base)
+    fine_tune(control, training, trained, args)
+    report(f"trained length + {args.steps} steps", window_losses(control, validation, trained, args.windows))
     for length in args.lengths:
         start = perf_counter()
         extrapolated = copy.deepcopy(base)
