@@ -20,7 +20,7 @@ and float64, and NanoGrad uses its C kernels.
 | MNIST | LeNet-5, 5K parameters, 3 epochs | **98.00%** test accuracy | LeNet-5 paper (1998): 99.05%, 20 epochs |
 | MNIST | small ResNet, 1 epoch | 97.84% | |
 | CIFAR-10 | ResNet-8 (MLPerf Tiny's shape), 78K parameters, 3 epochs | **68.57%** | MLPerf Tiny target: 85% (after much longer training) |
-| CIFAR-10, Fashion-MNIST | LeNet, ResNet, ViT, 2 epochs | [table below](#model-families) | |
+| Fashion-MNIST / CIFAR-10 | small ResNet, 2 epochs | 86.90% / 58.30% | [all models below](#model-families) |
 | Penn Treebank | Zaremba et al.'s small LSTM, 13 epochs | running | paper: test perplexity 114.5 |
 | WikiText-2 | PyTorch's `word_language_model` LSTM, 6 epochs | running | |
 | WikiText-2 | 2-layer GPT, same recipe | running | |
@@ -51,14 +51,23 @@ training sets; accuracy is on the full test sets.
 | --- | --- | ---: | ---: | ---: |
 | MNIST | LeNet | 3 | 98.00% | 1e-15 |
 | MNIST | ResNet | 1 | 97.84% | 8e-15 |
-| MNIST | ViT | 1 | running | |
-| Fashion-MNIST | LeNet / ResNet / ViT | 2 | running | |
-| CIFAR-10 | LeNet / ResNet / ViT | 2 | running | |
+| MNIST | ViT | 1 | 92.60% | 9e-11 |
+| Fashion-MNIST | LeNet | 2 | 83.22% | 9e-16 |
+| Fashion-MNIST | ResNet | 2 | 86.90% | 1e-14 |
+| Fashion-MNIST | ViT | 2 | 82.05% | 1e-10 |
+| CIFAR-10 | LeNet | 2 | 44.09% | 3e-15 |
+| CIFAR-10 | ResNet | 2 | 58.30% | 6e-15 |
+| CIFAR-10 | ViT | 2 | 44.00% | 8e-11 |
 | CIFAR-10 | ResNet-8 | 3 | 68.57% | 1.5e-12 |
 
 "Largest weight difference" is between the NanoGrad and PyTorch weights
 after the whole run: thousands of Adam steps later they still agree to
-rounding error.
+rounding error. (The vision transformer's 1e-10 is rounding too: its
+LayerNorms and softmaxes amplify the last-bit differences between two
+correct implementations a little more over 3,750 steps.)
+
+These are short schedules on small models, chosen to finish in minutes
+on a CPU, not to reach state-of-the-art accuracy.
 
 ## Speed
 
