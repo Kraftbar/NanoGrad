@@ -41,7 +41,9 @@ from __future__ import annotations
 
 import argparse
 import math
+import pickle
 import random
+from array import array
 from pathlib import Path
 from time import perf_counter
 
@@ -359,8 +361,14 @@ def run(args: argparse.Namespace) -> dict:
     valid_columns = batchify(corpus.valid, args.eval_batch_size)
     test_columns = batchify(corpus.test, args.eval_batch_size)
 
-    lr, best, best_weights, history = args.lr, None, None, []
-    for epoch in range(1, args.epochs + 1):
+    lr, best, best_weights, history, first = args.lr, None, None, [], 1
+    if args.checkpoint and Path(args.checkpoint).exists():       # resume after the last finished epoch
+        state = load_checkpoint(args.checkpoint)
+        runner.load_weights(state["weights"])
+        lr, best, best_weights, history = state["lr"], state["best"], state["best_weights"], state["history"]
+        first = len(history) + 1
+        print(f"resuming after epoch {len(history)} from {args.checkpoint}", flush=True)
+    for epoch in range(first, args.epochs + 1):
         start = perf_counter()
         train_epoch(runner, train_columns, bptt=args.bptt, lr=lr, epoch=epoch, log_every=args.log_every)
         valid = evaluate(runner, valid_columns, args.bptt)
@@ -376,12 +384,39 @@ def run(args: argparse.Namespace) -> dict:
             best, best_weights = valid, runner.weights()
         else:
             lr /= 4.0                         # the example's annealing
+        if args.checkpoint:
+            save_checkpoint(args.checkpoint, weights=runner.weights(), lr=lr, best=best,
+                            best_weights=best_weights, history=history)
     if best_weights is not None:
         runner.load_weights(best_weights)
     best = min(math.log(row["valid_ppl"]) for row in history) if best is None else best
     test = evaluate(runner, test_columns, args.bptt)
     print(f"| end of training | test loss {test:5.2f} | test ppl {math.exp(test):8.2f}", flush=True)
     return {"history": history, "valid_ppl": math.exp(best), "test_ppl": math.exp(test)}
+
+
+def save_checkpoint(path: str, **state) -> None:
+    """Everything needed to continue training after an epoch (weights as
+    packed arrays, so 13M numbers take 100 MB rather than 300 MB of text).
+    The dropout masks after a resume differ from an uninterrupted run's."""
+
+    def pack(weights):
+        return None if weights is None else [array("d", values) for values in weights]
+
+    state["weights"], state["best_weights"] = pack(state["weights"]), pack(state["best_weights"])
+    temporary = Path(str(path) + ".tmp")
+    with temporary.open("wb") as handle:
+        pickle.dump(state, handle)
+    temporary.replace(path)                     # never leave a half-written checkpoint
+
+
+def load_checkpoint(path: str) -> dict:
+    with Path(path).open("rb") as handle:
+        state = pickle.load(handle)
+    for name in ("weights", "best_weights"):
+        if state[name] is not None:
+            state[name] = [list(values) for values in state[name]]
+    return state
 
 
 def compare(args: argparse.Namespace) -> dict:
@@ -445,6 +480,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--decay-after", type=int, help="fixed schedule: divide the lr by --decay after this epoch")
     parser.add_argument("--decay", type=float, default=2.0)
     parser.add_argument("--init-range", type=float, help="draw every weight from uniform(-r, r)")
+    parser.add_argument("--checkpoint", help="save after every epoch here, and resume from it if it exists")
     parser.add_argument("--seed", type=int, default=1111)
     preset = parser.parse_known_args(argv)[0].preset
     if preset:

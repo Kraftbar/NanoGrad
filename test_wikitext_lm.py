@@ -64,6 +64,21 @@ class WikiTextTests(unittest.TestCase):
                 results = run(args)
         self.assertEqual([row["lr"] for row in results["history"]], [20.0, 10.0, 5.0])
 
+    def test_checkpoint_resumes_after_the_last_epoch(self) -> None:
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as folder:
+            tiny_corpus(Path(folder))
+            base = ["--data", folder, "--emsize", "8", "--nhid", "8", "--batch-size", "4", "--log-every", "1000",
+                    "--lr", "5", "--checkpoint", str(Path(folder) / "state.pkl")]
+            with contextlib.redirect_stdout(io.StringIO()):
+                first = run(parse_args(base + ["--epochs", "1"]))
+                resumed = run(parse_args(base + ["--epochs", "2"]))
+        self.assertEqual(len(first["history"]), 1)
+        self.assertEqual(len(resumed["history"]), 2)
+        self.assertEqual(resumed["history"][0], first["history"][0])
+
     def test_state_dict_round_trip(self) -> None:
         for tied in (False, True):
             model = WordRNNModel(9, embedding_dim=6, hidden=6, tied=tied, dropout=0.0, seed=1)
