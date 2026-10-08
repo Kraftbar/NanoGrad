@@ -131,9 +131,10 @@ def gemm(
     """Batched ``C = op(A) @ op(B)``; see ``kernels.c`` for the conventions.
 
     A ``c_step`` of 0 sums all batch products into one (m x n) result.
-    With ``initial`` the products are added to a copy of it instead of to
-    zeros (``C = initial + op(A) @ op(B)``, which is how a linear layer adds
-    its bias without a separate pass).
+    With ``initial`` the products are added to it instead of to zeros
+    (``C = initial + op(A) @ op(B)``, which is how a linear layer adds its
+    bias without a separate pass). ``initial`` is consumed: a C array of the
+    current precision becomes the result itself, with no copy.
     """
 
     kernel = kernels_c.gemm if BACKEND == "c" else reference.gemm

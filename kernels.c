@@ -162,11 +162,24 @@ static void gemm_tiled(const real *A, const real *B, real *C,
             /* 2. pack the block: TILE_ROWS rows at a time, a(r, p) at [p * TILE_ROWS + r]
              * (worth it only when several column tiles will reuse it) */
             int pack_a = n >= 4 * TILE_COLS;
-            for (int i = i0; pack_a && i < i_end; i += TILE_ROWS) {
-                real *dst = packed + (long)(i - i0) * kb;
-                int rows = i_end - i < TILE_ROWS ? i_end - i : TILE_ROWS;
-                for (int p = 0; p < kb; p++)
-                    for (int r = 0; r < rows; r++) dst[p * TILE_ROWS + r] = A_AT(i + r, p0 + p);
+            if (pack_a && trans_a) {
+                /* A^T: row p of A holds a(., p) for every row of the block, so
+                 * read each once, in order, and deal it out to the row tiles. */
+                for (int p = 0; p < kb; p++) {
+                    const real *src = A + (long)(p0 + p) * m;
+                    for (int i = i0; i < i_end; i += TILE_ROWS) {
+                        real *dst = packed + (long)(i - i0) * kb + p * TILE_ROWS;
+                        int rows = i_end - i < TILE_ROWS ? i_end - i : TILE_ROWS;
+                        for (int r = 0; r < rows; r++) dst[r] = src[i + r];
+                    }
+                }
+            } else {
+                for (int i = i0; pack_a && i < i_end; i += TILE_ROWS) {
+                    real *dst = packed + (long)(i - i0) * kb;
+                    int rows = i_end - i < TILE_ROWS ? i_end - i : TILE_ROWS;
+                    for (int p = 0; p < kb; p++)
+                        for (int r = 0; r < rows; r++) dst[p * TILE_ROWS + r] = A_AT(i + r, p0 + p);
+                }
             }
             for (int j = 0; j < n; j += TILE_COLS) {
                 int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
