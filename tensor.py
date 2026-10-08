@@ -1315,6 +1315,63 @@ def gather_rows(table: Tensor, indices: Sequence[int]) -> Tensor:
     return out
 
 
+class SparseMatrix:
+    """A fixed matrix stored by its nonzero entries, row by row (CSR).
+
+    For a graph's adjacency matrix almost every entry is zero: Cora has
+    2,708 nodes but only 13,264 nonzeros of 7.3 million. Keeping only
+    (row, column, value) triples makes a product with it cost one row
+    operation per nonzero. The transpose is stored too, for the backward
+    pass. The matrix is a constant (no gradient for its values).
+    """
+
+    def __init__(self, shape: tuple[int, int], entries: Sequence[tuple[int, int, float]]) -> None:
+        self.shape = shape
+        self.nnz = len(entries)
+        self.row_start, self.cols, self.values = _csr(shape[0], entries)
+        self.t_row_start, self.t_cols, self.t_values = _csr(shape[1], [(c, r, v) for r, c, v in entries])
+
+    def to_dense(self) -> list[float]:
+        rows, cols = self.shape
+        out = [0.0] * (rows * cols)
+        for r in range(rows):
+            for e in range(self.row_start[r], self.row_start[r + 1]):
+                out[r * cols + self.cols[e]] += self.values[e]
+        return out
+
+
+def _csr(rows: int, entries) -> tuple:
+    ordered = sorted(entries)
+    row_start = [0] * (rows + 1)
+    for r, _, _ in ordered:
+        row_start[r + 1] += 1
+    for r in range(rows):
+        row_start[r + 1] += row_start[r]
+    return (kernels.index_table(row_start), kernels.index_table([c for _, c, _ in ordered]),
+            kernels.storage([v for _, _, v in ordered]))
+
+
+def sparse_matmul(matrix: SparseMatrix, dense: Tensor) -> Tensor:
+    """(rows x inner) sparse @ (inner x n) dense -> (rows x n).
+
+        out = A @ X        dX = A^T @ dout
+    """
+
+    rows, inner = matrix.shape
+    if dense.ndim != 2 or dense.shape[0] != inner:
+        raise ValueError("sparse_matmul needs a dense (inner, n) matrix")
+    n = dense.shape[1]
+    data = kernels.csr_matmul(matrix.row_start, matrix.cols, matrix.values, dense.data, rows=rows, n=n)
+    out = _op_result(data, (rows, n), (dense,), "sparse_matmul")
+
+    def _backward() -> None:
+        _add_grad(dense, kernels.csr_matmul(matrix.t_row_start, matrix.t_cols, matrix.t_values,
+                                            _grad_data(out), rows=inner, n=n))
+
+    _set_backward(out, _backward)
+    return out
+
+
 def scatter_add_rows(values: Tensor, indices: Sequence[int], rows: int) -> Tensor:
     """The reverse of ``gather_rows``: a (rows, width) tensor of zeros with
     row i of ``values`` added into row ``indices[i]`` (repeats add up).

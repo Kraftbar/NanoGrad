@@ -256,6 +256,12 @@ def gather_indexed(image: list[float], index: Sequence[int], *, batches: int, im
     return kernel(image, index, batches, image_size)
 
 
+def csr_matmul(row_start, cols, values, dense, *, rows: int, n: int) -> list[float]:
+    """Sparse (rows x inner, stored by rows) @ dense (inner x n); see kernels.c."""
+
+    return (kernels_c.csr_matmul if BACKEND == "c" else reference.csr_matmul)(row_start, cols, values, dense, rows, n)
+
+
 def gather_rows(table: list[float], ids: Sequence[int], *, width: int) -> list[float]:
     """Rows ``ids`` of a (rows x width) table, one after another (an embedding lookup)."""
 

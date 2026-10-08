@@ -93,7 +93,12 @@ class TensorSGD:
 
 
 class TensorAdam:
-    """Adam optimizer for tensor parameters."""
+    """Adam optimizer for tensor parameters.
+
+    ``weight_decay`` is decoupled (AdamW: the weights shrink directly);
+    ``l2`` is the older form that ``torch.optim.Adam(weight_decay=...)``
+    uses: ``l2 * w`` is added to the gradient before the moments.
+    """
 
     def __init__(
         self,
@@ -106,9 +111,12 @@ class TensorAdam:
         weight_decay: float = 0.0,
         weight_decay_min_ndim: int | None = None,
         max_grad_norm: float | None = None,
+        l2: float = 0.0,
     ) -> None:
         if lr <= 0.0:
             raise ValueError("lr must be positive")
+        if l2 < 0.0:
+            raise ValueError("l2 must be non-negative")
         if beta1 < 0.0 or beta1 >= 1.0:
             raise ValueError("beta1 must be in [0, 1)")
         if beta2 < 0.0 or beta2 >= 1.0:
@@ -130,6 +138,7 @@ class TensorAdam:
         self.weight_decay = weight_decay
         self.weight_decay_min_ndim = weight_decay_min_ndim
         self.max_grad_norm = max_grad_norm
+        self.l2 = l2
         self.step_count = 0
         self._m = [
             [0.0] * parameter.numel
@@ -167,12 +176,15 @@ class TensorAdam:
             # with bias corrections m_hat = m / (1 - beta1^t), v_hat = v / (1 - beta2^t)
             # (one fused loop per parameter, see kernels.adam_update)
             decay = 1.0 - self.lr * self.weight_decay if use_weight_decay else 1.0
+            grad, scale = parameter.grad, grad_scale
+            if self.l2:                                   # g <- g + l2 * w  (torch.optim.Adam's weight_decay)
+                grad, scale = kernels.add_scaled(kernels.scale(grad, grad_scale), parameter.data, self.l2), 1.0
             parameter.data, self._m[parameter_index], self._v[parameter_index] = kernels.adam_update(
                 parameter.data,
-                parameter.grad,
+                grad,
                 first_moment,
                 second_moment,
-                grad_scale=grad_scale,
+                grad_scale=scale,
                 beta1=self.beta1,
                 beta2=self.beta2,
                 decay=decay,

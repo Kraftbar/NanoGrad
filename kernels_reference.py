@@ -282,6 +282,17 @@ def gather_indexed(
     return out
 
 
+def csr_matmul(row_start, cols, values, dense, rows: int, n: int) -> list[float]:
+    out = []
+    for r in range(rows):
+        total = [0.0] * n
+        for e in range(row_start[r], row_start[r + 1]):
+            start = cols[e] * n
+            total = [t + values[e] * d for t, d in zip(total, dense[start : start + n])]
+        out += total
+    return out
+
+
 def gather_rows(table: list[float], ids: Sequence[int], width: int) -> list[float]:
     out: list[float] = []
     for row in ids:

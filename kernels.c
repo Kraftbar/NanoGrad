@@ -716,6 +716,26 @@ void scatter_add_indexed(const real *grad, const long *index, real *image_grad,
 }
 
 /*
+ * Sparse (rows x inner) matrix times dense (inner x n) matrix. The sparse
+ * matrix is stored by rows (CSR): the nonzeros of row r are entries
+ * row_start[r] .. row_start[r + 1] - 1, with columns cols[e] and values
+ * values[e]. Each nonzero adds a scaled copy of one dense row:
+ *     out[r, :] += values[e] * dense[cols[e], :]
+ */
+void csr_matmul(const long *row_start, const long *cols, const real *values,
+                const real *dense, real *out, long rows, long n)
+{
+    for (long r = 0; r < rows; r++) {
+        real *o = out + r * n;
+        for (long e = row_start[r]; e < row_start[r + 1]; e++) {
+            const real *d = dense + cols[e] * n;
+            real v = values[e];
+            for (long j = 0; j < n; j++) o[j] += v * d[j];
+        }
+    }
+}
+
+/*
  * Embedding lookup: whole rows of a (rows x width) table.
  *     gather:  out[i, :] = table[ids[i], :]
  *     scatter: table_grad[ids[i], :] += grad[i, :]   (repeated ids add up)

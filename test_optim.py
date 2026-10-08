@@ -163,5 +163,28 @@ class MomentumTests(unittest.TestCase):
                     self.assertAlmostEqual(a, b, places=12)
 
 
+class AdamL2Tests(unittest.TestCase):
+    @unittest.skipUnless(__import__("importlib").util.find_spec("torch"), "PyTorch not installed")
+    def test_l2_matches_torch_adam_weight_decay(self) -> None:
+        import torch
+
+        from optim import TensorAdam
+        from tensor import Tensor
+
+        values = [0.5, -1.0, 2.0]
+        ours = Tensor(list(values), (3,), requires_grad=True)
+        theirs = torch.tensor(values, dtype=torch.float64, requires_grad=True)
+        optimizer = TensorAdam([ours], lr=0.01, l2=0.05)
+        reference = torch.optim.Adam([theirs], lr=0.01, weight_decay=0.05)
+        for step in range(5):
+            grad = [0.1 * (step + 1), -0.2, 0.3]
+            ours.grad = list(grad)
+            theirs.grad = torch.tensor(grad, dtype=torch.float64)
+            optimizer.step()
+            reference.step()
+        for a, b in zip(ours.data, theirs.tolist()):
+            self.assertAlmostEqual(a, b, places=14)
+
+
 if __name__ == "__main__":
     unittest.main()

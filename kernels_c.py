@@ -171,6 +171,7 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.conv_input_grad.argtypes = [pointer, pointer, index_pointer, pointer] + [count, count] + [ctypes.c_int] * 3
     for name in ("gather_indexed", "scatter_add_indexed"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer, count, count, count]
+    library.csr_matmul.argtypes = [index_pointer, index_pointer, pointer, pointer, pointer, count, count]
     for name in ("gather_rows", "scatter_add_rows"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer, count, count]
     library.add_vectors.argtypes = [pointer, pointer, pointer, count]
@@ -396,6 +397,14 @@ def scatter_add_indexed(
         _buffer(grad_buffer), index_buffer, _buffer(image_grad), batches, image_size, len(index),
     )
     return image_grad
+
+
+def csr_matmul(row_start, cols, values, dense, rows: int, n: int) -> array:
+    keep_rows, row_buffer = _index_buffer(row_start)
+    keep_cols, col_buffer = _index_buffer(cols)
+    value_buffer, dense_buffer, out = _reals(values), _reals(dense), zeros(rows * n)
+    library.csr_matmul(row_buffer, col_buffer, _buffer(value_buffer), _buffer(dense_buffer), _buffer(out), rows, n)
+    return out
 
 
 def gather_rows(table: list[float], ids: Sequence[int], width: int) -> array:
