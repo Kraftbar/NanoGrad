@@ -230,6 +230,16 @@ class Tanh(TensorModule):
         return x.tanh()
 
 
+class MaxPool2d(TensorModule):
+    """The largest value in each size x size window (stride = size; leftover edges are dropped)."""
+
+    def __init__(self, size: int = 2) -> None:
+        self.size = size
+
+    def __call__(self, x: Tensor) -> Tensor:
+        return x.max_pool2d((self.size, self.size))
+
+
 class Flatten(TensorModule):
     """(B, ...) -> (B, everything else)."""
 

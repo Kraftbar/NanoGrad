@@ -36,11 +36,19 @@ and each can be read on its own:
 ```text
 +---------------------------------------------------------------------+
 | Recipes and benchmarks                                              |
-| gpt_train | mnist_compare | wikitext_lm | bert_compare | bench | ... |
+| gpt_train | mnist_compare | wikitext_lm | translate | bench | ...   |
 +---------------------------------------------------------------------+
-| Model families                      | LLM gears                     |
-| lenet | resnet | vit | GPT | bert   | moe | lora | quantize |      |
-| lstm / gru | vae | diffusion | gcn  | speculative | bpe            |
+| Model families                          | LLM gears                 |
+| vision: lenet resnet mobilenet vit      | bpe, GQA, sliding window  |
+|   srcnn (super-resolution)              | moe, lora, quantize       |
+|   protonet (few-shot)                   | speculative decoding      |
+| language: GPT bert lstm/gru seq2seq     | recompute (checkpointing) |
+|   fastText                              |                           |
+| generative: vae gan diffusion maf       |                           |
+| graphs: gcn gat    recsys: ncf          |                           |
+| rl: reinforce, actor-critic             |                           |
+| time series: dlinear patchtst           |                           |
+| uncertainty: mc dropout (uci)           |                           |
 +---------------------------------------------------------------------+
 | Layers, losses, optimizers, training                                |
 | tensor_nn | losses | optim | schedules | train | parallel           |

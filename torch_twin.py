@@ -26,7 +26,7 @@ from mobilenet import MobileNet, SeparableBlock
 from resnet import ResidualBlock, SmallResNet
 from rnn import LSTM, RowLSTM
 from tensor_nn import (
-    Flatten, LeakyReLU, ReLU, Sequential, Tanh, TensorBatchNorm2d, TensorConv2D, TensorConvTranspose2D,
+    Flatten, LeakyReLU, MaxPool2d, ReLU, Sequential, Tanh, TensorBatchNorm2d, TensorConv2D, TensorConvTranspose2D,
     TensorLayerNorm, TensorLinear, TensorModule, TensorRMSNorm,
 )
 from vision import TwoConvCNN
@@ -90,6 +90,7 @@ class TorchTwin:
             (LeakyReLU, lambda layer, x: F.leaky_relu(x, layer.slope)),
             (Tanh, lambda layer, x: torch.tanh(x)),
             (Flatten, lambda layer, x: x.flatten(1)),
+            (MaxPool2d, lambda layer, x: F.max_pool2d(x, layer.size)),
             (TensorBatchNorm2d, self._batch_norm),
             (TensorLayerNorm, self._layer_norm),
             (TensorLinear, self._linear),

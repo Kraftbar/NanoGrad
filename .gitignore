@@ -46,3 +46,6 @@ data/ett/*.csv
 data/ml-1m/ml-1m.*
 data/uci/*/*.txt
 data/sr/*/*.bmp
+data/omniglot/*.zip
+data/omniglot/*.txt
+data/omniglot/*.pkl
