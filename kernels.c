@@ -44,10 +44,13 @@ typedef REAL real;
  * kernels.py builds with -march=native).
  * It is the core idea of every fast BLAS, in three steps:
  *
- * 1. Register tile: compute an 8 x (2 vectors) block of C at a time, kept
- *    in 16 vector registers for the whole sum over p. Each step loads one
- *    row slice of B (2 vectors) and 8 numbers of A, and does 16 vector
- *    multiply-adds, instead of loading and storing rows of C every step.
+ * 1. Register tile: compute a TILE_ROWS x (2 vectors) block of C at a time,
+ *    kept in vector registers for the whole sum over p. Each step loads one
+ *    row slice of B (2 vectors) and TILE_ROWS numbers of A, and does
+ *    2 * TILE_ROWS vector multiply-adds, instead of loading and storing rows
+ *    of C every step. AVX-512 has 32 vector registers, so 12 rows (24
+ *    accumulators); AVX2 has 16, so 6 rows (measured: each is 10-35% faster
+ *    than 8 rows on its own hardware).
  * 2. Packing: copy the B columns this tile needs into a small contiguous
  *    "panel", and each block of A tile by tile, so the inner loop reads
  *    memory in order whichever way A and B are stored.
@@ -69,7 +72,11 @@ typedef REAL real;
 #ifdef VECTOR_BYTES
 #define VECTOR_WIDTH (VECTOR_BYTES / (int)sizeof(real))   /* 8 doubles or 16 floats */
 typedef real vec __attribute__((vector_size(VECTOR_BYTES)));
-#define TILE_ROWS 8
+#if VECTOR_BYTES == 64
+#define TILE_ROWS 12
+#else
+#define TILE_ROWS 6
+#endif
 #define TILE_COLS (2 * VECTOR_WIDTH)
 #define K_BLOCK 256
 #define A_BLOCK 65536          /* numbers of op(A) per cached block (m_block * kb) */

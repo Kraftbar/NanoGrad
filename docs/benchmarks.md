@@ -97,8 +97,9 @@ the tests check it against.
 GFLOP/s; PyTorch's BLAS reaches about 60 in float64 on one core of this CPU. `gemm` in `kernels.c` now
 uses the ideas of every fast BLAS, in about 150 lines:
 
-- a register tile: an 8 x 32 block of C (float32; 8 x 16 in float64)
-  stays in 16 vector registers while the sum runs over k
+- a register tile: a 12 x 32 block of C (float32; 12 x 16 in float64)
+  stays in 24 of AVX-512's 32 vector registers while the sum runs over k
+  (6 rows with AVX2's 16 registers)
 - packing: the columns of B a tile needs, and blocks of A, are copied
   into small contiguous buffers so the inner loop reads memory in order
 - cache blocking: 256-deep slices of k and blocks of A of about 64K

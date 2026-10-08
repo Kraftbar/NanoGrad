@@ -102,7 +102,7 @@ Getting here took:
   without copies, plus kernels for elementwise math and a fused Adam
   update ([benchmarks.md](./benchmarks.md))
 - a blocked, register-tiled matrix product (`gemm` in kernels.c: packed
-  panels, 8 x 32 register tiles, cache blocking), at 40-47 GFLOP/s in
+  panels, 12 x 32 register tiles, cache blocking), at 40-47 GFLOP/s in
   float64 on one core, about what this CPU's vector units allow, and
   computing all attention heads in one batched product
 
