@@ -123,3 +123,17 @@ on this CPU.
 *Added*: a sparse matrix (`SparseMatrix`, rows of nonzeros) and its
 product with a dense matrix, a C kernel whose backward pass multiplies by
 the stored transpose; Adam's L2 form of weight decay (`TensorAdam(l2=)`).
+
+## Text classification: fastText (`text_classify.py`)
+
+The bag-of-tricks baseline of Joulin et al. (2016) on AG News: average
+the embeddings of a text's words (and, optionally, of its word pairs,
+hashed into a million extra rows), then one linear layer. 91.4% test
+accuracy with words, 91.8% with word pairs, trained identically to
+PyTorch's `nn.EmbeddingBag`.
+
+*Added*: nothing new for the model itself (the bag mean is a row gather
+and a row scatter), but its 10.6-million-number table needed row-sparse
+gradients: `tensor.RowGrad` keeps just the rows a batch used, and SGD
+updates just those rows in place. One step went from 54 ms to 1.1 ms,
+faster than PyTorch's sparse embedding gradients (1.7 ms).

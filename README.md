@@ -15,6 +15,8 @@ model families from the standard benchmarks:
   mixture of experts, LoRA, weight quantization, speculative decoding
 - **generative**: a variational autoencoder and a diffusion model on MNIST
 - **graphs**: a graph convolutional network (GCN) on the Cora citation graph
+- **text and translation**: fastText's classifier on AG News, and the
+  encoder-decoder transformer translating Multi30k German to English
 
 Every family is checked against PyTorch running the same architecture from
 the same weights: in float64 the two train to the same numbers (weights
@@ -227,6 +229,9 @@ lora.py          # LoRA adapters for fine-tuning frozen attention weights
 quantize.py      # int8 / int4 weight quantization and what it costs in loss
 speculative.py   # speculative decoding: a small model drafts, the large one checks
 gcn.py           # graph convolutional network on Cora, NanoGrad vs PyTorch
+text_classify.py # fastText's bag of embeddings on AG News, NanoGrad vs PyTorch
+seq2seq.py       # the encoder-decoder transformer (cross-attention, padding masks)
+translate.py     # German to English on Multi30k, BLEU, NanoGrad vs PyTorch
 profiler.py      # time per op type (forward and backward) for any training step
 vae.py           # variational autoencoder (generative model)
 vae_compare.py   # the VAE on MNIST in NanoGrad and PyTorch
