@@ -216,6 +216,7 @@ The authors' recipe (32 then 16 units, Adam lr 0.01, 200 full-graph steps),
 
 | model | test AUC | test average precision | paper |
 | --- | ---: | ---: | --- |
+| GAE | 91.6 | 92.6 | 91.0 / 92.0 |
 | VGAE | 92.1 | 93.0 | 91.4 / 92.6 |
 
 *Added*: nothing in the core. The edge weighting is two calls of the
