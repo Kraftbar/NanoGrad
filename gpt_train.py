@@ -134,6 +134,7 @@ def build_model(vocab_size: int, config: argparse.Namespace):
         num_kv_heads=config.kv_heads,
         num_experts=config.experts,
         attention_window=config.window,
+        recompute_blocks=getattr(config, "recompute", False),
         expert_top_k=config.expert_top_k,
         num_layers=config.layers,
         feed_forward_activation=config.activation,
@@ -379,6 +380,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--architecture", choices=("transformer", "lstm", "gru"))
     parser.add_argument("--lstm-hidden", type=int)
     parser.add_argument("--kv-heads", type=int, help="key/value heads (grouped-query attention); default: --heads")
+    parser.add_argument("--recompute", action="store_true",
+                        help="gradient checkpointing: recompute each block's activations in backward")
     parser.add_argument("--window", type=int, help="sliding-window attention: tokens each position sees")
     parser.add_argument("--experts", type=int, help="mixture-of-experts feed-forward with this many experts")
     parser.add_argument("--expert-top-k", type=int, help="experts per token (default: 2, or 1 with one expert)")

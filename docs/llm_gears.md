@@ -15,6 +15,7 @@ checked against PyTorch where PyTorch has an equivalent.
 | | mixture of experts | `moe.py`, `--preset baby-moe` | each token uses 2 of 4 feed-forward experts, chosen by a router (Mixtral) |
 | | bidirectional attention | `causal=False` | for encoders: ViT (`vit.py`) and BERT (`bert.py`) |
 | training | masked language modeling | `bert.py` | BERT's pretraining task |
+| | gradient checkpointing | `recompute.py`, `--recompute` | keep only each block's input; recompute its activations in backward |
 | | LoRA | `lora.py`, `bert_finetune.py --lora 4` | fine-tune through small low-rank updates to frozen attention weights |
 | inference | KV cache | `language.py` (`step_logits`) | generation adds one row of work per token instead of re-running the context |
 | | speculative decoding | `speculative.py` | a small model drafts k tokens, the large one checks them in one pass; same output distribution |
@@ -205,3 +206,21 @@ loss falls to about 1.1 while held-out accuracy stays near 17%, with or
 without pretraining. At this scale the honest result is that pretrained
 features help a little and fine-tuning needs more labelled data than this
 task has.
+
+## Gradient Checkpointing
+
+Training memory is mostly activations: every intermediate result of the
+forward pass waits for backward. `recompute(block, x)` runs a block
+without recording it, keeps only its input, and runs it again (recording)
+when backward reaches it; dropout masks repeat because the block's random
+generators are rewound. A test checks that outputs and gradients are
+identical. On the baby GPT at batch 32 (`--recompute`):
+
+| | peak memory (one step) | time per step |
+| --- | ---: | ---: |
+| plain | 643 MB | 643 ms |
+| recompute each block | 199 MB | 946 ms |
+
+A third of the memory for half again the time; the theory says a third
+more time (one extra forward pass of each block), and the rest is
+Python building each block's graph twice.

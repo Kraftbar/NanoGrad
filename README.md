@@ -233,6 +233,7 @@ text_classify.py # fastText's bag of embeddings on AG News, NanoGrad vs PyTorch
 seq2seq.py       # the encoder-decoder transformer (cross-attention, padding masks)
 translate.py     # German to English on Multi30k, BLEU, NanoGrad vs PyTorch
 profiler.py      # time per op type (forward and backward) for any training step
+recompute.py     # gradient checkpointing: recompute activations in backward to save memory
 vae.py           # variational autoencoder (generative model)
 vae_compare.py   # the VAE on MNIST in NanoGrad and PyTorch
 diffusion.py     # denoising diffusion (DDPM) with a small U-Net

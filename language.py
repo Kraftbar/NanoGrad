@@ -6,7 +6,7 @@ import math
 import random
 
 from moe import MoEFeedForward
-from tensor import Tensor, concat, matmul, rotary_embedding
+from tensor import Tensor, concat, is_grad_enabled, matmul, rotary_embedding
 from tensor_nn import (
     TensorDropout,
     TensorEmbedding,
@@ -16,6 +16,12 @@ from tensor_nn import (
     TensorRMSNorm,
     linear,
 )
+
+
+def recompute(module, *inputs):
+    from recompute import recompute as run   # recompute.py builds on this module's layers
+
+    return run(module, *inputs)
 
 
 TRANSFORMER_INITS = ("xavier", "gpt2")
@@ -668,6 +674,7 @@ class CharTransformerModel(TensorModule):
         num_experts: int = 0,
         expert_top_k: int = 2,
         attention_window: int | None = None,
+        recompute_blocks: bool = False,
         num_layers: int = 1,
         feed_forward_activation: str = "relu",
         tie_embeddings: bool = False,
@@ -705,6 +712,7 @@ class CharTransformerModel(TensorModule):
         self.num_experts = num_experts
         self.expert_top_k = expert_top_k
         self.attention_window = attention_window
+        self.recompute_blocks = recompute_blocks      # gradient checkpointing (recompute.py)
         self.num_layers = num_layers
         self.feed_forward_activation = feed_forward_activation
         self.tie_embeddings = tie_embeddings
@@ -783,7 +791,7 @@ class CharTransformerModel(TensorModule):
     def sequence_logits(self, inputs: Tensor) -> Tensor:
         hidden = self.embedding_dropout(self.embedding(inputs))
         for block in self.blocks:
-            hidden = block(hidden)
+            hidden = recompute(block, hidden) if self.recompute_blocks and is_grad_enabled() else block(hidden)
         return self.projection(self.norm(hidden))
 
     def auxiliary_loss(self) -> Tensor | None:
