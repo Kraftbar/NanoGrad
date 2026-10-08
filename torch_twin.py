@@ -24,6 +24,7 @@ from bert import TinyBERT
 from language import CausalSelfAttention, CharTransformerModel, TokenPositionEmbedding, TransformerBlock
 from mobilenet import MobileNet, SeparableBlock
 from resnet import ResidualBlock, SmallResNet
+from segment import UNet
 from rnn import LSTM, RowLSTM
 from tensor_nn import (
     Flatten, LeakyReLU, MaxPool2d, ReLU, Sequential, Tanh, TensorBatchNorm2d, TensorConv2D, TensorConvTranspose2D,
@@ -74,6 +75,7 @@ class TorchTwin:
             (SmallResNet, self._small_resnet),
             (RowLSTM, self._row_lstm),
             (MobileNet, self._mobilenet),
+            (UNet, self._unet),
             (SeparableBlock, self._separable_block),
             (ResidualBlock, self._residual_block),
             (TinyViT, self._tiny_vit),
@@ -231,6 +233,17 @@ class TorchTwin:
         for block in model.blocks:
             x = self._separable_block(block, x)
         return self._linear(model.classifier, x.mean(dim=(2, 3)))
+
+    def _unet(self, model: UNet, x):
+        skips = []
+        for block in model.down:
+            x = self.forward(block, x)
+            skips.append(x)
+            x = F.max_pool2d(x, 2)
+        x = self.forward(model.middle, x)
+        for up, block, skip in zip(model.ups, model.up_blocks, reversed(skips)):
+            x = self.forward(block, torch.cat([skip, self.forward(up, x)], dim=1))
+        return self.forward(model.head, x)
 
     def _small_resnet(self, model: SmallResNet, x):
         x = F.relu(self._batch_norm(model.stem_norm, self._conv(model.stem, x)))

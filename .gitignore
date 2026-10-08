@@ -50,3 +50,7 @@ data/omniglot/*.zip
 data/omniglot/*.txt
 data/omniglot/*.pkl
 data/fsdd/recordings/
+data/camvid/*/
+data/camvid/*.txt
+data/camvid/*.pkl
+data/camvid/download.done
