@@ -32,9 +32,9 @@ model families from the standard benchmarks:
 Every family is checked against PyTorch running the same architecture from
 the same weights: in float64 the two train to the same numbers (weights
 equal to about 1e-12 after thousands of steps). With the C kernels a
-training step takes 0.5x to 1.6x as long as single-threaded PyTorch's: as
-fast or faster on the convolutional models, up to 1.6x slower on the
-language models' large matrix products (see
+training step takes 0.6x to 1.4x as long as single-threaded PyTorch's: as
+fast or faster on the convolutional models and the small transformers, up
+to 1.4x slower on the language models' large matrix products (see
 [docs/benchmarks.md](./docs/benchmarks.md)), and it needs nothing but
 Python and a C compiler; PyTorch is only used for the comparisons.
 

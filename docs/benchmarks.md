@@ -87,23 +87,24 @@ on a CPU, not to reach state-of-the-art accuracy.
 
 ## Speed
 
-Time per training step on the same work, both on one core, measured once
-the long benchmark runs were done (two other jobs still running). Every
+Time per training step on the same work, both on one core, on an
+otherwise idle machine (`mnist_compare.py`, `vae_compare.py`,
+`bert_compare.py`, `wikitext_lm.py --compare`; logs in `runs/timing2/`). Every
 row trains from the same weights on the same batches; in float64 the two
 reach the same loss and accuracy.
 
 | model | NanoGrad | PyTorch | NanoGrad / PyTorch |
 | --- | ---: | ---: | ---: |
-| LeNet, MNIST | 10.1 ms | 12.6 ms | 0.80x |
-| LeNet, MNIST, float32 | 6.8 ms | 13.6 ms | 0.50x |
-| LeNet, CIFAR-10 | 20.0 ms | 30.6 ms | 0.65x |
-| small ResNet, MNIST | 73.0 ms | 71.3 ms | 1.02x |
-| small ResNet, MNIST, float32 | 53.5 ms | 39.5 ms | 1.35x |
-| small ResNet, CIFAR-10 | 97.9 ms | 95.9 ms | 1.02x |
-| ResNet-8, CIFAR-10 | 212 ms | 202 ms | 1.05x |
-| tiny ViT, MNIST | 18.1 ms | 16.5 ms | 1.10x |
-| tiny ViT, CIFAR-10 | 24.9 ms | 22.5 ms | 1.11x |
-| VAE, MNIST | 26.7 ms | 24.9 ms | 1.07x |
+| LeNet, MNIST | 7.7 ms | 10.6 ms | 0.73x |
+| LeNet, MNIST, float32 | 5.9 ms | 9.8 ms | 0.60x |
+| LeNet, CIFAR-10 | 18.7 ms | 27.9 ms | 0.67x |
+| small ResNet, MNIST | 58.4 ms | 68.9 ms | 0.85x |
+| small ResNet, MNIST, float32 | 42.2 ms | 36.7 ms | 1.15x |
+| small ResNet, CIFAR-10 | 84.8 ms | 104 ms | 0.82x |
+| ResNet-8, CIFAR-10 | 188 ms | 197 ms | 0.96x |
+| tiny ViT, MNIST | 15.8 ms | 18.0 ms | 0.88x |
+| tiny ViT, CIFAR-10 | 23.3 ms | 24.9 ms | 0.94x |
+| VAE, MNIST | 23.1 ms | 25.5 ms | 0.91x |
 | BERT-style encoder, Tiny Shakespeare | 67.3 ms | 56.1 ms | 1.20x |
 | WikiText-2 LSTM (2 x 200, 33K vocabulary) | 1,275 ms | 987 ms | 1.29x |
 | WikiText-2 LSTM, float32 | 635 ms | 464 ms | 1.37x |
