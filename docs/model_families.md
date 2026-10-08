@@ -178,3 +178,26 @@ language models' transformer encoder.
 
 *Added*: nothing; both models are the core's linear layers and transformer
 blocks.
+
+## Translation: the encoder-decoder transformer (`seq2seq.py`, `translate.py`)
+
+German to English on Multi30k (29,000 image descriptions to train on;
+the 1,000-sentence test 2016 set to score), the usual first translation
+benchmark. The model is the original transformer's shape: an encoder
+reads the whole German sentence, and a decoder writes the English one
+word by word. Each decoder block adds cross-attention, which is the
+GPT's attention layer with queries from the target and keys and values
+from the encoder's output. Sentences are padded to a batch's longest, and
+a key mask hides the padding. Width 128, 4 heads, 2 encoder and 2
+decoder blocks, dropout 0.1, label smoothing 0.1, Adam with warmup and
+cosine decay, 10 epochs (about an hour):
+
+| decoding | test 2016 BLEU |
+| --- | ---: |
+| greedy | 32.5 |
+| beam search, width 4 | 33.4 |
+
+*Added*: `memory=` and `key_mask=` on the attention layer (cross-attention
+and padding masks), greedy and beam-search decoding, and corpus BLEU.
+`translate.py --compare` runs the same steps in PyTorch through the twin.
+
