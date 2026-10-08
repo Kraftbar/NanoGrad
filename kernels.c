@@ -832,13 +832,27 @@ void exp_vector(const real *x, real *y, long count)
     exp_shifted(x, 0.0, y, count);
 }
 
+/* The largest of n >= 1 values, with 16 running maxima so the loop
+ * vectorizes (one running maximum is a chain the compiler leaves scalar). */
+static double largest(const real *x, long n)
+{
+    enum { LANES = 16 };
+    real part[LANES];
+    for (int l = 0; l < LANES; l++) part[l] = x[0];
+    long i = 0;
+    for (; i + LANES <= n; i += LANES)
+        for (int l = 0; l < LANES; l++) part[l] = x[i + l] > part[l] ? x[i + l] : part[l];
+    for (; i < n; i++) part[0] = x[i] > part[0] ? x[i] : part[0];
+    for (int l = 1; l < LANES; l++) part[0] = part[l] > part[0] ? part[l] : part[0];
+    return part[0];
+}
+
 void softmax_rows(const real *x, real *y, long rows, long width)
 {
     for (long r = 0; r < rows; r++) {
         const real *in = x + r * width;
         real *out = y + r * width;
-        double row_max = in[0];
-        for (long i = 1; i < width; i++) if (in[i] > row_max) row_max = in[i];
+        double row_max = largest(in, width);
         double inverse = 1.0 / exp_shifted(in, row_max, out, width);
         for (long i = 0; i < width; i++) out[i] *= inverse;
     }
@@ -1199,6 +1213,11 @@ void relu_backward(const real *x, const real *grad, real *dx, long count)
 void sum_repeated(const real *x, real *out, long outer, long size, long inner)
 {
     for (long s = 0; s < size; s++) out[s] = 0.0;
+    if (inner == 1) {                  /* a bias over rows: add whole rows, which vectorizes */
+        for (long o = 0; o < outer; o++)
+            for (long s = 0; s < size; s++) out[s] += x[o * size + s];
+        return;
+    }
     for (long o = 0; o < outer; o++) {
         for (long s = 0; s < size; s++) {
             const real *run = x + (o * size + s) * inner;
