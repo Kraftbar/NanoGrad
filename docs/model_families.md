@@ -402,7 +402,18 @@ learned well. The thin and rare ones are not: poles, pedestrians and
 cyclists are a few percent of the pixels, and unweighted cross entropy
 ignores them. SegNet weights the loss by inverse class frequency for this
 reason ("median frequency balancing"), which mainly raises the class
-average.
+average. With it (`--balance`), the same run trades pixels of the big
+classes for the small ones:
+
+| loss | global accuracy | class average | mean IoU |
+| --- | ---: | ---: | ---: |
+| plain cross entropy | 81.6% | 45.7% | 36.9% |
+| median frequency balancing | 68.5% | 60.5% | 36.2% |
+
+Balanced, per class IoU: sky 89, building 35, pole 11, road 85, pavement 56, tree 47, sign 8, fence 11, car 36, pedestrian 13, bicyclist 8. Class average accuracy
+rises 15 points, global accuracy falls 13, and mean IoU stays about the
+same: the rare classes are now found, at the cost of false alarms on the
+common ones.
 
 *Added*: nothing in the core. Skip connections are `concat` along the
 channel axis, upsampling is the existing transposed convolution, and the
