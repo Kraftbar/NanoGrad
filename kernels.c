@@ -639,9 +639,60 @@ static inline double fast_exp(double x)
  * through a small double buffer in chunks: the loop over doubles
  * vectorizes for both precisions (GCC will not vectorize the one that mixes
  * floats into it), and the sum uses 8 running totals so it vectorizes too. */
+/*
+ * e^x in single precision, for the float32 build: the same reduction as
+ * fast_exp, with the Taylor series stopped at r^7 (the next term is below
+ * 2^-24 of the result) and twice as many numbers per vector instruction.
+ */
+static inline float fast_expf(float x)
+{
+    const float log2e = 1.44269504f, ln2_hi = 0.693145752f, ln2_lo = 1.42860677e-6f;
+    const float round_magic = 12582912.0f;                     /* 1.5 * 2^23 */
+    float clamped = x < -87.0f ? -87.0f : (x > 88.0f ? 88.0f : x);
+    float k = (clamped * log2e + round_magic) - round_magic;
+    float r = (clamped - k * ln2_hi) - k * ln2_lo;
+    float p = 1.0f / 5040.0f;
+    p = p * r + 1.0f / 720.0f;
+    p = p * r + 1.0f / 120.0f;
+    p = p * r + 1.0f / 24.0f;
+    p = p * r + 1.0f / 6.0f;
+    p = p * r + 0.5f;
+    p = p * r + 1.0f;
+    p = p * r + 1.0f;
+    int bits = ((int)k - 1 + 127) << 23;                         /* the float 2^(k-1) */
+    float half_two_k;
+    memcpy(&half_two_k, &bits, sizeof half_two_k);
+    float result = 2.0f * (p * half_two_k);
+    result = x < -87.0f ? 0.0f : result;
+    return x > 88.7f ? HUGE_VALF : result;
+}
+
+/* exp_shifted for floats: a float buffer and fast_expf (see below). */
+static double exp_shifted_float(const float *x, double shift, float *y, long count)
+{
+    enum { CHUNK = 256, LANES = 16 };
+    float buffer[CHUNK];
+    double lanes[LANES] = {0};
+    float shift_f = (float) shift;
+    for (long start = 0; start < count; start += CHUNK) {
+        long size = count - start < CHUNK ? count - start : CHUNK;
+        for (long i = 0; i < size; i++) buffer[i] = fast_expf(x[start + i] - shift_f);
+        long i = 0;
+        for (; i + LANES <= size; i += LANES)
+            for (int l = 0; l < LANES; l++) lanes[l] += buffer[i + l];
+        for (; i < size; i++) lanes[0] += buffer[i];
+        memcpy(y + start, buffer, sizeof(float) * size);
+    }
+    double total = 0.0;
+    for (int l = 0; l < LANES; l++) total += lanes[l];
+    return total;
+}
+
 static double exp_shifted(const real *x, double shift, real *y, long count)
 {
     enum { CHUNK = 256, LANES = 8 };
+    if (sizeof(real) == sizeof(float))                         /* the float32 build */
+        return exp_shifted_float((const float *) x, shift, (float *) y, count);
     double buffer[CHUNK], lanes[LANES] = {0};
     for (long start = 0; start < count; start += CHUNK) {
         long size = count - start < CHUNK ? count - start : CHUNK;
