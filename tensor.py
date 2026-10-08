@@ -1594,9 +1594,8 @@ def pad2d(image: Tensor, padding: int | tuple[int, int]) -> Tensor:
     """Add ``padding`` zeros on every side of the last two axes (or
     ``(rows, cols)``: that many above and below, and left and right).
 
-    Every input pixel moves to a fixed place in the larger zero image, listed
-    in an index table, so padding is a scatter into zeros and its backward
-    pass is the matching gather (the same kernels im2col uses).
+    Each row of each plane is copied into the middle of a larger zero
+    plane; the backward pass copies the same rows of the gradient back out.
     """
 
     pad_rows, pad_cols = (padding, padding) if isinstance(padding, int) else padding
@@ -1606,27 +1605,14 @@ def pad2d(image: Tensor, padding: int | tuple[int, int]) -> Tensor:
         raise ValueError("pad2d expects at least a 2D tensor")
     rows, cols = image.shape[-2:]
     out_shape = (*image.shape[:-2], rows + 2 * pad_rows, cols + 2 * pad_cols)
-    index = _pad2d_index(rows, cols, pad_rows, pad_cols)
-    sizes = dict(batches=image.numel // (rows * cols), image_size=out_shape[-2] * out_shape[-1])
-    out = _op_result(kernels.scatter_add_indexed(image.data, index, **sizes), out_shape, (image,), "pad2d")
+    sizes = dict(planes=image.numel // (rows * cols), rows=rows, cols=cols, pad_rows=pad_rows, pad_cols=pad_cols)
+    out = _op_result(kernels.pad_planes(image.data, **sizes), out_shape, (image,), "pad2d")
 
     def _backward() -> None:
-        _add_grad(image, kernels.gather_indexed(_grad_data(out), index, **sizes))
+        _add_grad(image, kernels.crop_planes(_grad_data(out), **sizes))
 
     _set_backward(out, _backward)
     return out
-
-
-@lru_cache(maxsize=64)
-def _pad2d_index(rows: int, cols: int, pad_rows: int, pad_cols: int) -> tuple[int, ...]:
-    """Where each pixel of a (rows, cols) plane lands in the padded plane."""
-
-    padded_cols = cols + 2 * pad_cols
-    return kernels.index_table(
-        (row + pad_rows) * padded_cols + col + pad_cols
-        for row in range(rows)
-        for col in range(cols)
-    )
 
 
 def upsample_nearest2d(image: Tensor, factor: int = 2) -> Tensor:
@@ -1844,10 +1830,8 @@ def _conv2d_input_grad_full(grad, kernel: Tensor, batches: int, image_rows: int,
     out_rows, out_cols = out_shape[-2:]
     pad_rows, pad_cols = kernel_rows - 1, kernel_cols - 1
     padded_rows, padded_cols = out_rows + 2 * pad_rows, out_cols + 2 * pad_cols
-    padded = kernels.scatter_add_indexed(
-        grad, _pad2d_index(out_rows, out_cols, pad_rows, pad_cols),
-        batches=batches * filters, image_size=padded_rows * padded_cols,
-    )
+    padded = kernels.pad_planes(grad, planes=batches * filters, rows=out_rows, cols=out_cols,
+                                pad_rows=pad_rows, pad_cols=pad_cols)
     k = kernel.data
     flipped = kernels.storage([                                  # (C, F, kh, kw), rotated 180 degrees
         k[((f * channels + c) * kernel_rows + kernel_rows - 1 - i) * kernel_cols + kernel_cols - 1 - j]

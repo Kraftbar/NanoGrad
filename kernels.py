@@ -239,6 +239,20 @@ def conv_kernel_grad(
     return kernel_fn(image, index, grad, batches, image_size, filters, patch_size, positions)
 
 
+def pad_planes(x: list[float], *, planes: int, rows: int, cols: int, pad_rows: int, pad_cols: int) -> list[float]:
+    """Each (rows x cols) plane inside pad_rows / pad_cols zeros on every side."""
+
+    kernel_fn = kernels_c.pad_planes if BACKEND == "c" else reference.pad_planes
+    return kernel_fn(x, planes, rows, cols, pad_rows, pad_cols)
+
+
+def crop_planes(padded: list[float], *, planes: int, rows: int, cols: int, pad_rows: int, pad_cols: int) -> list[float]:
+    """pad_planes undone: the (rows x cols) middle of each padded plane."""
+
+    kernel_fn = kernels_c.crop_planes if BACKEND == "c" else reference.crop_planes
+    return kernel_fn(padded, planes, rows, cols, pad_rows, pad_cols)
+
+
 def conv_direct(
     image: list[float], kernel: list[float], *, batches: int, channels: int, height: int, width: int,
     filters: int, kernel_rows: int, kernel_cols: int,

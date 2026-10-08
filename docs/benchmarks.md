@@ -201,6 +201,16 @@ output gradient, padded by the kernel size minus one, convolved with the
 flipped kernel (channels and filters swapped), which runs on the fast
 forward kernel instead of scattering patch by patch.
 
+Layers with few filters needed the opposite of packing. With 8 filters a
+register tile is 8 rows tall, and gathering each patch value into the
+panel costs more than the 8 multiply-adds it feeds. `conv_direct` skips
+patches altogether: a vector of output pixels along a row, for 8 filters
+at once, accumulates `kernel[f, c, i, j] * image[c, y+i, x+j : x+j+V]`
+over every (c, i, j), so one load feeds 8 multiply-adds and the 8 sums
+never leave registers. It is used up to 16 filters (a float32 step of the small
+ResNet went from 45 to 36 ms); the kernel gradient stays on the matrix
+product, which was faster there.
+
 | LeNet step, batch 32, 1 process | ms |
 | --- | ---: |
 | first measurement | 176 |

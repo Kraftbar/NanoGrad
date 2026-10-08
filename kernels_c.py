@@ -176,6 +176,8 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.conv_forward.argtypes = [pointer, index_pointer, pointer, pointer] + [count, count] + [ctypes.c_int] * 3
     library.conv_kernel_grad.argtypes = [pointer, index_pointer, pointer, pointer] + [count, count] + [ctypes.c_int] * 3
     library.conv_input_grad.argtypes = [pointer, pointer, index_pointer, pointer] + [count, count] + [ctypes.c_int] * 3
+    library.pad_planes.argtypes = [pointer, pointer, count] + [ctypes.c_int] * 4
+    library.crop_planes.argtypes = [pointer, pointer, count] + [ctypes.c_int] * 4
     library.conv_direct.argtypes = [pointer, pointer, pointer, count] + [ctypes.c_int] * 6
     for name in ("gather_indexed", "scatter_add_indexed"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer, count, count, count]
@@ -395,6 +397,18 @@ def conv_direct(image, kernel, batches: int, channels: int, height: int, width: 
     out = zeros(batches * filters * (height - kernel_rows + 1) * (width - kernel_cols + 1))
     library.conv_direct(_buffer(image_buffer), _buffer(kernel_buffer), _buffer(out), batches,
                         channels, height, width, filters, kernel_rows, kernel_cols)
+    return out
+
+
+def pad_planes(x, planes: int, rows: int, cols: int, pad_rows: int, pad_cols: int) -> array:
+    x_buffer, out = _reals(x), zeros(planes * (rows + 2 * pad_rows) * (cols + 2 * pad_cols))
+    library.pad_planes(_buffer(x_buffer), _buffer(out), planes, rows, cols, pad_rows, pad_cols)
+    return out
+
+
+def crop_planes(padded, planes: int, rows: int, cols: int, pad_rows: int, pad_cols: int) -> array:
+    padded_buffer, out = _reals(padded), zeros(planes * rows * cols)
+    library.crop_planes(_buffer(padded_buffer), _buffer(out), planes, rows, cols, pad_rows, pad_cols)
     return out
 
 

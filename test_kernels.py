@@ -122,6 +122,17 @@ class KernelBackendTests(unittest.TestCase):
                     ))
                     self.assertListsClose(python, c)
 
+    def test_pad_and_crop_planes_agree(self) -> None:
+        x = values(3 * 4 * 5, 64)
+        sizes = dict(planes=3, rows=4, cols=5, pad_rows=2, pad_cols=1)
+        python, c = self.run_both(lambda: kernels.pad_planes(x, **sizes))
+        self.assertListsClose(python, c)
+        self.assertEqual(len(c), 3 * 8 * 7)
+        self.assertEqual(list(c[2 * 7 + 1 : 2 * 7 + 6]), list(x[:5]))     # first row, inside the border
+        python, c = self.run_both(lambda: kernels.crop_planes(python, **sizes))
+        self.assertListsClose(python, x)
+        self.assertListsClose(c, x)
+
     def test_conv_direct_agrees(self) -> None:
         # Rows longer and shorter than a vector, a partial filter group (5, 11),
         # and outputs that end exactly at the end of the buffer.

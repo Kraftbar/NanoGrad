@@ -1085,6 +1085,29 @@ void gather_indexed(const real *image, const long *index, real *out,
     }
 }
 
+/*
+ * Zero padding of 2D planes, a row at a time: plane p's row r goes to row
+ * r + pad_rows of the padded plane, starting pad_cols in (out starts as
+ * zeros). crop_planes is its backward pass, copying the same rows back out.
+ */
+void pad_planes(const real *x, real *out, long planes, int rows, int cols, int pad_rows, int pad_cols)
+{
+    long padded_cols = cols + 2 * pad_cols, padded_size = (rows + 2L * pad_rows) * padded_cols;
+    for (long p = 0; p < planes; p++)
+        for (int r = 0; r < rows; r++)
+            memcpy(out + p * padded_size + (r + pad_rows) * padded_cols + pad_cols,
+                   x + (p * rows + r) * cols, sizeof(real) * cols);
+}
+
+void crop_planes(const real *padded, real *out, long planes, int rows, int cols, int pad_rows, int pad_cols)
+{
+    long padded_cols = cols + 2 * pad_cols, padded_size = (rows + 2L * pad_rows) * padded_cols;
+    for (long p = 0; p < planes; p++)
+        for (int r = 0; r < rows; r++)
+            memcpy(out + (p * rows + r) * cols,
+                   padded + p * padded_size + (r + pad_rows) * padded_cols + pad_cols, sizeof(real) * cols);
+}
+
 void scatter_add_indexed(const real *grad, const long *index, real *image_grad,
                          long batches, long image_size, long count)
 {

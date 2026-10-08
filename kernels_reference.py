@@ -235,6 +235,30 @@ def conv_forward(
     return out
 
 
+def pad_planes(x: list[float], planes: int, rows: int, cols: int, pad_rows: int, pad_cols: int) -> list[float]:
+    padded_cols = cols + 2 * pad_cols
+    zero_rows = [0.0] * (pad_rows * padded_cols)
+    out: list[float] = []
+    for p in range(planes):
+        out.extend(zero_rows)
+        for r in range(rows):
+            start = (p * rows + r) * cols
+            out.extend([0.0] * pad_cols + list(x[start : start + cols]) + [0.0] * pad_cols)
+        out.extend(zero_rows)
+    return out
+
+
+def crop_planes(padded: list[float], planes: int, rows: int, cols: int, pad_rows: int, pad_cols: int) -> list[float]:
+    padded_cols = cols + 2 * pad_cols
+    padded_size = (rows + 2 * pad_rows) * padded_cols
+    out: list[float] = []
+    for p in range(planes):
+        for r in range(rows):
+            start = p * padded_size + (r + pad_rows) * padded_cols + pad_cols
+            out.extend(padded[start : start + cols])
+    return out
+
+
 def conv_direct(
     image: list[float], kernel: list[float], batches: int, channels: int, height: int, width: int,
     filters: int, kernel_rows: int, kernel_cols: int,
