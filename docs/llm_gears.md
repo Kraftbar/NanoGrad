@@ -17,6 +17,8 @@ checked against PyTorch where PyTorch has an equivalent.
 | training | masked language modeling | `bert.py` | BERT's pretraining task |
 | | gradient checkpointing | `recompute.py`, `--recompute` | keep only each block's input; recompute its activations in backward |
 | | LoRA | `lora.py`, `bert_finetune.py --lora 4` | fine-tune through small low-rank updates to frozen attention weights |
+| | preference tuning (DPO) | `dpo.py` | learn from "A is better than B" pairs directly, no reward model or RL (Rafailov et al.) |
+| | distillation | `distill.py` | train a small model on a big one's temperature-softened predictions (Hinton et al.) |
 | inference | KV cache | `language.py` (`step_logits`) | generation adds one row of work per token instead of re-running the context |
 | | speculative decoding | `speculative.py` | a small model drafts k tokens, the large one checks them in one pass; same output distribution |
 | | weight quantization | `quantize.py` | int8 / int4 weights with one scale per 32 numbers: 4-6x smaller |
