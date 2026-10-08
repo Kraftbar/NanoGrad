@@ -328,19 +328,22 @@ def main(argv: list[str] | None = None) -> dict:
             runners[framework] = runner = NanoGradRunner(model, args.lr, weights)
         print(framework, flush=True)
         rng, order, steps, start = random.Random(args.seed), list(range(len(train_pairs))), 0, perf_counter()
+        training = []   # seconds per train_step, without the batch preparation
         for epoch in range(1, args.epochs + 1):
             rng.shuffle(order)
             total = 0.0
             for first in range(0, len(order), args.batch_size):
                 chunk = [train_pairs[i] for i in order[first : first + args.batch_size]]
                 pixels, labels = batch_arrays(chunk, stats, [rng.random() < 0.5 for _ in chunk])
+                began = perf_counter()
                 total += runner.train_step(pixels, labels, len(chunk))
+                training.append(perf_counter() - began)
                 steps += 1
             print(f"  epoch {epoch:2d}: loss {total / -(-len(order) // args.batch_size):.4f}, "
                   f"{perf_counter() - start:.0f} s", flush=True)
-        seconds = perf_counter() - start
         results[framework] = scores = evaluate(runner, test_pairs, stats)
-        scores["ms_per_step"] = 1000 * seconds / steps
+        timed = training[1:] or training   # the first step also builds the convolution index tables
+        scores["ms_per_step"] = 1000 * sum(timed) / len(timed)
         print(f"{framework:8s}: global accuracy {100 * scores['global']:.1f}%, class average "
               f"{100 * scores['class_average']:.1f}%, mean IoU {100 * scores['mean_iou']:.1f}% "
               f"({scores['ms_per_step']:.0f} ms/step)", flush=True)

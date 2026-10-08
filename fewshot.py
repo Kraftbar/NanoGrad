@@ -276,16 +276,19 @@ def main(argv: list[str] | None = None) -> dict:
             runners[framework] = runner = NanoGradRunner(model, args.lr)
         print(framework, flush=True)
         rng, start, recent = random.Random(args.seed), perf_counter(), []
+        training = []   # seconds per train_step, without sampling the episode
         for episode in range(1, args.episodes + 1):
             lr = args.lr * 0.5 ** ((episode - 1) // args.halve_every)
             batch = episode_batch(train_classes, args.train_way, args.train_shot, args.train_query, rng)
+            began = perf_counter()
             recent.append(runner.train_step(*batch, lr))
+            training.append(perf_counter() - began)
             if episode % args.log_every == 0 or episode == args.episodes:
                 print(f"  episode {episode:5d}: loss {sum(r[0] for r in recent) / len(recent):.4f}, "
                       f"train accuracy {100 * sum(r[1] for r in recent) / len(recent):.1f}%, "
                       f"{perf_counter() - start:.0f} s", flush=True)
                 recent = []
-        seconds = perf_counter() - start
+        timed = training[1:] or training   # the first step also builds the convolution index tables
         embeddings = embed_all(runner, splits["test"])
         scores = {}
         for way in (5, 20):
@@ -293,7 +296,7 @@ def main(argv: list[str] | None = None) -> dict:
                 scores[f"{way}-way {shot}-shot"] = evaluate(runner, splits["test"], way=way, shot=shot,
                                                             query=args.test_query, episodes=args.test_episodes,
                                                             seed=args.seed + 1, embeddings=embeddings)
-        results[framework] = {"accuracy": scores, "ms_per_episode": 1000 * seconds / args.episodes}
+        results[framework] = {"accuracy": scores, "ms_per_episode": 1000 * sum(timed) / len(timed)}
         print(f"{framework:8s}: " + ", ".join(f"{k} {100 * v:.1f}%" for k, v in scores.items())
               + f" ({results[framework]['ms_per_episode']:.0f} ms per training episode)", flush=True)
     if len(runners) == 2:

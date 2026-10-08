@@ -137,15 +137,15 @@ weight difference after those steps):
 
 | comparison | NanoGrad ms/step | PyTorch ms/step | ratio | max weight difference |
 | --- | ---: | ---: | ---: | ---: |
-| NeuMF on MovieLens-1M | 24.7 | 18.2 | 1.4x | 1.9e-15 |
-| VGAE on Cora | 430.9 | 306.2 | 1.4x | 2.9e-14 |
-| MAF on MNIST | 199.1 | 120.0 | 1.7x | 2.8e-09 |
-| SRCNN on 91-image | 162.4 | 125.8 | 1.3x | 1.4e-17 |
-| prototypical net on Omniglot | 635.7 | 473.5 | 1.3x | 7.4e-11 |
-| FGSM training on MNIST | 107.9 | 128.3 | 0.8x | 7.8e-15 |
-| CNN on spoken digits | 213.7 | 186.6 | 1.1x | 2.4e-13 |
-| DS-CNN keyword spotting | 336.8 | 449.7 | 0.7x | 2.8e-13 |
-| U-Net on CamVid | 6650.0 | 2464.4 | 2.7x | 6.4e-13 |
+| NeuMF on MovieLens-1M | 13.4 | 16.0 | 0.8x | 1.9e-15 |
+| VGAE on Cora | 450.5 | 290.7 | 1.5x | 3.4e-14 |
+| MAF on MNIST | 196.1 | 101.8 | 1.9x | 2.8e-09 |
+| SRCNN on 91-image | 132.4 | 111.9 | 1.2x | 1.4e-17 |
+| prototypical net on Omniglot | 480.1 | 394.6 | 1.2x | 6.9e-11 |
+| FGSM training on MNIST | 100.3 | 112.9 | 0.9x | 7.8e-15 |
+| CNN on spoken digits | 185.9 | 174.7 | 1.1x | 2.4e-13 |
+| DS-CNN keyword spotting | 306.9 | 384.7 | 0.8x | 2.8e-13 |
+| U-Net on CamVid | 2622.6 | 2457.4 | 1.1x | 6.4e-13 |
 
 (The pure-Python reference path, kept to be read, is 30-300x slower than
 the C kernels on the same ops.)
@@ -186,6 +186,16 @@ Convolutions use the same micro-kernel without building the patch matrix
 ("implicit GEMM": the panel is packed straight from the image through an
 index table), and softmax uses a vectorizable exp (range reduction plus a
 Taylor polynomial, within 1 ulp of the C library's).
+
+Large images needed two more changes (the U-Net step went from 3.5 s to
+2.6 s, 1.1x PyTorch's). The index table is huge there, one entry per
+(position, patch value), and reading it cost more than the arithmetic; but
+each entry is a position's top-left pixel plus a fixed offset inside the
+patch, so the kernels now read the position's base once and add the
+offsets. And for stride 1 the image gradient is itself a convolution: the
+output gradient, padded by the kernel size minus one, convolved with the
+flipped kernel (channels and filters swapped), which runs on the fast
+forward kernel instead of scattering patch by patch.
 
 | LeNet step, batch 32, 1 process | ms |
 | --- | ---: |
