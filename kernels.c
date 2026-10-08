@@ -324,9 +324,21 @@ void conv_forward(const real *image, const long *index, const real *kernel, real
             for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
                 int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
                 if (cols < TILE_COLS) memset(panel, 0, sizeof(real) * K_BLOCK * TILE_COLS);
-                for (int p = 0; p < kb; p++)                   /* pack through the index */
-                    for (int jj = 0; jj < cols; jj++)
-                        panel[(long)p * TILE_COLS + jj] = img[index[(long)(j + jj) * k + p0 + p]];
+                /* Pack through the index. Every entry is a position's base plus a patch
+                 * offset: index[j * k + q] = index[j * k] + index[q]. Positions next to
+                 * each other in an output row have consecutive bases, so then each
+                 * panel row is a plain copy of `cols` neighbouring pixels. */
+                long base = index[(long)j * k];
+                int contiguous = index[(long)(j + cols - 1) * k] - base == cols - 1;
+                for (int p = 0; p < kb; p++) {
+                    real *dst = panel + (long)p * TILE_COLS;
+                    const real *src = img + index[p0 + p];
+                    if (contiguous) {
+                        for (int jj = 0; jj < cols; jj++) dst[jj] = src[base + jj];
+                    } else {
+                        for (int jj = 0; jj < cols; jj++) dst[jj] = src[index[(long)(j + jj) * k]];
+                    }
+                }
                 row_tiles(A + p0, k, 1, (long)TILE_ROWS * k, C + j, n, panel, TILE_COLS, kb, m, cols);
             }
         }
@@ -376,10 +388,24 @@ void conv_kernel_grad(const real *image, const long *index, const real *grad, re
             for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
                 int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
                 if (cols < TILE_COLS) memset(panel, 0, sizeof(real) * K_BLOCK * TILE_COLS);
-                for (int p = 0; p < kb; p++) {                 /* pack patch rows */
-                    const long *cells = index + (long)(p0 + p) * n + j;
-                    for (int jj = 0; jj < cols; jj++)
-                        panel[(long)p * TILE_COLS + jj] = img[cells[jj]];
+                /* Pack patch rows. index[pos * n + q] = index[pos * n] + index[q] (a position's
+                 * base plus a patch offset), so the (huge) index table is read once per
+                 * position here instead of once per number. */
+                if (k >= 4096) {                               /* large images: column by column, */
+                    long base[K_BLOCK];                        /* each a run of neighbouring pixels */
+                    for (int p = 0; p < kb; p++) base[p] = index[(long)(p0 + p) * n];
+                    for (int jj = 0; jj < cols; jj++) {
+                        const real *src = img + index[j + jj];
+                        for (int p = 0; p < kb; p++) panel[(long)p * TILE_COLS + jj] = src[base[p]];
+                    }
+                } else {                                       /* small ones: row by row */
+                    long offset[TILE_COLS];
+                    for (int jj = 0; jj < cols; jj++) offset[jj] = index[j + jj];
+                    for (int p = 0; p < kb; p++) {
+                        const real *src = img + index[(long)(p0 + p) * n];
+                        real *dst = panel + (long)p * TILE_COLS;
+                        for (int jj = 0; jj < cols; jj++) dst[jj] = src[offset[jj]];
+                    }
                 }
                 row_tiles(A + p0, k, 1, (long)TILE_ROWS * k, dkernel + j, n, panel, TILE_COLS, kb, m, cols);
             }
@@ -463,9 +489,11 @@ void conv_input_grad(const real *grad, const real *kernel, const long *index, re
             }
 #endif
             for (int r = 0; r < rows; r++) {                   /* col2im */
-                const long *cells = index + (long)(i + r) * n;
+                /* index[pos * n + q] = index[pos * n] + index[q]: the patch offsets
+                 * (the first n entries) stay cached; one base per position. */
+                real *dst = img_grad + index[(long)(i + r) * n];
                 const real *values = block + (long)r * n;
-                for (int q = 0; q < n; q++) img_grad[cells[q]] += values[q];
+                for (int q = 0; q < n; q++) dst[index[q]] += values[q];
             }
         }
     }

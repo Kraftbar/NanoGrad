@@ -1797,7 +1797,11 @@ def conv2d_valid(image: Tensor, kernel: Tensor, *, stride: int = 1) -> Tensor:
                 image.data, patch_index, grad, batches=batches, image_size=image_size,
                 filters=filters, patch_size=patch_size, positions=positions,
             ))
-        if image.requires_grad:
+        # Large stride-1 images: the gradient as a full convolution (faster there; on
+        # small images the padding and flipping cost more than the scatter they save).
+        if image.requires_grad and stride == 1 and kernel.ndim == 4 and image_rows * image_cols >= 4096:
+            _add_grad(image, _conv2d_input_grad_full(grad, kernel, batches, image_rows, image_cols, out_shape))
+        elif image.requires_grad:
             # dPatches_b = dOut_b^T (P x O) @ K (O x K), then col2im: add each
             # patch gradient back onto the pixels it was read from.
             _add_grad(image, kernels.conv_input_grad(
@@ -1807,6 +1811,39 @@ def conv2d_valid(image: Tensor, kernel: Tensor, *, stride: int = 1) -> Tensor:
 
     _set_backward(out, _backward)
     return out
+
+
+def _conv2d_input_grad_full(grad, kernel: Tensor, batches: int, image_rows: int, image_cols: int, out_shape):
+    """The image gradient of a stride-1 convolution, as another convolution.
+
+    Pixel (y, x) fed output (y - i, x - j) through kernel weight (i, j), so
+
+        dImage[c, y, x] = sum over f, i, j of dOut[f, y - i, x - j] * K[f, c, i, j]
+
+    which is a "full" convolution: pad dOut with kh - 1 / kw - 1 zeros on each
+    side and slide the kernel flipped in both directions, with its filter and
+    channel axes swapped. It runs on the forward kernel (patch size F*kh*kw)
+    instead of a product over just F followed by a scatter (col2im).
+    """
+
+    filters, channels, kernel_rows, kernel_cols = kernel.shape
+    out_rows, out_cols = out_shape[-2:]
+    pad_rows, pad_cols = kernel_rows - 1, kernel_cols - 1
+    padded_rows, padded_cols = out_rows + 2 * pad_rows, out_cols + 2 * pad_cols
+    padded = kernels.scatter_add_indexed(
+        grad, _pad2d_index(out_rows, out_cols, pad_rows, pad_cols),
+        batches=batches * filters, image_size=padded_rows * padded_cols,
+    )
+    k = kernel.data
+    flipped = kernels.storage([                                  # (C, F, kh, kw), rotated 180 degrees
+        k[((f * channels + c) * kernel_rows + kernel_rows - 1 - i) * kernel_cols + kernel_cols - 1 - j]
+        for c in range(channels) for f in range(filters) for i in range(kernel_rows) for j in range(kernel_cols)
+    ])
+    index = _conv2d_patch_index(filters, padded_rows, padded_cols, kernel_rows, kernel_cols, 1)
+    return kernels.conv_forward(
+        padded, index, flipped, batches=batches, image_size=filters * padded_rows * padded_cols,
+        filters=channels, patch_size=filters * kernel_rows * kernel_cols, positions=image_rows * image_cols,
+    )
 
 
 def _conv2d_shapes(
