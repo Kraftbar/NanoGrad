@@ -43,3 +43,4 @@ data/ag_news/*.csv
 data/multi30k/*.de
 data/multi30k/*.en
 data/ett/*.csv
+data/ml-1m/ml-1m.*
