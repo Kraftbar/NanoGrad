@@ -44,11 +44,14 @@ class MobileNet(TensorModule):
     STAGES = ((32, 1), (64, 2), (64, 1), (128, 2), (128, 1))     # (output channels, stride)
 
     def __init__(self, *, image_shape: tuple[int, int, int] = (3, 32, 32), classes: int = 10,
-                 stem: int = 16, seed: int = 0) -> None:
-        self.stem = TensorConv2D((stem, image_shape[0], 3, 3), padding=1, use_bias=False, seed=seed)
+                 stem: int = 16, stem_kernel: tuple[int, int] = (3, 3), stem_stride: int = 1,
+                 stem_padding: int | tuple[int, int] = 1, stages: tuple[tuple[int, int], ...] | None = None,
+                 seed: int = 0) -> None:
+        self.stem = TensorConv2D((stem, image_shape[0], *stem_kernel), stride=stem_stride, padding=stem_padding,
+                                 use_bias=False, seed=seed)
         self.stem_norm = TensorBatchNorm2d(stem)
         self.blocks, channels = [], stem
-        for index, (width, stride) in enumerate(self.STAGES):
+        for index, (width, stride) in enumerate(stages or self.STAGES):
             self.blocks.append(SeparableBlock(channels, width, stride=stride, seed=seed + 10 * (index + 1)))
             channels = width
         self.classifier = TensorLinear(channels, classes, seed=seed + 100)

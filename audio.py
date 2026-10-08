@@ -58,10 +58,13 @@ def mel(hz: float) -> float:
     return 2595.0 * math.log10(1.0 + hz / 700.0)
 
 
-def mel_filters(bands: int = BANDS, fft: int = FFT, rate: int = RATE) -> list[list[float]]:
-    """Triangular filters (bands x fft // 2 + 1), evenly spaced on the mel scale (HTK's formula)."""
+def mel_filters(bands: int = BANDS, fft: int = FFT, rate: int = RATE, low: float = 0.0,
+                high: float | None = None) -> list[list[float]]:
+    """Triangular filters (bands x fft // 2 + 1), evenly spaced on the mel scale
+    (HTK's formula) between ``low`` and ``high`` Hz (default: up to rate / 2)."""
 
-    edges_mel = [mel(0) + (mel(rate / 2) - mel(0)) * i / (bands + 1) for i in range(bands + 2)]
+    top = rate / 2 if high is None else high
+    edges_mel = [mel(low) + (mel(top) - mel(low)) * i / (bands + 1) for i in range(bands + 2)]
     edges_hz = [700.0 * (10 ** (m / 2595.0) - 1.0) for m in edges_mel]
     bins = [k * rate / fft for k in range(fft // 2 + 1)]
     filters = []

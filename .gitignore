@@ -54,3 +54,5 @@ data/camvid/*/
 data/camvid/*.txt
 data/camvid/*.pkl
 data/camvid/download.done
+data/speech_commands/*
+!data/speech_commands/DOWNLOAD.md
