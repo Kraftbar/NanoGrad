@@ -128,5 +128,23 @@ class FusedCellTests(unittest.TestCase):
         self.assertLess(max_gradient_error(loss, [gates, c]), 1e-7)
 
 
+class RowLSTMTests(unittest.TestCase):
+    @unittest.skipUnless(__import__("importlib").util.find_spec("torch"), "PyTorch not installed")
+    def test_twin_matches_sequential_mnist_model(self) -> None:
+        import random
+
+        import torch
+
+        from rnn import RowLSTM
+        from torch_twin import TorchTwin
+
+        model = RowLSTM(rows=5, cols=4, hidden=6, seed=1)
+        pixels = [random.Random(2).uniform(0, 1) for _ in range(2 * 20)]
+        ours = model(Tensor(pixels, (2, 1, 5, 4)))
+        theirs = TorchTwin(model)(torch.tensor(pixels, dtype=torch.float64).reshape(2, 1, 5, 4))
+        for a, b in zip(ours.data, theirs.reshape(-1).tolist()):
+            self.assertAlmostEqual(a, b, places=12)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,7 @@ from bert import TinyBERT
 from language import CausalSelfAttention, CharTransformerModel, TokenPositionEmbedding, TransformerBlock
 from mobilenet import MobileNet, SeparableBlock
 from resnet import ResidualBlock, SmallResNet
+from rnn import LSTM, RowLSTM
 from tensor_nn import (
     Flatten, LeakyReLU, ReLU, Sequential, Tanh, TensorBatchNorm2d, TensorConv2D, TensorConvTranspose2D,
     TensorLayerNorm, TensorLinear, TensorModule, TensorRMSNorm,
@@ -71,6 +72,7 @@ class TorchTwin:
         for kind, method in (
             (TwoConvCNN, self._two_conv_cnn),
             (SmallResNet, self._small_resnet),
+            (RowLSTM, self._row_lstm),
             (MobileNet, self._mobilenet),
             (SeparableBlock, self._separable_block),
             (ResidualBlock, self._residual_block),
@@ -196,6 +198,25 @@ class TorchTwin:
         for layer in model.layers:
             x = self.forward(layer, x)
         return x
+
+    def _lstm(self, layer: LSTM, x, state=None):
+        """NanoGrad's LSTM layer with torch ops: gates i, f, g, o as torch.nn.LSTM."""
+
+        batch, length, _ = x.shape
+        gates_in = x @ self._p(layer.input_weight).T + self._p(layer.bias)
+        h = torch.zeros(batch, layer.hidden, dtype=x.dtype) if state is None else state[0]
+        c = torch.zeros(batch, layer.hidden, dtype=x.dtype) if state is None else state[1]
+        outputs = []
+        for t in range(length):
+            i, f, g, o = (gates_in[:, t] + h @ self._p(layer.hidden_weight).T).chunk(4, dim=1)
+            c = torch.sigmoid(f) * c + torch.sigmoid(i) * torch.tanh(g)
+            h = torch.sigmoid(o) * torch.tanh(c)
+            outputs.append(h)
+        return torch.stack(outputs, dim=1), (h, c)
+
+    def _row_lstm(self, model: RowLSTM, x):
+        _, (h, _) = self._lstm(model.lstm, x.reshape(x.shape[0], model.rows, model.cols))
+        return self._linear(model.classifier, h)
 
     def _depthwise(self, layer, x):
         return F.conv2d(x, self._p(layer.kernel), stride=layer.stride, padding=layer.padding, groups=x.shape[1])

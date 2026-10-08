@@ -357,3 +357,22 @@ def detach_state(state):
     if isinstance(state, Tensor):
         return state.detach()
     return type(state)(detach_state(part) for part in state) if state is not None else None
+
+
+class RowLSTM(TensorModule):
+    """Sequential MNIST: an LSTM reads an image one row at a time (28 steps of
+    28 pixels) and classifies it from its last hidden state. Nothing tells
+    it that rows are neighbours; it must carry what it saw in its memory."""
+
+    def __init__(self, *, rows: int = 28, cols: int = 28, hidden: int = 128, classes: int = 10, seed: int = 0) -> None:
+        self.rows, self.cols = rows, cols
+        self.lstm = LSTM(cols, hidden, seed=seed)
+        self.classifier = TensorLinear(hidden, classes, seed=seed + 1)
+
+    def __call__(self, images: Tensor) -> Tensor:
+        batch = images.shape[0]
+        _, (h, _) = self.lstm.run(images.reshape((batch, self.rows, self.cols)))
+        return self.classifier(h)
+
+    def parameters(self) -> list[Tensor]:
+        return [*self.lstm.parameters(), *self.classifier.parameters()]
