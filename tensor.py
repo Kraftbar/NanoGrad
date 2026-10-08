@@ -806,15 +806,11 @@ def tensor_tanh(tensor: Tensor) -> Tensor:
 def tensor_reciprocal(tensor: Tensor) -> Tensor:
     """Elementwise reciprocal: y = 1 / x, dy/dx = -y^2."""
 
-    if any(value == 0.0 for value in tensor.data):
+    if 0.0 in tensor.data:
         raise ValueError("division by zero")
-    out_data = [1.0 / value for value in tensor.data]
-    return _unary(
-        tensor,
-        out_data,
-        lambda grad: [-g * y * y for g, y in zip(grad, out_data)],
-        "reciprocal",
-    )
+    out_data = kernels.reciprocal(tensor.data)
+    squared = kernels.multiply(out_data, out_data)
+    return _unary(tensor, out_data, lambda grad: kernels.scale(kernels.multiply(grad, squared), -1.0), "reciprocal")
 
 
 # ---------------------------------------------------------------------------

@@ -897,6 +897,11 @@ void dropout_mask(real *mask, long count, double p, unsigned long seed)
     }
 }
 
+void reciprocal_vector(const real *x, real *out, long count)
+{
+    for (long i = 0; i < count; i++) out[i] = 1.0 / x[i];
+}
+
 /* out = x + factor * y: an SGD step without a temporary for factor * y */
 void add_scaled(const real *x, const real *y, double factor, real *out, long count)
 {

@@ -327,6 +327,12 @@ def scale(x: list[float], factor: float) -> list[float]:
     return (kernels_c.scale if BACKEND == "c" else reference.scale)(x, factor)
 
 
+def reciprocal(x: list[float]) -> list[float]:
+    """1 / x, elementwise."""
+
+    return (kernels_c.reciprocal if BACKEND == "c" else reference.reciprocal)(x)
+
+
 def exp(x: list[float]) -> list[float]:
     """e^x, elementwise."""
 

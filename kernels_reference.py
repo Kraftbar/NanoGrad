@@ -361,6 +361,10 @@ def scale(x: list[float], factor: float) -> list[float]:
     return [value * factor for value in x]
 
 
+def reciprocal(x: list[float]) -> list[float]:
+    return [1.0 / value for value in x]
+
+
 def exp(x: list[float]) -> list[float]:
     return [math.exp(value) for value in x]
 

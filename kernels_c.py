@@ -180,6 +180,7 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.multiply_vectors.argtypes = [pointer, pointer, pointer, count]
     library.scale_vector.argtypes = [pointer, ctypes.c_double, pointer, count]
     library.exp_vector.argtypes = [pointer, pointer, count]
+    library.reciprocal_vector.argtypes = [pointer, pointer, count]
     for name in ("lstm_memory", "lstm_output"):
         getattr(library, name).argtypes = [pointer, pointer, pointer, count, count]
     for name in ("lstm_memory_backward", "lstm_output_backward"):
@@ -467,6 +468,12 @@ def multiply(x: list[float], y: list[float]) -> array:
 def scale(x: list[float], factor: float) -> array:
     x_buffer, out = _reals(x), zeros(len(x))
     library.scale_vector(_buffer(x_buffer), factor, _buffer(out), len(x))
+    return out
+
+
+def reciprocal(x) -> array:
+    x_buffer, out = _reals(x), zeros(len(x))
+    library.reciprocal_vector(_buffer(x_buffer), _buffer(out), len(x))
     return out
 
 
