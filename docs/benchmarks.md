@@ -157,6 +157,37 @@ weight difference after those steps):
 (The pure-Python reference path, kept to be read, is 30-300x slower than
 the C kernels on the same ops.)
 
+### Threads
+
+`NANOGRAD_THREADS=8` (or `kernels.set_threads(8)`) lets the matrix
+products, the convolutions and the row softmax use 8 threads. The default
+is 1, so every table above is one core against one core. Threads only
+split the output into blocks, so every number is summed in the same order
+as on one core: results are the same bit for bit for any thread count
+(`test_kernels.py` checks this). How it works is in
+[performance.md](./performance.md#threads-inside-the-kernels).
+
+These runs are on a different machine from the rest of this page: an
+8-core AMD Ryzen 7 3700X (AVX2, no AVX-512), PyTorch 2.14 for CPU, with
+another program keeping one core busy while they ran. Time per training
+step, float64 unless noted, PyTorch with the same thread count
+(`wikitext_lm.py --compare --steps 30 --threads N`,
+`mnist_compare.py --torch-threads N`, MNIST, batch 32):
+
+| model | NanoGrad, 1 thread | PyTorch, 1 thread | NanoGrad, 8 threads | PyTorch, 8 threads | ratio at 8 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| WikiText-2 LSTM (2 x 200, 33K vocabulary) | 1,014 ms | 969 ms | 408 ms | 386 ms | 1.06x |
+| WikiText-2 LSTM, float32 | 536 ms | 506 ms | 240 ms | 202 ms | 1.19x |
+| small ResNet | 34.2 ms | 40.3 ms | 21.4 ms | 23.2 ms | 0.92x |
+| LeNet | 4.9 ms | 6.6 ms | 4.1 ms | 4.7 ms | 0.87x |
+| tiny ViT | 9.3 ms | 11.2 ms | 9.1 ms | 9.0 ms | 1.0x |
+
+On their own the kernels scale 3-5x on 8 threads (the large-vocabulary
+products 4-5x, the convolutions 4-7x). Whole steps gain less: the small
+models' matrix products are too small to share (a block must be worth
+about a million multiply-adds), and the rest of the step (elementwise
+ops, Adam, the Python around them) still runs on one core.
+
 ## How The Gap Closed
 
 The first measurements had NanoGrad's C path 9x behind PyTorch on LeNet,

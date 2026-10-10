@@ -361,6 +361,46 @@ class KernelBackendTests(unittest.TestCase):
         self.assertEqual(python_at[0], 0)
         self.assertEqual(python_at[3], 12 + max((0, 1, 4, 5), key=lambda i: image[12 + i]))
 
+    def test_thread_count_does_not_change_any_bit(self) -> None:
+        # Large enough that the products and convolutions really use the
+        # threads; sizes that are not multiples of the tiles; every way gemm
+        # splits its work (by batch entry, row tiles, column tiles, and
+        # batch entries summed into one output).
+        from tensor import _conv2d_patch_index
+        import kernels_c
+
+        index = _conv2d_patch_index(16, 21, 21, 3, 3, 1)
+        conv = dict(batches=16, image_size=16 * 21 * 21, filters=33, patch_size=144, positions=19 * 19)
+        image, kernel = values(16 * 16 * 21 * 21, 70), values(33 * 144, 71)
+        grad = values(16 * 33 * 19 * 19, 72)
+        calls = {
+            "gemm columns": lambda: kernels.gemm(values(37 * 211, 73), values(211 * 3001, 74), batches=1,
+                                                 m=37, k=211, n=3001, a_step=0, b_step=0, c_step=0),
+            "gemm rows": lambda: kernels.gemm(values(3001 * 211, 75), values(37 * 211, 76), batches=1,
+                                              m=3001, k=211, n=37, a_step=0, b_step=0, c_step=0, trans_b=True),
+            "gemm batches": lambda: kernels.gemm(values(9 * 67 * 91, 77), values(9 * 91 * 75, 78), batches=9,
+                                                 m=67, k=91, n=75, a_step=67 * 91, b_step=91 * 75, c_step=67 * 75),
+            "gemm summed": lambda: kernels.gemm(values(9 * 91 * 67, 79), values(9 * 91 * 175, 80), batches=9,
+                                                m=67, k=91, n=175, a_step=91 * 67, b_step=91 * 175, c_step=0,
+                                                trans_a=True),
+            "conv forward": lambda: kernels.conv_forward(image, index, kernel, **conv),
+            "conv kernel grad": lambda: kernels.conv_kernel_grad(image, index, grad, **conv),
+            "conv input grad": lambda: kernels.conv_input_grad(grad, kernel, index, **conv),
+            "conv direct": lambda: kernels.conv_direct(image, kernel, batches=16, channels=16, height=21, width=21,
+                                                       filters=13, kernel_rows=3, kernel_cols=3),
+            "softmax rows": lambda: kernels.softmax_rows(values(97 * 3001, 81), 3001),
+        }
+        before = kernels_c.threads
+        try:
+            for name, call in calls.items():
+                with self.subTest(name):
+                    kernels.set_threads(1)
+                    one = bytes(call())
+                    kernels.set_threads(4)
+                    self.assertEqual(bytes(call()), one)
+        finally:
+            kernels.set_threads(before)
+
     def test_unknown_backend(self) -> None:
         with self.assertRaises(ValueError):
             kernels.use_backend("cuda")

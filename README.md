@@ -38,6 +38,10 @@ fast or faster on the convolutional models and the small transformers, up
 to 1.4x slower on the language models' large matrix products (see
 [docs/benchmarks.md](./docs/benchmarks.md)), and it needs nothing but
 Python and a C compiler; PyTorch is only used for the comparisons.
+`NANOGRAD_THREADS=8` lets the matrix products and convolutions use 8
+threads, with results identical bit for bit to one thread's; the WikiText-2
+LSTM then runs within 1.06x of PyTorch on 8 threads
+([docs/benchmarks.md](./docs/benchmarks.md#threads)).
 
 ## Architecture
 

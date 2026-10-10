@@ -144,6 +144,42 @@ process to 1e-12), so training runs are the same, only faster:
 The small preset gains less because copying weights and gradients is a
 bigger share of a cheap step. Use `--workers 4` with `char_demo.py`.
 
+## Threads Inside The Kernels
+
+The C kernels can also use threads themselves (OpenMP; `kernels_c.py`
+builds with `-fopenmp` when the compiler supports it).
+`NANOGRAD_THREADS=8` or `kernels.set_threads(8)` turns them on; the
+default is one thread. The matrix products, the four convolution kernels
+and the row softmax use them, and the rule that keeps results exact is
+the same in each: **threads split the output, never a sum**.
+
+- A matrix product is cut into bands of whole register tiles: column
+  tiles, or row tiles when there are more of those, or whole batch
+  entries when each has its own output. A thread runs the same tile code
+  on its band as one thread would on the whole matrix, so each output
+  number is summed in the same order. When batch entries are summed into
+  one output (a weight gradient), a thread adds every entry into its band,
+  in order.
+- The kernel gradient of a convolution sums over images, so it is split
+  the same way: blocks of the gradient, each thread adding every image in
+  order. The image gradient is split by image only: neighbouring patches
+  overlap, so splitting an image would let two threads add to one pixel.
+- The softmax shares out whole rows.
+
+So the result is the same, bit for bit, for any thread count, and the
+float64 PyTorch comparisons hold with threads on. Blocks are handed out
+four per thread as threads come free (`schedule(dynamic)`), so a thread
+slowed by another program on its core does fewer of them. A job is only
+shared when each thread gets about a million multiply-adds (25
+microseconds of work); below that, starting the threads costs more than
+they save. Each thread keeps its packing buffers between calls.
+
+Threads and `parallel.py`'s worker processes do not mix: a forked child
+cannot use the parent's OpenMP threads (libgomp's pool does not survive
+`fork`). `kernels_c.py` therefore sets a forked child to one thread
+(`os.register_at_fork`), and with one thread the kernels never start an
+OpenMP team. Use one or the other.
+
 ## Where The Time Goes Now
 
 See [benchmarks.md](./benchmarks.md#how-the-gap-closed). In short, with the

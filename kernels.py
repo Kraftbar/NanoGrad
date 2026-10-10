@@ -55,6 +55,14 @@ def use_backend(name: str) -> None:
     BACKEND = "c"
 
 
+def set_threads(count: int) -> None:
+    """Let the C matrix products and convolutions use up to ``count`` threads
+    (also set by the NANOGRAD_THREADS environment variable). Results are the
+    same, bit for bit, for any count."""
+
+    kernels_c.set_threads(count)
+
+
 def storage(values: Sequence[float]) -> array | list[float]:
     """Tensor values in the active backend's own form.
 

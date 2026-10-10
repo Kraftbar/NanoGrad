@@ -23,6 +23,61 @@
 typedef REAL real;
 
 /*
+ * Threads (OpenMP, when the compiler supports -fopenmp). Only the matrix
+ * products and convolutions use them, and only by splitting the output into
+ * blocks along tile boundaries: every output number is still summed by one
+ * thread, in the same order and by the same code as with one thread, so the
+ * results are the same, bit for bit, for any thread count.
+ *
+ * With one thread (the default) no parallel region is ever entered, so a
+ * process forked from a single-threaded one is safe (libgomp's thread pool
+ * does not survive fork; kernels_c.py drops forked children to 1 thread).
+ */
+#ifdef _OPENMP
+#include <omp.h>
+#define OMP(directive) _Pragma(#directive)
+#else
+#define OMP(directive)
+#endif
+
+static int thread_limit = 1;
+
+void set_threads(int threads)
+{
+#ifdef _OPENMP
+    thread_limit = threads < 1 ? 1 : threads;
+#else
+    (void)threads;
+#endif
+}
+
+int get_threads(void)
+{
+    return thread_limit;
+}
+
+/* How many threads a job of `work` multiply-adds, split into `units`
+ * independent blocks, is worth: each must get at least ~1M multiply-adds
+ * (about 25 microseconds), or starting the threads costs more than they
+ * save (measured: 256K made a small vision transformer slower, 4M left a
+ * ResNet's smaller layers on one thread). */
+static inline int team_size(double work, long units)
+{
+    long by_work = (long)(work / (1 << 20));
+    long team = thread_limit;
+    if (team > by_work) team = by_work;
+    if (team > units) team = units;
+    return team < 1 ? 1 : (int)team;
+}
+
+/* Block t of `units` blocks shared out among `team` threads: [*lo, *hi). */
+static inline void share(long units, int team, int t, long *lo, long *hi)
+{
+    *lo = units * t / team;
+    *hi = units * (t + 1) / team;
+}
+
+/*
  * Batched matrix product, accumulated into c:
  *
  *     for every batch:  C += op(A) @ op(B)
@@ -147,21 +202,25 @@ static inline __attribute__((always_inline)) void row_tiles(
              panel, panel_step, kb, rows - i, cols);
 }
 
-/* C (m x n) += op(A) (m x k) @ op(B) (k x n). Packing reads B either way,
- * so op(B) = B^T needs no transposed copy.
+/* C (m x n) += op(A) (m x k) @ op(B) (k x n), for rows i_lo..i_hi-1 and
+ * columns j_lo..j_hi-1 of C only (a thread's share; i_lo is a multiple of
+ * TILE_ROWS and j_lo of TILE_COLS, so the tiles are the same as for the
+ * whole matrix). Packing reads B either way, so op(B) = B^T needs no
+ * transposed copy.
  * panel: K_BLOCK * TILE_COLS numbers; packed: A_BLOCK + K_BLOCK * TILE_ROWS. */
 static void gemm_tiled(const real *A, const real *B, real *C,
-                       int m, int k, int n, int trans_a, int trans_b, real *panel, real *packed)
+                       int m, int k, int n, int trans_a, int trans_b, real *panel, real *packed,
+                       int i_lo, int i_hi, int j_lo, int j_hi)
 {
     for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
         int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
         int m_block = A_BLOCK / kb / TILE_ROWS * TILE_ROWS;
         if (m_block < TILE_ROWS) m_block = TILE_ROWS;
-        for (int i0 = 0; i0 < m; i0 += m_block) {             /* 3. a block of A stays cached */
-            int i_end = m - i0 < m_block ? m : i0 + m_block;
+        for (int i0 = i_lo; i0 < i_hi; i0 += m_block) {       /* 3. a block of A stays cached */
+            int i_end = i_hi - i0 < m_block ? i_hi : i0 + m_block;
             /* 2. pack the block: TILE_ROWS rows at a time, a(r, p) at [p * TILE_ROWS + r]
              * (worth it only when several column tiles will reuse it) */
-            int pack_a = n >= 4 * TILE_COLS;
+            int pack_a = j_hi - j_lo >= 4 * TILE_COLS;
             if (pack_a && trans_a) {
                 /* A^T: row p of A holds a(., p) for every row of the block, so
                  * read each once, in order, and deal it out to the row tiles. */
@@ -181,7 +240,7 @@ static void gemm_tiled(const real *A, const real *B, real *C,
                         for (int r = 0; r < rows; r++) dst[p * TILE_ROWS + r] = A_AT(i + r, p0 + p);
                 }
             }
-            for (int j = 0; j < n; j += TILE_COLS) {
+            for (int j = j_lo; j < j_hi; j += TILE_COLS) {
                 int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
                 const real *b_panel = panel;
                 long b_step = TILE_COLS;
@@ -218,6 +277,60 @@ static void gemm_tiled(const real *A, const real *B, real *C,
 }
 #endif
 
+#ifdef VECTOR_WIDTH
+/* Block `chunk` of `chunks` of the tiled product. If each batch entry has
+ * its own C (by_batch), a block is a run of whole entries; otherwise (one
+ * entry, or entries summed into one C) it is a band of C: row tiles
+ * (by_rows) or column tiles, done for every entry in order. Either way each
+ * number's sum is done by one thread, in the same order as with one. */
+static void gemm_chunk(const real *a, const real *b, real *c,
+                       int batches, int m, int k, int n,
+                       long a_step, long b_step, long c_step,
+                       int trans_a, int trans_b, int by_batch, int by_rows,
+                       int chunk, int chunks, real *panel, real *packed)
+{
+    long lo, hi;
+    if (by_batch) {
+        share(batches, chunks, chunk, &lo, &hi);
+        for (long batch = lo; batch < hi; batch++)
+            gemm_tiled(a + batch * a_step, b + batch * b_step, c + batch * c_step,
+                       m, k, n, trans_a, trans_b, panel, packed, 0, m, 0, n);
+        return;
+    }
+    int i_lo = 0, i_hi = m, j_lo = 0, j_hi = n;
+    if (by_rows) {
+        share((m + TILE_ROWS - 1) / TILE_ROWS, chunks, chunk, &lo, &hi);
+        i_lo = lo * TILE_ROWS;
+        i_hi = hi * TILE_ROWS < m ? hi * TILE_ROWS : m;
+    } else {
+        share((n + TILE_COLS - 1) / TILE_COLS, chunks, chunk, &lo, &hi);
+        j_lo = lo * TILE_COLS;
+        j_hi = hi * TILE_COLS < n ? hi * TILE_COLS : n;
+    }
+    for (long batch = 0; i_lo < i_hi && j_lo < j_hi && batch < batches; batch++)
+        gemm_tiled(a + batch * a_step, b + batch * b_step, c + batch * c_step,
+                   m, k, n, trans_a, trans_b, panel, packed, i_lo, i_hi, j_lo, j_hi);
+}
+
+/* Each thread's packing buffers, allocated by its first product and then
+ * kept: allocating them (about half a megabyte) on every call costs more
+ * than a small product. */
+static _Thread_local real *thread_panel, *thread_packed;
+
+static void thread_buffers(real **panel, real **packed)
+{
+    if (thread_panel == NULL) {
+        thread_panel = aligned_alloc(64, sizeof(real) * K_BLOCK * TILE_COLS);  /* cache-line aligned vector loads */
+        thread_packed = aligned_alloc(64, sizeof(real) * (A_BLOCK + K_BLOCK * TILE_ROWS));
+        if (thread_panel == NULL || thread_packed == NULL) {
+            abort();
+        }
+    }
+    *panel = thread_panel;
+    *packed = thread_packed;
+}
+#endif
+
 void gemm(
     const real *a, const real *b, real *c,
     int batches, int m, int k, int n,
@@ -225,38 +338,43 @@ void gemm(
     int trans_a, int trans_b)
 {
 #ifdef VECTOR_WIDTH
-    int tiled = n >= TILE_COLS;
-#else
-    int tiled = 0;
+    if (n >= TILE_COLS) {
+        long row_tiles_count = (m + TILE_ROWS - 1) / TILE_ROWS;
+        long col_tiles_count = (n + TILE_COLS - 1) / TILE_COLS;
+        int by_batch = c_step != 0 && batches >= thread_limit;
+        int by_rows = row_tiles_count > col_tiles_count;
+        long units = by_batch ? batches : by_rows ? row_tiles_count : col_tiles_count;
+        int team = team_size((double)batches * m * k * n, units);
+        /* Four blocks per thread, handed out as threads come free: a thread
+         * slowed by another program on its core then does fewer of them. */
+        int chunks = team == 1 ? 1 : (units < 4L * team ? (int)units : 4 * team);
+        OMP(omp parallel num_threads(team) if (team > 1))
+        {
+            real *panel, *packed;
+            thread_buffers(&panel, &packed);
+            OMP(omp for schedule(dynamic, 1))
+            for (int chunk = 0; chunk < chunks; chunk++)
+                gemm_chunk(a, b, c, batches, m, k, n, a_step, b_step, c_step, trans_a, trans_b,
+                           by_batch, by_rows, chunk, chunks, panel, packed);
+        }
+        return;
+    }
 #endif
     /* Without the tiled path, op(B) = B^T is first copied into a scratch
      * (k x n) buffer once per batch entry, so the inner loop below always
      * walks contiguous rows of op(B). (Summing dot products instead would be
      * a reduction, which compilers will not vectorize without permission to
      * reorder additions.) */
-    real *scratch = trans_b && !tiled ? malloc(sizeof(real) * (size_t)k * n) : NULL;
-    if (trans_b && !tiled && scratch == NULL) {
+    real *scratch = trans_b ? malloc(sizeof(real) * (size_t)k * n) : NULL;
+    if (trans_b && scratch == NULL) {
         abort();  /* out of memory: fail loudly rather than return zeros */
     }
-#ifdef VECTOR_WIDTH
-    real *panel = aligned_alloc(64, sizeof(real) * K_BLOCK * TILE_COLS);  /* cache-line aligned vector loads */
-    real *packed = aligned_alloc(64, sizeof(real) * (A_BLOCK + K_BLOCK * TILE_ROWS));
-    if (panel == NULL || packed == NULL) {
-        abort();
-    }
-#endif
 
     for (int batch = 0; batch < batches; batch++) {
         const real *A = a + batch * a_step;
         const real *B = b + batch * b_step;
         real *C = c + batch * c_step;
 
-#ifdef VECTOR_WIDTH
-        if (tiled) {
-            gemm_tiled(A, B, C, m, k, n, trans_a, trans_b, panel, packed);
-            continue;
-        }
-#endif
         if (trans_b) {
             for (int j = 0; j < n; j++)
                 for (int p = 0; p < k; p++)
@@ -297,10 +415,6 @@ void gemm(
         }
     }
     free(scratch);
-#ifdef VECTOR_WIDTH
-    free(panel);
-    free(packed);
-#endif
 }
 
 /*
@@ -320,44 +434,53 @@ void conv_forward(const real *image, const long *index, const real *kernel, real
     const real *A = kernel;
     (void)trans_a;
 #ifdef VECTOR_WIDTH
-    real *panel = aligned_alloc(64, sizeof(real) * K_BLOCK * TILE_COLS);  /* cache-line aligned vector loads */
-    if (panel == NULL) {
-        abort();
-    }
-    int full_cols = n;          /* every column, the last panel zero-padded */
-#else
-    int full_cols = 0;
-#endif
-    for (long batch = 0; batch < batches; batch++) {
-        const real *img = image + batch * image_size;
-        real *C = out + batch * (long)m * n;
-#ifdef VECTOR_WIDTH
-        for (int j = 0; j < full_cols; j += TILE_COLS) {
-            int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
-            for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
-                int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
-                if (cols < TILE_COLS) memset(panel, 0, sizeof(real) * K_BLOCK * TILE_COLS);
-                /* Pack through the index. Every entry is a position's base plus a patch
-                 * offset: index[j * k + q] = index[j * k] + index[q]. Positions next to
-                 * each other in an output row have consecutive bases, so then each
-                 * panel row is a plain copy of `cols` neighbouring pixels. */
-                long base = index[(long)j * k];
-                int contiguous = index[(long)(j + cols - 1) * k] - base == cols - 1;
-                for (int p = 0; p < kb; p++) {
-                    real *dst = panel + (long)p * TILE_COLS;
-                    const real *src = img + index[p0 + p];
-                    if (contiguous) {
-                        for (int jj = 0; jj < cols; jj++) dst[jj] = src[base + jj];
-                    } else {
-                        for (int jj = 0; jj < cols; jj++) dst[jj] = src[index[(long)(j + jj) * k]];
+    /* Threads share out (image, column tile) pairs; each writes its own block of out. */
+    long col_tiles = (n + TILE_COLS - 1) / TILE_COLS, units = batches * col_tiles;
+    int team = team_size((double)batches * m * k * n, units);
+    int chunks = team == 1 ? 1 : (units < 4L * team ? (int)units : 4 * team);
+    OMP(omp parallel num_threads(team) if (team > 1))
+    {
+        real *panel, *packed;
+        thread_buffers(&panel, &packed);
+        OMP(omp for schedule(dynamic, 1))
+        for (int chunk = 0; chunk < chunks; chunk++) {
+            long lo, hi;
+            share(units, chunks, chunk, &lo, &hi);
+            for (long unit = lo; unit < hi; unit++) {
+                long batch = unit / col_tiles;
+                int j = (int)(unit % col_tiles) * TILE_COLS;
+                const real *img = image + batch * image_size;
+                real *C = out + batch * (long)m * n;
+                int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
+                for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
+                    int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
+                    if (cols < TILE_COLS) memset(panel, 0, sizeof(real) * K_BLOCK * TILE_COLS);
+                    /* Pack through the index. Every entry is a position's base plus a patch
+                     * offset: index[j * k + q] = index[j * k] + index[q]. Positions next to
+                     * each other in an output row have consecutive bases, so then each
+                     * panel row is a plain copy of `cols` neighbouring pixels. */
+                    long base = index[(long)j * k];
+                    int contiguous = index[(long)(j + cols - 1) * k] - base == cols - 1;
+                    for (int p = 0; p < kb; p++) {
+                        real *dst = panel + (long)p * TILE_COLS;
+                        const real *src = img + index[p0 + p];
+                        if (contiguous) {
+                            for (int jj = 0; jj < cols; jj++) dst[jj] = src[base + jj];
+                        } else {
+                            for (int jj = 0; jj < cols; jj++) dst[jj] = src[index[(long)(j + jj) * k]];
+                        }
                     }
+                    row_tiles(A + p0, k, 1, (long)TILE_ROWS * k, C + j, n, panel, TILE_COLS, kb, m, cols);
                 }
-                row_tiles(A + p0, k, 1, (long)TILE_ROWS * k, C + j, n, panel, TILE_COLS, kb, m, cols);
             }
         }
-#endif
-        for (int i = 0; i < m; i++) {                          /* without the vector path: every column */
-            for (int j = full_cols; j < n; j++) {
+    }
+#else
+    for (long batch = 0; batch < batches; batch++) {           /* without the vector path */
+        const real *img = image + batch * image_size;
+        real *C = out + batch * (long)m * n;
+        for (int i = 0; i < m; i++) {
+            for (int j = 0; j < n; j++) {
                 double total = 0.0;
                 const long *cells = index + (long)j * k;
                 for (int q = 0; q < k; q++) total += A_AT(i, q) * img[cells[q]];
@@ -365,8 +488,6 @@ void conv_forward(const real *image, const long *index, const real *kernel, real
             }
         }
     }
-#ifdef VECTOR_WIDTH
-    free(panel);
 #endif
 }
 
@@ -384,56 +505,75 @@ void conv_kernel_grad(const real *image, const long *index, const real *grad, re
     const int trans_a = 0, m = filters, k = positions, n = patch_size;
     (void)trans_a;
 #ifdef VECTOR_WIDTH
-    real *panel = aligned_alloc(64, sizeof(real) * K_BLOCK * TILE_COLS);  /* cache-line aligned vector loads */
-    if (panel == NULL) {
-        abort();
-    }
-    int full_cols = n;          /* every column, the last panel zero-padded */
-#else
-    int full_cols = 0;
-#endif
-    for (long batch = 0; batch < batches; batch++) {
-        const real *img = image + batch * image_size;
-        const real *A = grad + batch * (long)m * k;
-#ifdef VECTOR_WIDTH
-        for (int j = 0; j < full_cols; j += TILE_COLS) {
-            int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
-            for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
-                int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
-                if (cols < TILE_COLS) memset(panel, 0, sizeof(real) * K_BLOCK * TILE_COLS);
-                /* Pack patch rows. index[pos * n + q] = index[pos * n] + index[q] (a position's
-                 * base plus a patch offset), so the (huge) index table is read once per
-                 * position here instead of once per number. */
-                if (k >= 4096) {                               /* large images: column by column, */
-                    long base[K_BLOCK];                        /* each a run of neighbouring pixels */
-                    for (int p = 0; p < kb; p++) base[p] = index[(long)(p0 + p) * n];
-                    for (int jj = 0; jj < cols; jj++) {
-                        const real *src = img + index[j + jj];
-                        for (int p = 0; p < kb; p++) panel[(long)p * TILE_COLS + jj] = src[base[p]];
-                    }
-                } else {                                       /* small ones: row by row */
-                    long offset[TILE_COLS];
-                    for (int jj = 0; jj < cols; jj++) offset[jj] = index[j + jj];
-                    for (int p = 0; p < kb; p++) {
-                        const real *src = img + index[(long)(p0 + p) * n];
-                        real *dst = panel + (long)p * TILE_COLS;
-                        for (int jj = 0; jj < cols; jj++) dst[jj] = src[offset[jj]];
+    /* Every image adds into the same dkernel, so threads share out blocks
+     * of dkernel instead (column tiles, and bands of row tiles when there
+     * are few columns); each thread adds the images into its blocks in order. */
+    long col_tiles = (n + TILE_COLS - 1) / TILE_COLS, row_tiles_count = (m + TILE_ROWS - 1) / TILE_ROWS;
+    long bands = (thread_limit + col_tiles - 1) / col_tiles;
+    if (bands > row_tiles_count) bands = row_tiles_count;
+    long units = col_tiles * bands;
+    int team = team_size((double)batches * m * k * n, units);
+    if (team == 1) bands = 1, units = col_tiles;
+    int chunks = team == 1 ? 1 : (units < 4L * team ? (int)units : 4 * team);
+    OMP(omp parallel num_threads(team) if (team > 1))
+    {
+        real *panel, *packed;
+        thread_buffers(&panel, &packed);
+        OMP(omp for schedule(dynamic, 1))
+        for (int chunk = 0; chunk < chunks; chunk++) {
+            long lo, hi;
+            share(units, chunks, chunk, &lo, &hi);
+            for (long batch = 0; batch < batches; batch++) {      /* images outermost: each is reused */
+                const real *img = image + batch * image_size;     /* by every block while cached */
+                const real *A = grad + batch * (long)m * k;
+                for (long unit = lo; unit < hi; unit++) {
+                    int j = (int)(unit / bands) * TILE_COLS;
+                    long band_lo, band_hi;
+                    share(row_tiles_count, (int)bands, (int)(unit % bands), &band_lo, &band_hi);
+                    int i_lo = (int)band_lo * TILE_ROWS;
+                    int i_hi = band_hi * TILE_ROWS < m ? (int)band_hi * TILE_ROWS : m;
+                    int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
+                    for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
+                        int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
+                        if (cols < TILE_COLS) memset(panel, 0, sizeof(real) * K_BLOCK * TILE_COLS);
+                        /* Pack patch rows. index[pos * n + q] = index[pos * n] + index[q] (a position's
+                         * base plus a patch offset), so the (huge) index table is read once per
+                         * position here instead of once per number. */
+                        if (k >= 4096) {                       /* large images: column by column, */
+                            long base[K_BLOCK];                /* each a run of neighbouring pixels */
+                            for (int p = 0; p < kb; p++) base[p] = index[(long)(p0 + p) * n];
+                            for (int jj = 0; jj < cols; jj++) {
+                                const real *src = img + index[j + jj];
+                                for (int p = 0; p < kb; p++) panel[(long)p * TILE_COLS + jj] = src[base[p]];
+                            }
+                        } else {                               /* small ones: row by row */
+                            long offset[TILE_COLS];
+                            for (int jj = 0; jj < cols; jj++) offset[jj] = index[j + jj];
+                            for (int p = 0; p < kb; p++) {
+                                const real *src = img + index[(long)(p0 + p) * n];
+                                real *dst = panel + (long)p * TILE_COLS;
+                                for (int jj = 0; jj < cols; jj++) dst[jj] = src[offset[jj]];
+                            }
+                        }
+                        row_tiles(A + (long)i_lo * k + p0, k, 1, (long)TILE_ROWS * k, dkernel + (long)i_lo * n + j,
+                                  n, panel, TILE_COLS, kb, i_hi - i_lo, cols);
                     }
                 }
-                row_tiles(A + p0, k, 1, (long)TILE_ROWS * k, dkernel + j, n, panel, TILE_COLS, kb, m, cols);
             }
         }
-#endif
-        for (int i = 0; i < m; i++) {                          /* without the vector path: every column */
-            for (int q = full_cols; q < n; q++) {
+    }
+#else
+    for (long batch = 0; batch < batches; batch++) {           /* without the vector path */
+        const real *img = image + batch * image_size;
+        const real *A = grad + batch * (long)m * k;
+        for (int i = 0; i < m; i++) {
+            for (int q = 0; q < n; q++) {
                 double total = 0.0;
                 for (int p = 0; p < k; p++) total += A_AT(i, p) * img[index[(long)p * n + q]];
                 dkernel[(long)i * n + q] += total;
             }
         }
     }
-#ifdef VECTOR_WIDTH
-    free(panel);
 #endif
 }
 
@@ -471,46 +611,58 @@ void conv_input_grad(const real *grad, const real *kernel, const long *index, re
 #else
     const int block_rows = 8;
 #endif
-    real *block = malloc(sizeof(real) * block_rows * n);
-    if (block == NULL) {
-        abort();
-    }
-    for (long batch = 0; batch < batches; batch++) {
-        const real *A = grad + batch * (long)k * m;           /* (filters x positions) */
-        real *img_grad = image_grad + batch * image_size;
-        for (int i = 0; i < m; i += block_rows) {
-            int rows = m - i < block_rows ? m - i : block_rows;
-            memset(block, 0, sizeof(real) * rows * n);
+    /* Threads share out the images (neighbouring patches overlap, so one
+     * image's pixels are only ever added to by one thread). */
 #ifdef VECTOR_WIDTH
-            for (int j = 0; j < n; j += TILE_COLS) {
-                int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
-                const real *panel = packed + (long)(j / TILE_COLS) * k * TILE_COLS;
-                for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
-                    int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
-                    /* A + i: positions i.. of grad_b^T become the block's rows 0.. */
-                    row_tiles(A + i + (long)p0 * m, 1, m, TILE_ROWS, block + j, n,
-                              panel + (long)p0 * TILE_COLS, TILE_COLS, kb, rows, cols);
-                }
-            }
+    int team = team_size((double)batches * m * k * n, batches);
 #else
-            for (int r = 0; r < rows; r++) {                   /* without the vector path */
-                for (int q = 0; q < n; q++) {
-                    double total = 0.0;
-                    for (int p = 0; p < k; p++) total += A[(long)p * m + i + r] * kernel[(long)p * n + q];
-                    block[(long)r * n + q] += total;
-                }
-            }
+    int team = 1;
 #endif
-            for (int r = 0; r < rows; r++) {                   /* col2im */
-                /* index[pos * n + q] = index[pos * n] + index[q]: the patch offsets
-                 * (the first n entries) stay cached; one base per position. */
-                real *dst = img_grad + index[(long)(i + r) * n];
-                const real *values = block + (long)r * n;
-                for (int q = 0; q < n; q++) dst[index[q]] += values[q];
+    (void)team;                                                /* used only with OpenMP */
+    OMP(omp parallel num_threads(team) if (team > 1))
+    {
+        real *block = malloc(sizeof(real) * block_rows * n);
+        if (block == NULL) {
+            abort();
+        }
+        OMP(omp for schedule(dynamic, 1))
+        for (long batch = 0; batch < batches; batch++) {
+            const real *A = grad + batch * (long)k * m;           /* (filters x positions) */
+            real *img_grad = image_grad + batch * image_size;
+            for (int i = 0; i < m; i += block_rows) {
+                int rows = m - i < block_rows ? m - i : block_rows;
+                memset(block, 0, sizeof(real) * rows * n);
+#ifdef VECTOR_WIDTH
+                for (int j = 0; j < n; j += TILE_COLS) {
+                    int cols = n - j < TILE_COLS ? n - j : TILE_COLS;
+                    const real *panel = packed + (long)(j / TILE_COLS) * k * TILE_COLS;
+                    for (int p0 = 0; p0 < k; p0 += K_BLOCK) {
+                        int kb = k - p0 < K_BLOCK ? k - p0 : K_BLOCK;
+                        /* A + i: positions i.. of grad_b^T become the block's rows 0.. */
+                        row_tiles(A + i + (long)p0 * m, 1, m, TILE_ROWS, block + j, n,
+                                  panel + (long)p0 * TILE_COLS, TILE_COLS, kb, rows, cols);
+                    }
+                }
+#else
+                for (int r = 0; r < rows; r++) {                   /* without the vector path */
+                    for (int q = 0; q < n; q++) {
+                        double total = 0.0;
+                        for (int p = 0; p < k; p++) total += A[(long)p * m + i + r] * kernel[(long)p * n + q];
+                        block[(long)r * n + q] += total;
+                    }
+                }
+#endif
+                for (int r = 0; r < rows; r++) {                   /* col2im */
+                    /* index[pos * n + q] = index[pos * n] + index[q]: the patch offsets
+                     * (the first n entries) stay cached; one base per position. */
+                    real *dst = img_grad + index[(long)(i + r) * n];
+                    const real *values = block + (long)r * n;
+                    for (int q = 0; q < n; q++) dst[index[q]] += values[q];
+                }
             }
         }
+        free(block);
     }
-    free(block);
 #ifdef VECTOR_WIDTH
     free(packed);
 #endif
@@ -593,18 +745,23 @@ void conv_direct(const real *image, const real *kernel, real *out, long batches,
         for (long q = 0; q < patch; q++)
             weights[(f / DIRECT_GROUP * patch + q) * DIRECT_GROUP + f % DIRECT_GROUP] = kernel[f * patch + q];
     const real *end = image + batches * image_size;
-    for (long b = 0; b < batches; b++) {
+    /* Threads share out (image, filter group) pairs; each writes its own planes of out. */
+    long units = batches * groups;
+    int team = team_size((double)batches * filters * patch * oh * ow, units);
+    (void)team;                                                /* used only with OpenMP */
+    OMP(omp parallel for num_threads(team) if (team > 1) schedule(dynamic, 1))
+    for (long unit = 0; unit < units; unit++) {
+        long b = unit / groups;
+        int f0 = (int)(unit % groups) * DIRECT_GROUP;
+        int group = filters - f0 < DIRECT_GROUP ? filters - f0 : DIRECT_GROUP;
         const real *img = image + b * image_size;
-        for (int f0 = 0; f0 < filters; f0 += DIRECT_GROUP) {
-            int group = filters - f0 < DIRECT_GROUP ? filters - f0 : DIRECT_GROUP;
-            real *dst = out + (b * filters + f0) * (long)oh * ow;
-            for (int y = 0; y < oh; y++)
-                for (int x0 = 0; x0 < ow; x0 += VECTOR_WIDTH) {
-                    int valid = ow - x0 < VECTOR_WIDTH ? ow - x0 : VECTOR_WIDTH;
-                    direct_segment(img, end, weights + f0 * patch, dst + (long)y * ow + x0, (long)oh * ow,
-                                   channels, height, width, kh, kw, y, x0, valid, group);
-                }
-        }
+        real *dst = out + (b * filters + f0) * (long)oh * ow;
+        for (int y = 0; y < oh; y++)
+            for (int x0 = 0; x0 < ow; x0 += VECTOR_WIDTH) {
+                int valid = ow - x0 < VECTOR_WIDTH ? ow - x0 : VECTOR_WIDTH;
+                direct_segment(img, end, weights + f0 * patch, dst + (long)y * ow + x0, (long)oh * ow,
+                               channels, height, width, kh, kw, y, x0, valid, group);
+            }
     }
     free(weights);
 #else
@@ -954,8 +1111,20 @@ static double largest(const real *x, long n)
     return part[0];
 }
 
+/* Threads for a kernel that works row by row: rows are shared out whole,
+ * so each row's sums are done by one thread in the usual order. A row
+ * element (an exp, a few multiplies) costs about as much as 64 of a matrix
+ * product's vectorized multiply-adds. */
+static inline int rows_team(long rows, long width)
+{
+    return team_size((double)rows * width * 64, rows);
+}
+
 void softmax_rows(const real *x, real *y, long rows, long width)
 {
+    int team = rows_team(rows, width);
+    (void)team;                                                /* used only with OpenMP */
+    OMP(omp parallel for num_threads(team) if (team > 1) schedule(static))
     for (long r = 0; r < rows; r++) {
         const real *in = x + r * width;
         real *out = y + r * width;
@@ -967,6 +1136,9 @@ void softmax_rows(const real *x, real *y, long rows, long width)
 
 void softmax_rows_backward(const real *y, const real *grad, real *dx, long rows, long width)
 {
+    int team = rows_team(rows, width);
+    (void)team;                                                /* used only with OpenMP */
+    OMP(omp parallel for num_threads(team) if (team > 1) schedule(static))
     for (long r = 0; r < rows; r++) {
         const real *yr = y + r * width, *gr = grad + r * width;
         real *out = dx + r * width;

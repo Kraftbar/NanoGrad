@@ -34,6 +34,7 @@ typecode = "d"                          # "d": float64, "f": float32
 _libraries: dict[str, ctypes.CDLL] = {}
 _C_TYPES = {"d": ctypes.c_double, "f": ctypes.c_float}
 _ZEROS = {"d": array("d", [0.0]), "f": array("f", [0.0])}
+threads = max(1, int(os.environ.get("NANOGRAD_THREADS", "1")))   # for the matrix products and convolutions
 
 
 def load() -> bool:
@@ -56,6 +57,32 @@ def set_precision(code: str) -> bool:
         _keep_freed_memory()
     library, typecode = _libraries[code], code
     return True
+
+
+def set_threads(count: int) -> None:
+    """Let the matrix products and convolutions use up to ``count`` threads.
+
+    The results are the same for any count (see kernels.c). Builds without
+    OpenMP always use one thread.
+    """
+
+    global threads
+    threads = max(1, int(count))
+    for built in _libraries.values():
+        built.set_threads(threads)
+
+
+def _one_thread_after_fork() -> None:
+    """A forked child cannot use the parent's OpenMP threads, so it gets one."""
+
+    global threads
+    threads = 1
+    for built in _libraries.values():
+        built.set_threads(1)
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_one_thread_after_fork)
 
 
 def _keep_freed_memory() -> None:
@@ -143,11 +170,16 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     extra = os.environ.get("NANOGRAD_CFLAGS")
     attempts = [extra.split()] if extra is not None else [["-march=native"], []]
     real = "-DREAL=double" if code == "d" else "-DREAL=float"
-    # glibc's vector math library (libmvec) gives a vectorized erf for GELU;
-    # where it is missing, the plain build is used.
+    # glibc's vector math library (libmvec) gives a vectorized erf for GELU,
+    # and OpenMP lets the matrix products use several threads; where either
+    # is missing, the build goes without it.
     for flags in attempts:
-        library_path = (_compile(compiler, ["-O3", real, *flags, "-DNANOGRAD_LIBMVEC"], ("-lmvec", "-lm"))
-                        or _compile(compiler, ["-O3", real, *flags]))
+        for openmp in (["-fopenmp"], []):
+            library_path = (_compile(compiler, ["-O3", real, *flags, *openmp, "-DNANOGRAD_LIBMVEC"],
+                                     ("-lmvec", "-lm"))
+                            or _compile(compiler, ["-O3", real, *flags, *openmp]))
+            if library_path is not None:
+                break
         if library_path is not None:
             break
     else:
@@ -221,6 +253,10 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     for name in ("window_mean", "window_mean_backward"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer] + [count] * 4
     library.window_max.argtypes = [pointer, index_pointer, pointer, index_pointer] + [count] * 4
+    library.set_threads.argtypes = [ctypes.c_int]
+    library.set_threads.restype = None
+    library.get_threads.restype = ctypes.c_int
+    library.set_threads(threads)
     return library
 
 
