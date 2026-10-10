@@ -38,12 +38,18 @@ gold count. Decoding (Viterbi) is the same recursion with max instead of
 logsumexp, remembering which i won. ``--no-crf`` trains the plain BiLSTM
 with a softmax per word, for comparison.
 
+``--chars`` adds Lample et al.'s character model: a small BiLSTM reads
+each word letter by letter (25-dimensional letter embeddings, 25 hidden
+units each way), and its two final states join the word's other
+embeddings. It sees every prefix and suffix, and spellings of words that
+are too rare to have an embedding of their own.
+
 Sentences are batched by length, so a batch has no padding and the math
 above holds as written. Dropout (0.5, on the embeddings and on the BiLSTM's
 output, as in Lample et al.) keeps the 1.1M weights from memorizing the
 training set; the test score reported is the one at the best epoch on dev.
 
-    python3 tagger.py --epochs 10
+    python3 tagger.py --epochs 10 [--chars]
     .venv/bin/python tagger.py --frameworks nanograd torch --epochs 1 --train-limit 400 --dropout 0
 
 Data: data/ud_ewt/en_ewt-ud-{train,dev,test}.conllu, from
@@ -61,7 +67,7 @@ from time import perf_counter
 from losses import softmax_cross_entropy
 from optim import TensorAdam
 from rnn import LSTM
-from tensor import Tensor, concat, no_grad
+from tensor import Tensor, concat, gather_rows, no_grad
 from tensor_nn import TensorDropout, TensorEmbedding, TensorLinear, TensorModule
 from train import evaluation_mode
 
@@ -102,13 +108,15 @@ def shape(word: str) -> int:
 
 class Vocabulary:
     """Ids for lowercased words and 3-letter suffixes seen at least twice in
-    training (rarer ones share id 0, "unknown"), and for the tags."""
+    training (rarer ones share id 0, "unknown"), for every letter seen in
+    training (the rest share 0), and for the tags."""
 
     def __init__(self, sentences: list[tuple[list[str], list[str]]], min_count: int = 2) -> None:
         words = Counter(w.lower() for sentence, _ in sentences for w in sentence)
         suffixes = Counter(w.lower()[-3:] for sentence, _ in sentences for w in sentence)
         self.words = {w: i for i, w in enumerate(sorted(w for w, n in words.items() if n >= min_count), 1)}
         self.suffixes = {s: i for i, s in enumerate(sorted(s for s, n in suffixes.items() if n >= min_count), 1)}
+        self.chars = {c: i for i, c in enumerate(sorted({c for sentence, _ in sentences for w in sentence for c in w}), 1)}
         self.tags = sorted({t for _, tags in sentences for t in tags})
         self.tag_ids = {t: i for i, t in enumerate(self.tags)}
 
@@ -116,6 +124,21 @@ class Vocabulary:
         return ([self.words.get(w.lower(), UNKNOWN) for w in words],
                 [self.suffixes.get(w.lower()[-3:], UNKNOWN) for w in words],
                 [shape(w) for w in words])
+
+    def spell(self, words: list[str]) -> list[tuple[int, ...]]:
+        return [tuple(self.chars.get(c, UNKNOWN) for c in w) for w in words]
+
+
+def spelling_groups(spellings: list[list[tuple[int, ...]]]) -> tuple[list[list[tuple[int, ...]]], list[int]]:
+    """The distinct words of a batch, grouped by length (so the character
+    LSTM needs no padding), and each word's row in the groups joined end to end."""
+
+    distinct = sorted({w for sentence in spellings for w in sentence}, key=lambda w: (len(w), w))
+    groups: dict[int, list] = {}
+    for w in distinct:
+        groups.setdefault(len(w), []).append(w)
+    row = {w: i for i, w in enumerate(distinct)}
+    return list(groups.values()), [row[w] for sentence in spellings for w in sentence]
 
 
 def length_batches(examples: list, batch_size: int, rng: random.Random | None) -> list[list]:
@@ -141,12 +164,19 @@ class Tagger(TensorModule):
     """Embeddings -> BiLSTM -> per-tag emissions, and a CRF's transition scores."""
 
     def __init__(self, vocab: Vocabulary, *, word_dim: int = 100, suffix_dim: int = 30, shape_dim: int = 5,
-                 hidden: int = 100, crf: bool = True, dropout: float = 0.0, seed: int = 0) -> None:
+                 hidden: int = 100, crf: bool = True, dropout: float = 0.0, chars: bool = False,
+                 char_dim: int = 25, char_hidden: int = 25, seed: int = 0) -> None:
         tags = len(vocab.tags)
         self.word = TensorEmbedding(len(vocab.words) + 1, word_dim, seed=seed)
         self.suffix = TensorEmbedding(len(vocab.suffixes) + 1, suffix_dim, seed=seed + 1)
         self.shape = TensorEmbedding(len(SHAPES), shape_dim, seed=seed + 2)
         inputs = word_dim + suffix_dim + shape_dim
+        self.chars = chars
+        if chars:
+            self.char = TensorEmbedding(len(vocab.chars) + 1, char_dim, seed=seed + 7)
+            self.char_forward = LSTM(char_dim, char_hidden, seed=seed + 8)
+            self.char_backward = LSTM(char_dim, char_hidden, seed=seed + 9)
+            inputs += 2 * char_hidden
         self.forward_lstm = LSTM(inputs, hidden, seed=seed + 3)
         self.backward_lstm = LSTM(inputs, hidden, seed=seed + 4)
         self.emit = TensorLinear(2 * hidden, tags, seed=seed + 5)
@@ -159,10 +189,27 @@ class Tagger(TensorModule):
         self.start = Tensor.zeros((tags,), requires_grad=True)
         self.end = Tensor.zeros((tags,), requires_grad=True)
 
-    def emissions(self, words: list[list[int]], suffixes: list[list[int]], shapes: list[list[int]]) -> Tensor:
+    def spelled(self, spellings: list[list[tuple[int, ...]]]) -> Tensor:
+        """(B, T, 2 * char_hidden): the final states of the character BiLSTM, run once per distinct word."""
+
+        groups, rows = spelling_groups(spellings)
+        finals = []
+        for group in groups:
+            x = self.char([list(w) for w in group])                        # (n, letters, char_dim)
+            forward = self.char_forward.run(x)[1][0]
+            backward = self.char_backward.run(reverse_time(x))[1][0]
+            finals.append(concat([forward, backward], axis=1))
+        table = concat(finals, axis=0) if len(finals) > 1 else finals[0]
+        return gather_rows(table, rows).reshape((len(spellings), len(spellings[0]), table.shape[1]))
+
+    def emissions(self, words: list[list[int]], suffixes: list[list[int]], shapes: list[list[int]],
+                  spellings: list[list[tuple[int, ...]]] | None = None) -> Tensor:
         """e (B, T, tags) for a batch of equal-length sentences."""
 
-        x = self.drop(concat([self.word(words), self.suffix(suffixes), self.shape(shapes)], axis=2))
+        parts = [self.word(words), self.suffix(suffixes), self.shape(shapes)]
+        if self.chars:
+            parts.append(self.spelled(spellings))
+        x = self.drop(concat(parts, axis=2))
         length = x.shape[1]
         forward = self.forward_lstm(x)
         # The backward LSTM reads the sentence right to left; its outputs are
@@ -173,8 +220,8 @@ class Tagger(TensorModule):
         return scores.reshape((len(words), length, scores.shape[1]))
 
     def loss(self, batch) -> Tensor:
-        words, suffixes, shapes, tags = (list(column) for column in zip(*batch))
-        e = self.emissions(words, suffixes, shapes)
+        words, suffixes, shapes, tags, spellings = (list(column) for column in zip(*batch))
+        e = self.emissions(words, suffixes, shapes, spellings)
         batch_size, length, count = e.shape
         if not self.crf:
             return softmax_cross_entropy(e.reshape((batch_size * length, count)), [t for row in tags for t in row])
@@ -225,9 +272,9 @@ class Tagger(TensorModule):
         return emitted + chain * (1.0 / batch_size)
 
     def decode(self, batch) -> list[list[int]]:
-        words, suffixes, shapes = (list(column) for column in list(zip(*batch))[:3])
+        words, suffixes, shapes, _, spellings = (list(column) for column in zip(*batch))
         with no_grad(), evaluation_mode(self):
-            e = self.emissions(words, suffixes, shapes)
+            e = self.emissions(words, suffixes, shapes, spellings)
         batch_size, length, count = e.shape
         rows = [[list(e.data[(b * length + t) * count : (b * length + t + 1) * count]) for t in range(length)]
                 for b in range(batch_size)]
@@ -239,7 +286,12 @@ class Tagger(TensorModule):
     def parameters(self) -> list[Tensor]:
         return [*self.word.parameters(), *self.suffix.parameters(), *self.shape.parameters(),
                 *self.forward_lstm.parameters(), *self.backward_lstm.parameters(), *self.emit.parameters(),
-                self.transitions, self.start, self.end]
+                self.transitions, self.start, self.end, *self.char_parameters()]
+
+    def char_parameters(self) -> list[Tensor]:
+        if not self.chars:
+            return []
+        return [*self.char.parameters(), *self.char_forward.parameters(), *self.char_backward.parameters()]
 
 
 def reverse_time(x: Tensor) -> Tensor:
@@ -320,12 +372,33 @@ class TorchRunner:
         for twin in (self.forward_lstm, self.backward_lstm):
             self.layout += [twin.weight_ih_l0, twin.weight_hh_l0, twin.bias_ih_l0]
         self.layout += [self.emit_weight, self.emit_bias, self.transitions, self.start, self.end]
+        self.chars = model.chars
+        if model.chars:
+            self.char = p(model.char.weight)
+            self.char_forward, self.char_backward = lstm(model.char_forward), lstm(model.char_backward)
+            self.layout.append(self.char)
+            for twin in (self.char_forward, self.char_backward):
+                self.layout += [twin.weight_ih_l0, twin.weight_hh_l0, twin.bias_ih_l0]
         self.optimizer = torch.optim.Adam(self.layout, lr=lr)
 
-    def emissions(self, words, suffixes, shapes):
+    def spelled(self, spellings):
         torch = self.torch
-        x = self.drop(torch.cat([self.word[torch.tensor(words)], self.suffix[torch.tensor(suffixes)],
-                                 self.shape[torch.tensor(shapes)]], dim=2))
+        groups, rows = spelling_groups(spellings)
+        finals = []
+        for group in groups:
+            x = self.char[torch.tensor([list(w) for w in group])]
+            _, (forward, _) = self.char_forward(x)
+            _, (backward, _) = self.char_backward(x.flip(1))
+            finals.append(torch.cat([forward[0], backward[0]], dim=1))
+        table = torch.cat(finals, dim=0)
+        return table[torch.tensor(rows)].reshape(len(spellings), len(spellings[0]), table.shape[1])
+
+    def emissions(self, words, suffixes, shapes, spellings):
+        torch = self.torch
+        parts = [self.word[torch.tensor(words)], self.suffix[torch.tensor(suffixes)], self.shape[torch.tensor(shapes)]]
+        if self.chars:
+            parts.append(self.spelled(spellings))
+        x = self.drop(torch.cat(parts, dim=2))
         forward, _ = self.forward_lstm(x)
         backward, _ = self.backward_lstm(x.flip(1))
         h = self.drop(torch.cat([forward, backward.flip(1)], dim=2))
@@ -333,8 +406,8 @@ class TorchRunner:
 
     def loss(self, batch):
         torch = self.torch
-        words, suffixes, shapes, tags = (list(column) for column in zip(*batch))
-        e = self.emissions(words, suffixes, shapes)
+        words, suffixes, shapes, tags, spellings = (list(column) for column in zip(*batch))
+        e = self.emissions(words, suffixes, shapes, spellings)
         tags = torch.tensor(tags)
         if not self.crf:
             return torch.nn.functional.cross_entropy(e.reshape(-1, e.shape[-1]), tags.reshape(-1))
@@ -357,10 +430,10 @@ class TorchRunner:
 
     def decode(self, batch) -> list[list[int]]:
         torch = self.torch
-        words, suffixes, shapes = (list(column) for column in list(zip(*batch))[:3])
+        words, suffixes, shapes, _, spellings = (list(column) for column in zip(*batch))
         self.drop.eval()
         with torch.no_grad():
-            e = self.emissions(words, suffixes, shapes)
+            e = self.emissions(words, suffixes, shapes, spellings)
         if not self.crf:
             return e.argmax(dim=2).tolist()
         trans, start, end = self.transitions.tolist(), self.start.tolist(), self.end.tolist()
@@ -390,6 +463,7 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--hidden", type=int, default=100)
     parser.add_argument("--dropout", type=float, default=0.5)
     parser.add_argument("--no-crf", dest="crf", action="store_false", help="a softmax per word instead of the CRF")
+    parser.add_argument("--chars", action="store_true", help="add a character BiLSTM per word (Lample et al.)")
     parser.add_argument("--train-limit", type=int, help="use only the first N training sentences")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)
@@ -399,14 +473,15 @@ def main(argv: list[str] | None = None) -> dict:
     if args.train_limit:
         splits["train"] = splits["train"][: args.train_limit]
     vocab = Vocabulary(splits["train"])
-    examples = {name: [(*vocab.encode(words), [vocab.tag_ids[t] for t in tags]) for words, tags in sentences]
+    examples = {name: [(*vocab.encode(words), [vocab.tag_ids[t] for t in tags], vocab.spell(words))
+                       for words, tags in sentences]
                 for name, sentences in splits.items()}
     print(f"{len(examples['train'])} training sentences, {len(vocab.words)} words, {len(vocab.suffixes)} suffixes, "
-          f"{len(vocab.tags)} tags; {'CRF' if args.crf else 'softmax'} output", flush=True)
+          f"{len(vocab.tags)} tags; {'CRF' if args.crf else 'softmax'} output{', character BiLSTM' if args.chars else ''}", flush=True)
 
     results, runners = {}, {}
     for framework in args.frameworks:
-        model = Tagger(vocab, hidden=args.hidden, crf=args.crf, dropout=args.dropout, seed=args.seed)
+        model = Tagger(vocab, hidden=args.hidden, crf=args.crf, dropout=args.dropout, chars=args.chars, seed=args.seed)
         if framework == "torch":
             import torch
 

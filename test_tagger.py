@@ -23,12 +23,17 @@ SAMPLE = """# sent_id = 1
 """
 
 
-def small_model(crf: bool = True, seed: int = 0) -> tuple[tagger.Tagger, tagger.Vocabulary]:
+def small_model(crf: bool = True, seed: int = 0, chars: bool = False) -> tuple[tagger.Tagger, tagger.Vocabulary]:
     sentences = [(["The", "dog", "runs", "."], ["DET", "NOUN", "VERB", "PUNCT"]),
                  (["A", "cat", "sleeps", "."], ["DET", "NOUN", "VERB", "PUNCT"]),
                  (["Dogs", "run", "."], ["NOUN", "VERB", "PUNCT"])] * 2
     vocab = tagger.Vocabulary(sentences)
-    return tagger.Tagger(vocab, word_dim=6, suffix_dim=4, shape_dim=2, hidden=5, crf=crf, seed=seed), vocab
+    return tagger.Tagger(vocab, word_dim=6, suffix_dim=4, shape_dim=2, hidden=5, crf=crf, chars=chars,
+                         char_dim=3, char_hidden=4, seed=seed), vocab
+
+
+def encoded(vocab: tagger.Vocabulary, words: list[str], tags: list[str]) -> tuple:
+    return (*vocab.encode(words), [vocab.tag_ids[t] for t in tags], vocab.spell(words))
 
 
 def sequence_score(e, trans, start, end, tags) -> float:
@@ -47,6 +52,12 @@ class TaggerTest(unittest.TestCase):
 
     def test_shapes(self) -> None:
         self.assertEqual([tagger.shape(w) for w in ("dog", "Dog", "NASA", "R2D2", "A")], [0, 1, 2, 3, 1])
+
+    def test_spelling_groups(self) -> None:
+        groups, rows = tagger.spelling_groups([[(1, 2), (3,), (1, 2)], [(4, 5, 6), (3,), (2, 1)]])
+        self.assertEqual(groups, [[(3,)], [(1, 2), (2, 1)], [(4, 5, 6)]])
+        table = [w for group in groups for w in group]
+        self.assertEqual([table[r] for r in rows], [(1, 2), (3,), (1, 2), (4, 5, 6), (3,), (2, 1)])
 
     def test_forward_algorithm_and_gold_score_match_brute_force(self) -> None:
         model, _ = small_model()
@@ -84,7 +95,7 @@ class TaggerTest(unittest.TestCase):
 
     def test_training_lowers_the_loss(self) -> None:
         model, vocab = small_model()
-        examples = [(*vocab.encode(["The", "dog", "runs", "."]), [vocab.tag_ids[t] for t in ["DET", "NOUN", "VERB", "PUNCT"]])]
+        examples = [encoded(vocab, ["The", "dog", "runs", "."], ["DET", "NOUN", "VERB", "PUNCT"])]
         runner = tagger.NanoGradRunner(model, 0.05, 5.0)
         first = runner.train_step(examples)
         for _ in range(30):
@@ -97,12 +108,12 @@ class TaggerTest(unittest.TestCase):
             import torch  # noqa: F401
         except ImportError:
             self.skipTest("PyTorch is not installed")
-        for crf in (True, False):
-            model, vocab = small_model(crf=crf)
-            sentences = [["The", "dog", "runs", "."], ["A", "cat", "sleeps", "."], ["Dogs", "sleep", "now", "."]]
+        for crf, chars in ((True, False), (False, False), (True, True)):
+            model, vocab = small_model(crf=crf, chars=chars)
+            sentences = [["The", "dog", "runs", "."], ["A", "cat", "sleeps", "."], ["Dogs", "sleep", "now!", "."]]
             tags = [["DET", "NOUN", "VERB", "PUNCT"], ["DET", "NOUN", "VERB", "PUNCT"], ["NOUN", "VERB", "ADV", "PUNCT"]]
             tags = [[t if t in vocab.tag_ids else "NOUN" for t in row] for row in tags]
-            batch = [(*vocab.encode(w), [vocab.tag_ids[t] for t in row]) for w, row in zip(sentences, tags)]
+            batch = [encoded(vocab, w, row) for w, row in zip(sentences, tags)]
             runners = [tagger.NanoGradRunner(model, 1e-2, 5.0), tagger.TorchRunner(model, 1e-2, 5.0)]
             for _ in range(3):
                 losses = [runner.train_step(batch) for runner in runners]

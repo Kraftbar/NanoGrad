@@ -29,10 +29,10 @@ and float64, and NanoGrad uses its C kernels.
 | Cora (link prediction) | GAE / VGAE, the authors' recipe, 5 edge splits | test AUC **91.8 / 92.4**, AP 92.6 / 93.4 | GAE paper: AUC 91.0 / 91.4, AP 92.0 / 92.6 |
 | Speech Commands (MLPerf Tiny keyword spotting) | DS-CNN, 12 classes, official test set, 24 epochs, no augmentation | **90.33%** test accuracy | MLPerf Tiny target: 90%; reference DS-CNN about 92% |
 | MNIST (adversarial robustness) | fast FGSM adversarial training (Wong et al.), eps 0.3 | 97.95% clean, **75.81%** under PGD-50 x 10 | PyTorch, same recipe: 98.7% / 88.8% |
-| UD English EWT (part-of-speech tagging) | BiLSTM-CRF, word + suffix + shape embeddings, 15 epochs | **94.66%** test accuracy (softmax output instead of the CRF: 94.45%) | |
+| UD English EWT (part-of-speech tagging) | BiLSTM-CRF, word + suffix + shape embeddings (+ a character BiLSTM), 15 epochs | 94.66% test accuracy (softmax output instead of the CRF: 94.45%); with the character model **94.83%** (mean of 2 seeds 94.95%) | |
 | CamVid (segmentation) | U-Net, half resolution, 20 epochs | 81.6% global accuracy, **36.9% mean IoU** | |
 | MNIST (density) | MAF(5) normalizing flow, 20 epochs | test log-likelihood **-1217.6** nats (logit space), 1.74 bits/dim | MAF paper: -1300.5 |
-| UCI regression (uncertainty) | MC dropout, Gal's protocol, 8 tables | beats the paper on 3 of 8 and is within a few percent on 4 (e.g. kin8nm RMSE 0.084, LL 1.07) | Gal and Ghahramani: kin8nm 0.10, 0.95 |
+| UCI regression (uncertainty) | MC dropout, Gal's protocol, 8 tables | beats the paper on 3 of 8 and is within a few percent on 4 (e.g. kin8nm RMSE 0.084, LL 1.07); yacht at Gal's 4,000 epochs: RMSE **0.705**, LL -1.257 | Gal and Ghahramani: kin8nm 0.10, 0.95; Gal's yacht results at 4,000 epochs: 0.666, -1.25 |
 | MovieLens-1M (recommendation) | NCF: GMF / MLP / NeuMF, 32 factors, 20 epochs | HR@10 **0.710 / 0.691 / 0.695** | NCF code and reproductions: 0.708 / 0.692 / 0.701 |
 | Omniglot (few-shot) | prototypical network, 5,000 episodes | 5-way 1-shot **98.3%**, 20-way 1-shot 94.4% | paper: 98.8%, 96.0% |
 | Set5 / Set14 (super-resolution, x3) | SRCNN 9-1-5 on the 91-image set, 50 epochs | **32.11 / 28.80 dB** (bicubic 30.39 / 27.54) | SRCNN paper: 32.39 / 29.00 |

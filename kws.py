@@ -17,11 +17,13 @@ The model is MLPerf's DS-CNN, a MobileNet for audio: a 10 x 4 stride-2
 convolution with 64 filters, four depthwise-separable blocks of 64,
 global average pooling and a linear layer (about 23K parameters). The
 training follows the reference (Adam, batch 100, lr 5e-4, divided by 5
-after each third of training), except that the dropout layers and the
-noise and time-shift augmentation are left out. The reference DS-CNN
-reaches about 92% (MLPerf Tiny's quality target is 90%).
+after each third of training), without its dropout layers. With
+--augment, each training clip is shifted and mixed with background noise
+afresh every epoch, as the reference does (see ``augmented``), and its
+MFCCs are recomputed; without it they are computed once and cached. The
+reference DS-CNN reaches about 92% (MLPerf Tiny's quality target is 90%).
 
-    python3 kws.py --epochs 24
+    python3 kws.py --epochs 24 [--augment]
     .venv/bin/python kws.py --frameworks nanograd torch --epochs 1 --train-limit 2000 --test-limit 500
 
 Data: data/speech_commands/ (see data/speech_commands/DOWNLOAD.md).
@@ -36,6 +38,8 @@ import random
 from pathlib import Path
 from time import perf_counter
 
+from array import array
+
 from audio import mel_filters, read_wav
 from losses import softmax_cross_entropy
 from mobilenet import MobileNet
@@ -46,6 +50,7 @@ KEYWORDS = ("yes", "no", "up", "down", "left", "right", "on", "off", "stop", "go
 CLASSES = ("_silence_", "_unknown_") + KEYWORDS
 RATE, WINDOW, HOP, FFT, MELS, COEFFICIENTS = 16000, 480, 320, 512, 40, 10
 FRAMES = (RATE - WINDOW) // HOP + 1                       # 49
+SHIFT, NOISE_CHANCE, NOISE_VOLUME = RATE // 10, 0.8, 0.1   # the reference's augmentation: 100 ms, 80%, 0.1
 
 
 class MFCC:
@@ -85,15 +90,12 @@ def one_second(samples: list[float]) -> list[float]:
     return (samples + [0.0] * RATE)[:RATE]
 
 
-def load_speech_commands(folder: str | Path, seed: int = 0) -> dict[str, list[tuple[list[float], int]]]:
-    """{"train": [(mfcc, class)], "test": [...]}, computed once and cached. The training set is
-    every keyword clip outside the validation and test lists, plus as many again "unknown" words
-    and "silence" slices as 10% of the keyword clips each."""
+def example_sources(folder: Path, seed: int = 0):
+    """(train, test, noise): (source, class) lists and the background-noise recordings. The
+    training set is every keyword clip outside the validation and test lists, plus as many
+    again "unknown" words and "silence" slices as 10% of the keyword clips each. A source is
+    a file, or (recording, offset, volume) for a slice of background noise."""
 
-    folder = Path(folder)
-    cache = folder / "mfcc.pkl"
-    if cache.exists():
-        return pickle.loads(cache.read_bytes())
     held_out = set((folder / "validation_list.txt").read_text().split()) | set(
         (folder / "testing_list.txt").read_text().split())
     rng = random.Random(seed)
@@ -117,22 +119,65 @@ def load_speech_commands(folder: str | Path, seed: int = 0) -> dict[str, list[tu
                       CLASSES.index("_silence_")))
     test = [(path, label) for label, name in enumerate(CLASSES)
             for path in sorted((folder / "test_set" / name).glob("*.wav"))]
+    return train, test, noise
 
-    def waveform(source) -> list[float]:
-        if isinstance(source, Path):
-            return one_second(read_wav(source))
-        index, offset, volume = source
-        return [v * volume for v in noise[index][offset : offset + RATE]]
 
+def waveform(source, noise) -> list[float]:
+    if isinstance(source, Path):
+        return one_second(read_wav(source))
+    index, offset, volume = source
+    return [v * volume for v in noise[index][offset : offset + RATE]]
+
+
+def load_speech_commands(folder: str | Path, seed: int = 0) -> dict[str, list[tuple[list[float], int]]]:
+    """{"train": [(mfcc, class)], "test": [...]}, computed once and cached."""
+
+    folder = Path(folder)
+    cache = folder / "mfcc.pkl"
+    if cache.exists():
+        return pickle.loads(cache.read_bytes())
+    train, test, noise = example_sources(folder, seed)
     mfcc, splits = MFCC(), {}
     for split, examples in (("train", train), ("test", test)):
         features = []
         for first in range(0, len(examples), 200):
             chunk = examples[first : first + 200]
-            features += list(zip(mfcc([waveform(source) for source, _ in chunk]), [label for _, label in chunk]))
+            features += list(zip(mfcc([waveform(source, noise) for source, _ in chunk]), [label for _, label in chunk]))
         splits[split] = features
     cache.write_bytes(pickle.dumps(splits))
     return splits
+
+
+def load_waveforms(folder: str | Path, seed: int = 0):
+    """The training clips as float32 arrays (about 2.4 GB; 16-bit samples / 32768 are exact in
+    float32), in the order of load_speech_commands' training features, and the background noise."""
+
+    train, _, noise = example_sources(Path(folder), seed)
+    clips = []
+    for source, label in train:
+        silence = label == CLASSES.index("_silence_")
+        samples = [0.0] * RATE if silence else waveform(source, noise)     # silence gets fresh noise each time
+        clips.append((array("f", samples), label))
+    return clips, noise
+
+
+def augmented(samples: array, label: int, noise: list[list[float]], rng: random.Random) -> list[float]:
+    """The reference's augmentation (TensorFlow's speech_commands input_data.py): shift the clip
+    by up to 100 ms either way, padding with silence, then, with probability 0.8 (always for
+    silence), add a random second of background noise at a random volume up to 0.1, clipped
+    to [-1, 1]."""
+
+    shift = rng.randint(-SHIFT, SHIFT)
+    clip = samples.tolist()
+    clip = [0.0] * shift + clip[: RATE - shift] if shift >= 0 else clip[-shift:] + [0.0] * -shift
+    if label == CLASSES.index("_silence_") or rng.random() < NOISE_CHANCE:
+        volume = rng.uniform(0.0, NOISE_VOLUME)
+        recording = noise[rng.randrange(len(noise))]
+        offset = rng.randrange(len(recording) - RATE)
+        clip = [v + volume * n for v, n in zip(clip, recording[offset : offset + RATE])]
+        if max(clip) > 1.0 or min(clip) < -1.0:
+            clip = [min(1.0, max(-1.0, v)) for v in clip]
+    return clip
 
 
 def ds_cnn(seed: int = 0) -> MobileNet:
@@ -142,16 +187,20 @@ def ds_cnn(seed: int = 0) -> MobileNet:
                      stem_stride=2, stem_padding=(5, 1), stages=((64, 1),) * 4, seed=seed)
 
 
-def standardize(train, test) -> None:
-    """Zero mean, unit variance per MFCC coefficient, from the training clips (in place)."""
+def standardize(train, test) -> list[tuple[float, float]]:
+    """Zero mean, unit variance per MFCC coefficient, from the training clips (in place).
+    Returns each coefficient's (mean, std)."""
 
+    statistics = []
     for c in range(COEFFICIENTS):
         values = [features[t * COEFFICIENTS + c] for features, _ in train for t in range(FRAMES)]
         mean = sum(values) / len(values)
         std = math.sqrt(sum((v - mean) ** 2 for v in values) / len(values)) or 1.0
+        statistics.append((mean, std))
         for features, _ in train + test:
             for t in range(FRAMES):
                 features[t * COEFFICIENTS + c] = (features[t * COEFFICIENTS + c] - mean) / std
+    return statistics
 
 
 class NanoGradRunner:
@@ -230,17 +279,31 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--test-limit", type=int)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--augment", action="store_true", help="the reference's time shifts and background noise")
     args = parser.parse_args(argv)
 
     start = perf_counter()
     splits = load_speech_commands(args.data, args.seed)
     rng = random.Random(args.seed)
-    train_set = [(list(f), label) for f, label in splits["train"]]
-    rng.shuffle(train_set)
-    train_set, test_set = train_set[: args.train_limit], [(list(f), label) for f, label in splits["test"]]
+    picked = list(range(len(splits["train"])))
+    rng.shuffle(picked)
+    picked = picked[: args.train_limit]
+    train_set = [(list(splits["train"][i][0]), splits["train"][i][1]) for i in picked]
+    test_set = [(list(f), label) for f, label in splits["test"]]
     rng.shuffle(test_set)
     test_set = test_set[: args.test_limit]
-    standardize(train_set, test_set)
+    statistics = standardize(train_set, test_set)
+    if args.augment:
+        clips, noise = load_waveforms(args.data, args.seed)
+        clips = [clips[i] for i in picked]
+        mfcc = MFCC()
+
+    def batch_features(indices: list[int], rng: random.Random) -> list[float]:
+        if not args.augment:
+            return [v for i in indices for v in train_set[i][0]]
+        features = mfcc([augmented(*clips[i], noise, rng) for i in indices])
+        return [(v - statistics[k % COEFFICIENTS][0]) / statistics[k % COEFFICIENTS][1]
+                for f in features for k, v in enumerate(f)]
     print(f"{len(train_set)} training and {len(test_set)} test clips ({perf_counter() - start:.0f} s)", flush=True)
     results, runners = {}, {}
     for framework in args.frameworks:
@@ -254,14 +317,14 @@ def main(argv: list[str] | None = None) -> dict:
             runners[framework] = runner = NanoGradRunner(model, args.lr)
         print(f"{framework} DS-CNN, {model.num_parameters()} parameters", flush=True)
         order, steps, start = list(range(len(train_set))), 0, perf_counter()
-        shuffler = random.Random(args.seed + 1)
+        shuffler, augmenter = random.Random(args.seed + 1), random.Random(args.seed + 2)
         for epoch in range(1, args.epochs + 1):
             lr = args.lr / 5 ** min(2, (epoch - 1) * 3 // args.epochs)       # / 5 after each third
             shuffler.shuffle(order)
             total = 0.0
             for first in range(0, len(order), args.batch_size):
-                batch = [train_set[i] for i in order[first : first + args.batch_size]]
-                total += runner.train_step([v for f, _ in batch for v in f], [label for _, label in batch], lr)
+                indices = order[first : first + args.batch_size]
+                total += runner.train_step(batch_features(indices, augmenter), [train_set[i][1] for i in indices], lr)
                 steps += 1
             print(f"  epoch {epoch:2d}: lr {lr:.0e}, train loss {total / math.ceil(len(order) / args.batch_size):.4f}, "
                   f"{perf_counter() - start:.0f} s", flush=True)

@@ -181,12 +181,12 @@ def image_loss(model: TensorModule, xs: list[list[float]], ys: list[int], image_
 
 class NanoGradRunner:
     def __init__(self, model: TensorModule, lr: float, workers: int = 1, image_shape=IMAGE_SHAPE,
-                 label_smoothing: float = 0.0) -> None:
+                 label_smoothing: float = 0.0, l2: float = 0.0) -> None:
         self.model = model
         self.label_smoothing = label_smoothing
         self.image_shape = tuple(image_shape)
         self.image_size = image_shape[0] * image_shape[1] * image_shape[2]
-        self.optimizer = TensorAdam(model.parameters(), lr=lr)
+        self.optimizer = TensorAdam(model.parameters(), lr=lr, l2=l2)
         # With workers > 1 each batch is split across processes (parallel.py).
         loss = partial(image_loss, image_shape=self.image_shape, label_smoothing=label_smoothing)
         self.parallel = DataParallel(model, loss, workers=workers) if workers > 1 else None
@@ -204,6 +204,9 @@ class NanoGradRunner:
             loss = loss_tensor.item()
         self.optimizer.step()
         return loss
+
+    def set_lr(self, lr: float) -> None:
+        self.optimizer.lr = lr
 
     def close(self) -> None:
         if self.parallel is not None:
@@ -230,7 +233,7 @@ class TorchRunner:
     """The same model in PyTorch (see torch_twin.py), with PyTorch's Adam."""
 
     def __init__(self, model: TensorModule, lr: float, dtype: str, threads: int, image_shape=IMAGE_SHAPE,
-                 label_smoothing: float = 0.0) -> None:
+                 label_smoothing: float = 0.0, l2: float = 0.0) -> None:
         import torch
 
         from torch_twin import TorchTwin
@@ -241,7 +244,7 @@ class TorchRunner:
         self.image_shape = tuple(image_shape)
         self.label_smoothing = label_smoothing
         self.twin = TorchTwin(model, dtype=self.dtype)
-        self.optimizer = torch.optim.Adam(self.twin.parameters, lr=lr)
+        self.optimizer = torch.optim.Adam(self.twin.parameters, lr=lr, weight_decay=l2)
 
     def _inputs(self, pixels: list[float], count: int):
         return self.torch.tensor(pixels, dtype=self.dtype).reshape(count, *self.image_shape)
@@ -256,6 +259,10 @@ class TorchRunner:
         loss.backward()
         self.optimizer.step()
         return loss.item()
+
+    def set_lr(self, lr: float) -> None:
+        for group in self.optimizer.param_groups:
+            group["lr"] = lr
 
     def predict(self, pixels: list[float], count: int) -> list[int]:
         self.twin.training = False
@@ -296,13 +303,13 @@ def run(args: argparse.Namespace) -> dict:
     for name in args.frameworks:
         if name == "nanograd":
             runners[name] = NanoGradRunner(model, args.lr, workers=args.workers, image_shape=image_shape,
-                                           label_smoothing=args.label_smoothing)
+                                           label_smoothing=args.label_smoothing, l2=args.l2)
         else:
             if importlib.util.find_spec("torch") is None:
                 raise SystemExit("PyTorch is not installed; use --frameworks nanograd")
             # Built before NanoGrad trains, so it copies the initial weights.
             runners[name] = TorchRunner(model, args.lr, torch_dtype, args.torch_threads, image_shape,
-                                        label_smoothing=args.label_smoothing)
+                                        label_smoothing=args.label_smoothing, l2=args.l2)
 
     rng = random.Random(args.seed)
     schedule = [epoch_batches(len(train_labels), args.batch_size, rng) for _ in range(args.epochs)]
@@ -317,6 +324,7 @@ def run(args: argparse.Namespace) -> dict:
     results = {name: [] for name in runners}
     for name, runner in runners.items():
         for epoch, batches in enumerate(schedule, start=1):
+            runner.set_lr(args.lr * args.lr_decay ** (epoch - 1))
             start = perf_counter()
             losses = [
                 runner.train_step(pixels_for(batch), [train_labels[i] for i in batch])
@@ -358,6 +366,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr-decay", type=float, default=1.0, help="learning rate factor per epoch")
+    parser.add_argument("--l2", type=float, default=0.0,
+                        help="L2 penalty added to the gradient (torch.optim.Adam's weight_decay)")
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--test-limit", type=int)
     parser.add_argument("--seed", type=int, default=0)

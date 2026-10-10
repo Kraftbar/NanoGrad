@@ -26,7 +26,8 @@ plus the weight decay l^2 (1 - p) / (2 N tau) * sum W^2 with l = 0.01;
 The paper reports (40 epochs; RMSE / log-likelihood): Boston 2.97 / -2.46,
 concrete 5.23 / -3.04, energy 1.66 / -1.99, kin8nm 0.10 / 0.95,
 naval 0.01 / 3.80, power 4.02 / -2.80, protein 4.36 / -2.89,
-wine 0.62 / -0.93, yacht 1.11 / -1.55.
+wine 0.62 / -0.93, yacht 1.11 / -1.55. Gal's published result files were
+made with 100x the epochs (yacht: 0.666 / -1.25; ``--epoch-multiplier 100``).
 
     python3 uci.py --dataset concrete
     python3 uci.py --dataset all --splits 5

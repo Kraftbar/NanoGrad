@@ -294,6 +294,16 @@ and naval beat the paper; Boston, concrete, power plant and wine come
 within a few percent of it. Yacht, the smallest table (308 rows, three Adam
 steps per epoch), is far from converged at 400 epochs.
 
+Gal's published result files (the DropoutUncertaintyExps repository) were
+made with 100x the epochs, 4,000, and his code's default is 500x. Run that
+way (`--epoch-multiplier 100`, 17 minutes), yacht matches them within the
+standard error:
+
+| yacht, 4,000 epochs | RMSE | log-likelihood |
+| --- | ---: | ---: |
+| NanoGrad, 20 splits | 0.705 +- 0.045 | -1.257 +- 0.014 |
+| Gal's result files | 0.666 +- 0.049 | -1.25 +- 0.015 |
+
 *Added*: nothing in the core. MC dropout is ordinary dropout left on, and
 10,000 samples run as one batch of repeated rows (in chunks).
 
@@ -560,10 +570,27 @@ dev:
 | output layer | dev | test |
 | --- | ---: | ---: |
 | softmax per word | 94.04% | 94.45% |
-| CRF | 94.32% | **94.66%** |
+| CRF | 94.32% | 94.66% |
+| CRF + character BiLSTM | 94.62% | **94.83%** |
 
-The model has no pretrained word vectors and no character model; the
-CRF's transitions add 0.2 points over a softmax per word.
+The model has no pretrained word vectors; the CRF's transitions add 0.2
+points over a softmax per word. `--chars` adds Lample et al.'s character
+model: a BiLSTM over each word's letters (25-dimensional letter
+embeddings, 25 units each way), run once per distinct word in a batch,
+with words grouped by length so nothing is padded; its two final states
+join the word's embeddings. It sees whole prefixes and suffixes, and the
+spelling of words too rare for an embedding of their own. Over two seeds
+it adds 0.3 points on both dev and test:
+
+| seed | CRF dev / test | + characters dev / test |
+| --- | ---: | ---: |
+| 0 | 94.32 / 94.66 | 94.62 / 94.83 |
+| 1 | 94.44 / 94.62 | 94.69 / 95.06 |
+| mean | 94.38 / 94.64 | 94.66 / **94.95** |
+
+An epoch takes 2.3x as long (166 vs 72 ms per step), almost all of it
+the many small per-letter LSTM steps. The PyTorch twin runs the same
+character model and agrees to 1e-10 (`test_tagger.py`).
 
 *Added*: `logsumexp` (the lane's largest value as a constant shift, so
 the gradient that comes out is the softmax).
