@@ -389,9 +389,34 @@ The second row is "catastrophic overfitting": the model learns to make
 the single FGSM step useless instead of becoming robust. FGSM accuracy
 looks excellent, but PGD breaks it completely. How the layers are
 initialized decides which way training goes, so `small_cnn` initializes
-as PyTorch does. The remaining gap to the PyTorch run is within the
-seed-to-seed spread of this method (Wong et al. report runs that end
-anywhere from robust to collapsed).
+as PyTorch does.
+
+The 88.80% above was measured on an easier test (1,000 images, one
+start), so it is not comparable. To compare like with like, five
+NanoGrad seeds (`adversarial.py --seed N`) and three seeds of a separate
+plain-PyTorch version of Wong et al.'s published code (their
+`train_mnist.py` and `evaluate_mnist.py` on the CPU, float32, PyTorch's
+own initialization and shuffling) were each scored with the full test:
+PGD-50 from 10 starts on all 10,000 test images. These runs were on an
+8-core Ryzen 7 3700X; seed 0 lands on a different number from the table
+above (81.30% instead of 75.81%) because that machine's AVX2 products
+round differently from the AVX-512 machine's, and this training
+amplifies the difference.
+
+| seed | NanoGrad clean | NanoGrad PGD-50 x 10 | PyTorch clean | PyTorch PGD-50 x 10 |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 98.00% | 81.30% | 98.45% | 85.40% |
+| 1 | 98.29% | 69.29% | 97.26% | 0.00% (collapsed) |
+| 2 | 98.54% | 85.29% | 98.10% | 86.43% |
+| 3 | 98.60% | 76.16% | | |
+| 4 | 98.58% | 86.48% | | |
+
+The two frameworks overlap: NanoGrad's runs land between 69% and 86%,
+and PyTorch's between 85% and 86%, plus one catastrophic collapse to
+0%. The seed is what decides the result, not the framework, so the gap
+to the 88.80% figure is not a NanoGrad bug. With a handful of seeds each,
+the means cannot be told apart either way. Neither framework reaches
+Wong et al.'s reported 89% on these seeds.
 
 *Added*: input gradients (an input tensor with `requires_grad`) and a
 `projected_sign_step` kernel: the sign step and both clips (the eps-box
