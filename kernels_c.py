@@ -253,6 +253,9 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     for name in ("window_mean", "window_mean_backward"):
         getattr(library, name).argtypes = [pointer, index_pointer, pointer] + [count] * 4
     library.window_max.argtypes = [pointer, index_pointer, pointer, index_pointer] + [count] * 4
+    library.softmax_xent_rows.argtypes = [pointer, index_pointer, ctypes.c_double, ctypes.POINTER(ctypes.c_double),
+                                          count, count]
+    library.add_rows.argtypes = [pointer, pointer, count, count]
     library.set_threads.argtypes = [ctypes.c_int]
     library.set_threads.restype = None
     library.get_threads.restype = ctypes.c_int
@@ -320,6 +323,27 @@ def softmax_rows(x: list[float], width: int) -> array:
     x_buffer, y = _reals(x), zeros(len(x))
     library.softmax_rows(_buffer(x_buffer), _buffer(y), len(x) // width, width)
     return y
+
+
+def softmax_xent_rows(x: array, targets: Sequence[int], factor: float, width: int) -> tuple[array, array]:
+    """In place: each row of logits x becomes factor * (softmax - one_hot(target)); also the rows' losses."""
+
+    if type(x) is not array or x.typecode != typecode:
+        raise TypeError("softmax_xent_rows works in place on a C array of the current precision")
+    keep, target_buffer = _index_buffer(targets)
+    nll = array("d", bytes(8 * len(targets)))
+    library.softmax_xent_rows(_buffer(x), target_buffer, factor, _buffer(nll), len(targets), width)
+    return x, nll
+
+
+def add_rows(x: list[float], out: array, width: int) -> array:
+    """In place: out[s] += every row's x[., s], in row order."""
+
+    if type(out) is not array or out.typecode != typecode or len(out) != width:
+        raise TypeError("add_rows adds into a C array of the current precision, one row wide")
+    x_buffer = _reals(x)
+    library.add_rows(_buffer(x_buffer), _buffer(out), len(x_buffer) // width, width)
+    return out
 
 
 def softmax_rows_backward(y: list[float], grad: list[float], width: int) -> array:

@@ -16,6 +16,7 @@ checked against PyTorch where PyTorch has an equivalent.
 | | bidirectional attention | `causal=False` | for encoders: ViT (`vit.py`) and BERT (`bert.py`) |
 | training | masked language modeling | `bert.py` | BERT's pretraining task |
 | | gradient checkpointing | `recompute.py`, `--recompute` | keep only each block's input; recompute its activations in backward |
+| | fused output layer + loss | `losses.linear_cross_entropy` | decoder and softmax cross entropy as one op, in chunks of rows: no full softmax or gradient arrays |
 | | LoRA | `lora.py`, `bert_finetune.py --lora 4` | fine-tune through small low-rank updates to frozen attention weights |
 | | preference tuning (DPO) | `dpo.py` | learn from "A is better than B" pairs directly, no reward model or RL (Rafailov et al.) |
 | | distillation | `distill.py` | train a small model on a big one's temperature-softened predictions (Hinton et al.) |
@@ -227,6 +228,35 @@ identical. On the baby GPT at batch 32 (`--recompute`):
 A third of the memory for half again the time; the theory says a third
 more time (one extra forward pass of each block), and the rest is
 Python building each block's graph twice.
+
+## Fused Output Layer And Loss
+
+A language model's last layer is its widest: it turns every position into
+one score per word of the vocabulary. On WikiText-2 (33,278 words, 700
+positions per step) the logits alone are 186 MB in float64, and the plain
+path, `linear` then `softmax_cross_entropy`, makes two more arrays that
+size: the softmax and its gradient. `linear_cross_entropy(x, W, b,
+targets)` does both in one op. It takes the rows a chunk at a time,
+computes the chunk's logits, turns them in place into the gradient of the
+loss (`(softmax - one_hot) / N`, one C kernel), and adds the chunk's share
+of dx, dW and db at once: the loss is the last op, so its gradient is
+known as soon as the softmax is, and backward has only to hand the
+results on. (Liger Kernel and Apple's Cut Cross-Entropy do this on GPUs
+for vocabularies of 128K and more.)
+
+It keeps the plain path's operations and their order, so the loss and
+every gradient are the same bit for bit (`test_losses.py`); chunks are
+multiples of 256 rows, the block the C matrix product sums over, so the
+weight gradient added chunk by chunk is summed in the same order as in
+one product. Each chunk passes over the whole weight matrix and its
+gradient again, so chunks are as large as 256 MB of logits allows. On
+the WikiText-2 output layer (float64, 8 threads):
+
+| | time (forward + backward) | arrays of N x V numbers |
+| --- | ---: | ---: |
+| `linear` + `softmax_cross_entropy` | 274 ms | 3 |
+| fused, chunks of 256 rows | 245 ms | 1 of 256 rows |
+| fused, one chunk (the default here) | 203 ms | 1 |
 
 ## Results: context past the training length (`context.py`)
 

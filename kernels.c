@@ -1149,6 +1149,56 @@ void softmax_rows_backward(const real *y, const real *grad, real *dx, long rows,
 }
 
 /*
+ * Softmax cross entropy, in place, for the fused linear + loss
+ * (losses.linear_cross_entropy). Each row of logits x becomes
+ *
+ *     factor * (softmax(x) - one_hot(target))
+ *
+ * the gradient of factor * (the sum of the rows' losses), and nll[r] gets
+ * the row's loss, -log p_target. It does what softmax_rows, scale_vector
+ * and the target fix in losses.softmax_cross_entropy do, with the same
+ * operations in the same order, so the result is the same bit for bit.
+ * (Only when p_target underflows to 0 does the loss come from the row's
+ * logsumexp here, with fast_exp sums instead of the Python path's fsum.)
+ */
+void softmax_xent_rows(real *x, const long *targets, double factor, double *nll, long rows, long width)
+{
+    int team = rows_team(rows, width);
+    (void)team;                                                /* used only with OpenMP */
+    OMP(omp parallel for num_threads(team) if (team > 1) schedule(static))
+    for (long r = 0; r < rows; r++) {
+        real *row = x + r * width;
+        long target = targets[r];
+        double x_target = row[target];
+        double row_max = largest(row, width);
+        double total = exp_shifted(row, row_max, row, width);
+        double inverse = 1.0 / total;
+        for (long i = 0; i < width; i++) row[i] *= inverse;
+        double p = row[target];
+        nll[r] = p > 0.0 ? -log(p) : row_max + log(total) - x_target;
+        for (long i = 0; i < width; i++) row[i] = row[i] * factor;
+        row[target] = (real)((double)row[target] - factor);
+    }
+}
+
+/* out[s] += x[o * width + s] for every row o, in order: sum_repeated's bias
+ * sum without the reset, so chunks of rows can be added one after another.
+ * Threads share out columns, and each adds the rows in order. */
+void add_rows(const real *x, real *out, long rows, long width)
+{
+    enum { COLUMNS = 512 };
+    long blocks = (width + COLUMNS - 1) / COLUMNS;
+    int team = team_size((double)rows * width * 4, blocks);
+    (void)team;                                                /* used only with OpenMP */
+    OMP(omp parallel for num_threads(team) if (team > 1) schedule(static))
+    for (long block = 0; block < blocks; block++) {
+        long s0 = block * COLUMNS, s1 = s0 + COLUMNS < width ? s0 + COLUMNS : width;
+        for (long o = 0; o < rows; o++)
+            for (long s = s0; s < s1; s++) out[s] += x[o * width + s];
+    }
+}
+
+/*
  * Sums over a plane with 8 independent partial sums. One running total is
  * a chain of adds, each waiting for the last; separate partials let the
  * compiler vectorize the loop (the result differs only in rounding).

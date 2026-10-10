@@ -48,7 +48,7 @@ from pathlib import Path
 from time import perf_counter
 
 import kernels
-from losses import softmax_cross_entropy
+from losses import linear_cross_entropy, softmax_cross_entropy
 from optim import TensorSGD
 from rnn import WordRNNModel, detach_state
 from language import CharTransformerModel
@@ -132,9 +132,12 @@ class NanoGradRunner:
 
     def _loss(self, inputs, targets):
         if isinstance(self.model, WordRNNModel):
-            logits, self.state = self.model(inputs, self.state)
-        else:
-            logits = self.model.sequence_logits(Tensor.from_list(inputs))
+            # The decoder and the loss in one op, a chunk of rows at a time:
+            # the 33K-wide logits are never built whole (same results).
+            hidden, self.state = self.model.features(inputs, self.state)
+            decoder = self.model.decoder
+            return linear_cross_entropy(hidden, decoder.weight, decoder.bias, [t for row in targets for t in row])
+        logits = self.model.sequence_logits(Tensor.from_list(inputs))
         batch, length, vocab = logits.shape
         return softmax_cross_entropy(logits.reshape((batch * length, vocab)), [t for row in targets for t in row])
 

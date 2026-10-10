@@ -165,6 +165,21 @@ def softmax_rows(x: list[float], width: int) -> list[float]:
     return (kernels_c.softmax_rows if BACKEND == "c" else reference.softmax_rows)(x, width)
 
 
+def softmax_xent_rows(x: list[float], targets: Sequence[int], factor: float, width: int):
+    """Softmax cross entropy over rows of logits: returns (grad, nll), with
+    grad = factor * (softmax(x) - one_hot(target)) row by row and nll the
+    rows' losses. The C version overwrites x with grad (x must be a C array)."""
+
+    kernel = kernels_c.softmax_xent_rows if BACKEND == "c" else reference.softmax_xent_rows
+    return kernel(x, targets, factor, width)
+
+
+def add_rows(x: list[float], out: list[float], width: int) -> list[float]:
+    """Add every row of x (rows of ``width``) into ``out``, in row order, in place."""
+
+    return (kernels_c.add_rows if BACKEND == "c" else reference.add_rows)(x, out, width)
+
+
 def softmax_rows_backward(y: list[float], grad: list[float], width: int) -> list[float]:
     kernel = kernels_c.softmax_rows_backward if BACKEND == "c" else reference.softmax_rows_backward
     return kernel(y, grad, width)

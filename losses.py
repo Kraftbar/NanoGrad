@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 import kernels
-from tensor import Tensor, _add_grad, _grad_data, _op_result, _set_backward
+from tensor import Tensor, _add_grad, _grad_data, _op_result, _set_backward, is_grad_enabled
 
 
 def mse_loss(predictions: Tensor, targets: Tensor) -> Tensor:
@@ -137,6 +137,101 @@ def softmax_cross_entropy(
         _add_grad(logits, grad)
 
     _set_backward(out, _backward)
+    return out
+
+
+# linear_cross_entropy's chunks: as many rows as fit in CHUNK_BYTES of
+# logits, in multiples of CHUNK_STEP rows. CHUNK_STEP is the block of rows
+# kernels.c's matrix product sums over (K_BLOCK), so the weight gradient,
+# added chunk by chunk, is summed in the same order as one product over
+# every row. Fewer, larger chunks are faster: every chunk passes over the
+# whole weight matrix and its gradient again (WikiText-2's 700 x 33,278
+# output layer, float64, 8 threads: 274 ms unfused; in chunks of 256 rows
+# 245 ms; in one chunk 203 ms).
+CHUNK_BYTES = 256 << 20
+CHUNK_STEP = 256
+
+
+def linear_cross_entropy(
+    inputs: Tensor, weight: Tensor, bias: Tensor, targets: Tensor | list[int], *, chunk_rows: int | None = None,
+) -> Tensor:
+    """``softmax_cross_entropy(linear(inputs, weight, bias), targets)``,
+    without ever holding the whole logits matrix.
+
+    A language model's output layer turns each of N positions into V word
+    scores (WikiText-2: V = 33,278), and the loss only needs their softmax.
+    Built whole, the logits are N x V numbers (186 MB for 700 positions in
+    float64), and the unfused path makes three such arrays: the logits,
+    their softmax, and its gradient. Here the rows go through in chunks
+    (``chunk_rows``; by default as many as fit in 256 MB of logits), with
+    one chunk's logits in memory at once:
+
+        logits = x_chunk @ W^T + b
+        grad   = (softmax(logits) - one_hot(target)) / N     (in place: kernels.softmax_xent_rows)
+        dx_chunk = grad @ W,   dW += grad^T @ x_chunk,   db += grad summed over rows
+
+    The loss is the last op, so its gradient with respect to the logits is
+    known as soon as their softmax is: each chunk's share of dx, dW and db
+    is computed during the forward pass, and backward only hands them on.
+    The operations and their order are those of ``linear`` followed by
+    ``softmax_cross_entropy``, so the results are the same bit for bit.
+    (That holds when the loss's own gradient is 1, as in ``loss.backward()``;
+    any other value scales the finished gradients, which can differ in the
+    last bit.) Label smoothing and class weights are not supported here.
+
+    Shapes: inputs (..., in), weight (V, in), bias (V,), one target per row.
+    """
+
+    vocab, features = weight.shape
+    if len(bias.shape) != 1 or bias.shape[0] != vocab:
+        raise ValueError("bias shape must match the weight's rows")
+    if inputs.shape[-1] != features:
+        raise ValueError("linear input features must match weight columns")
+    if chunk_rows is None:
+        row_bytes = vocab * (4 if kernels.default_dtype() == "float32" else 8)
+        chunk_rows = max(1, CHUNK_BYTES // row_bytes // CHUNK_STEP) * CHUNK_STEP
+    if chunk_rows < 1:
+        raise ValueError("chunk_rows must be positive")
+    rows = inputs.numel // features
+    classes = _class_indices(targets, rows, vocab)
+    need_grad = is_grad_enabled() and (inputs.requires_grad or weight.requires_grad or bias.requires_grad)
+    factor = 1.0 / rows                                         # d(mean loss) / d(row loss)
+    x = inputs.data
+    row_losses = []
+    dx = None
+    dw = kernels.zeros(vocab * features) if need_grad and weight.requires_grad else None
+    db = kernels.zeros(vocab) if need_grad and bias.requires_grad else None
+    for start in range(0, rows, chunk_rows):
+        count = min(chunk_rows, rows - start)
+        x_chunk = x[start * features : (start + count) * features]
+        logits = kernels.gemm(
+            x_chunk, weight.data, batches=1, m=count, k=features, n=vocab,
+            a_step=0, b_step=0, c_step=0, trans_b=True, initial=kernels.storage(bias.data) * count,
+        )
+        grad, nll = kernels.softmax_xent_rows(logits, classes[start : start + count], factor, vocab)
+        row_losses.extend(nll)
+        if not need_grad:
+            continue
+        if inputs.requires_grad:
+            part = kernels.gemm(grad, weight.data, batches=1, m=count, k=vocab, n=features,
+                                a_step=0, b_step=0, c_step=0)
+            dx = part if dx is None else dx + part
+        if dw is not None:
+            dw = kernels.gemm(grad, x_chunk, batches=1, m=vocab, k=count, n=features,
+                              a_step=0, b_step=0, c_step=0, trans_a=True, initial=dw)
+        if db is not None:
+            db = kernels.add_rows(grad, db, vocab)
+    loss = sum(row_losses)                                      # as softmax_cross_entropy adds them
+    out = _op_result([loss / rows], (1,), (inputs, weight, bias), "linear_cross_entropy")
+
+    def _backward() -> None:
+        scale = _grad_data(out)[0]
+        for parent, grad in ((inputs, dx), (weight, dw), (bias, db)):
+            if parent.requires_grad and grad is not None:
+                _add_grad(parent, grad if scale == 1.0 else kernels.scale(grad, scale))
+
+    if need_grad:
+        _set_backward(out, _backward)
     return out
 
 

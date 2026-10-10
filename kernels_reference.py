@@ -93,6 +93,35 @@ def softmax_rows(x: list[float], width: int) -> list[float]:
     return out
 
 
+def softmax_xent_rows(x: list[float], targets: list[int], factor: float, width: int) -> tuple[list[float], list[float]]:
+    """Each row of logits becomes factor * (softmax - one_hot(target)), the
+    gradient of factor * (sum of the rows' losses); also each row's loss,
+    -log p_target (from the logsumexp when p_target underflows to 0)."""
+
+    grad: list[float] = []
+    nll: list[float] = []
+    for row, target in enumerate(targets):
+        probabilities = softmax_rows(x[row * width : (row + 1) * width], width)
+        p = probabilities[target]
+        if p > 0.0:
+            nll.append(-math.log(p))
+        else:
+            values = x[row * width : (row + 1) * width]
+            top = max(values)
+            nll.append(top + math.log(math.fsum(math.exp(value - top) for value in values)) - values[target])
+        row_grad = [value * factor for value in probabilities]
+        row_grad[target] -= factor
+        grad.extend(row_grad)
+    return grad, nll
+
+
+def add_rows(x: list[float], out: list[float], width: int) -> list[float]:
+    for start in range(0, len(x), width):
+        for s in range(width):
+            out[s] += x[start + s]
+    return out
+
+
 def softmax_rows_backward(y: list[float], grad: list[float], width: int) -> list[float]:
     out: list[float] = []
     for start in range(0, len(y), width):

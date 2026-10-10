@@ -317,6 +317,13 @@ class WordRNNModel(TensorModule):
     def __call__(self, indices, state: list | None = None):
         """Scores (batch, time, vocab) and the new per-layer states."""
 
+        hidden, new_state = self.features(indices, state)
+        return self.decoder(hidden), new_state
+
+    def features(self, indices, state: list | None = None):
+        """What the decoder reads, (batch, time, hidden), and the new states:
+        for losses.linear_cross_entropy, which applies the decoder itself."""
+
         state = state or [None] * len(self.layers)
         hidden = self.dropouts[0](self.embedding(indices))
         new_state = []
@@ -324,7 +331,7 @@ class WordRNNModel(TensorModule):
             hidden, layer_state = layer.run(hidden, state[index])
             new_state.append(layer_state)
             hidden = self.dropouts[index + 1](hidden)     # between layers, and before the decoder
-        return self.decoder(hidden), new_state
+        return hidden, new_state
 
     def parameters(self) -> list[Tensor]:
         decoder = [self.decoder.bias] if self.tied else self.decoder.parameters()

@@ -208,3 +208,77 @@ class SoftCrossEntropyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LinearCrossEntropyTests(unittest.TestCase):
+    """The fused output layer + loss against linear() then softmax_cross_entropy()."""
+
+    def setUp(self) -> None:
+        import random
+
+        rng = random.Random(5)
+        self.rows, self.features, self.vocab = 600, 12, 301           # 600 rows: chunks of 256, 256, 88
+        self.x = [rng.uniform(-1, 1) for _ in range(self.rows * self.features)]
+        self.w = [rng.uniform(-0.5, 0.5) for _ in range(self.vocab * self.features)]
+        self.b = [rng.uniform(-0.5, 0.5) for _ in range(self.vocab)]
+        self.targets = [rng.randrange(self.vocab) for _ in range(self.rows)]
+
+    def run_both(self, scale=1.0, tied=False, chunk_rows=256):
+        from losses import linear_cross_entropy
+        from tensor_nn import linear
+
+        results = []
+        for fused in (False, True):
+            x = Tensor(self.x, (20, 30, self.features), requires_grad=True)
+            w = Tensor(self.w, (self.vocab, self.features), requires_grad=True)
+            b = Tensor(self.b, (self.vocab,), requires_grad=True)
+            if fused:
+                loss = linear_cross_entropy(x, w, b, self.targets, chunk_rows=chunk_rows)
+            else:
+                logits = linear(x, w, b).reshape((self.rows, self.vocab))
+                loss = softmax_cross_entropy(logits, self.targets)
+            if tied:                                                  # the weight is also used elsewhere
+                loss = loss + (w * w).sum()
+            (loss * scale).backward()
+            results.append([loss.item(), list(x.grad), list(w.grad), list(b.grad)])
+        return results
+
+    def test_same_bits_as_linear_then_softmax_cross_entropy(self) -> None:
+        import kernels
+
+        unfused, fused = self.run_both()
+        if kernels.BACKEND == "c":                                   # same operations, same order
+            self.assertEqual(fused, unfused)
+        else:                                                        # the reference product sums differently
+            for left, right in zip(fused[1:], unfused[1:]):
+                for a, b in zip(left, right):
+                    self.assertAlmostEqual(a, b, places=12)
+            self.assertAlmostEqual(fused[0], unfused[0], places=12)
+
+    def test_default_chunks_and_one_row_chunks_agree(self) -> None:
+        reference = self.run_both(chunk_rows=None)[0]
+        for chunk_rows in (None, 1, 600, 10_000):
+            fused = self.run_both(chunk_rows=chunk_rows)[1]
+            self.assertAlmostEqual(fused[0], reference[0], places=12)
+            for left, right in zip(fused[1:], reference[1:]):
+                for a, b in zip(left, right):
+                    self.assertAlmostEqual(a, b, places=12)
+
+    def test_other_upstream_gradients_and_shared_weights(self) -> None:
+        unfused, fused = self.run_both(scale=0.37, tied=True)
+        self.assertAlmostEqual(fused[0], unfused[0], places=12)
+        for left, right in zip(fused[1:], unfused[1:]):
+            for a, b in zip(left, right):
+                self.assertAlmostEqual(a, b, places=12)
+
+    def test_without_gradients_only_the_loss(self) -> None:
+        from losses import linear_cross_entropy
+        from tensor import no_grad
+
+        x = Tensor(self.x, (self.rows, self.features), requires_grad=True)
+        w = Tensor(self.w, (self.vocab, self.features), requires_grad=True)
+        b = Tensor(self.b, (self.vocab,), requires_grad=True)
+        with no_grad():
+            loss = linear_cross_entropy(x, w, b, self.targets)
+        self.assertFalse(loss.requires_grad)
+        self.assertAlmostEqual(loss.item(), self.run_both()[0][0], places=12)

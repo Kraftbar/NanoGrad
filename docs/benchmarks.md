@@ -176,11 +176,21 @@ step, float64 unless noted, PyTorch with the same thread count
 
 | model | NanoGrad, 1 thread | PyTorch, 1 thread | NanoGrad, 8 threads | PyTorch, 8 threads | ratio at 8 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| WikiText-2 LSTM (2 x 200, 33K vocabulary) | 1,014 ms | 969 ms | 408 ms | 386 ms | 1.06x |
-| WikiText-2 LSTM, float32 | 536 ms | 506 ms | 240 ms | 202 ms | 1.19x |
+| WikiText-2 LSTM (2 x 200, 33K vocabulary) | 945 ms | 987 ms | 351 ms | 406 ms | 0.86x |
+| WikiText-2 LSTM, float32 | 506 ms | 507 ms | 204 ms | 214 ms | 0.95x |
 | small ResNet | 34.2 ms | 40.3 ms | 21.4 ms | 23.2 ms | 0.92x |
 | LeNet | 4.9 ms | 6.6 ms | 4.1 ms | 4.7 ms | 0.87x |
 | tiny ViT | 9.3 ms | 11.2 ms | 9.1 ms | 9.0 ms | 1.0x |
+
+The WikiText rows use the fused output layer and loss
+(`losses.linear_cross_entropy`): the 200 -> 33,278 decoder and the
+softmax cross entropy are one op that never makes the softmax or its
+gradient as separate 186 MB arrays, and works through the rows in chunks
+when the logits would pass 256 MB. It computes exactly what `linear` then
+`softmax_cross_entropy` did, bit for bit (same losses, same 4.75e-09
+largest weight difference from PyTorch after 30 steps). Before it, the
+same rows were 1,014 / 969 / 408 / 386 ms (float64) and 536 / 506 / 240 /
+202 ms (float32): 1.06x and 1.19x PyTorch on 8 threads.
 
 On their own the kernels scale 3-5x on 8 threads (the large-vocabulary
 products 4-5x, the convolutions 4-7x). Whole steps gain less: the small
