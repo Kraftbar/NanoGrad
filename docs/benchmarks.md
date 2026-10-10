@@ -19,7 +19,7 @@ and float64, and NanoGrad uses its C kernels.
 | --- | --- | --- | --- |
 | MNIST | LeNet-5, 5K parameters, 3 epochs | **98.00%** test accuracy | LeNet-5 paper (1998): 99.05%, 20 epochs |
 | MNIST | small ResNet, 1 epoch | 97.84% | |
-| CIFAR-10 | ResNet-8 (MLPerf Tiny's shape), 78K parameters, 3 epochs | **68.57%** | MLPerf Tiny target: 85% (after much longer training) |
+| CIFAR-10 | ResNet-8 (MLPerf Tiny's shape), 78K parameters, 3 epochs; MLPerf's recipe (shifts and flips, L2 2e-4, lr x0.967 per epoch), float32, 8 threads | 68.57% after 3 epochs; **85.18%** at epoch 69 of 150 (run stopped there) | MLPerf Tiny target: 85% |
 | Fashion-MNIST / CIFAR-10 | small ResNet, 2 epochs | 86.90% / 58.30% | [all models below](#model-families) |
 | Penn Treebank | Zaremba et al.'s small LSTM, 13 epochs | test perplexity **113.8** (PyTorch, same weights and batches: 115.0) | paper: test perplexity 114.5 |
 | WikiText-2 | PyTorch's `word_language_model` LSTM, 6 epochs | test perplexity **135.4** (PyTorch, same weights and batches: 139.6; dropout masks differ) | |
