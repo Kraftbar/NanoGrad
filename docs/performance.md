@@ -172,7 +172,13 @@ four per thread as threads come free (`schedule(dynamic)`), so a thread
 slowed by another program on its core does fewer of them. A job is only
 shared when each thread gets about a million multiply-adds (25
 microseconds of work); below that, starting the threads costs more than
-they save. Each thread keeps its packing buffers between calls.
+they save. That sets how many blocks a job is cut into, but a parallel
+region always asks for every thread: libgomp ends surplus threads when a
+region asks for fewer than the last one, and starts new ones for the next
+big job. Before this, every thread it replaced leaked its packing buffers
+(about 0.3 MB each), which killed a 150-epoch CIFAR-10 run at 19 GB.
+Each thread keeps its packing buffers between calls, and a thread that
+ends frees them.
 
 Threads and `parallel.py`'s worker processes do not mix: a forked child
 cannot use the parent's OpenMP threads (libgomp's pool does not survive

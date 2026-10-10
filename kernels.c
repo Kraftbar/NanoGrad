@@ -14,6 +14,7 @@
  */
 
 #include <math.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -60,7 +61,11 @@ int get_threads(void)
  * independent blocks, is worth: each must get at least ~1M multiply-adds
  * (about 25 microseconds), or starting the threads costs more than they
  * save (measured: 256K made a small vision transformer slower, 4M left a
- * ResNet's smaller layers on one thread). */
+ * ResNet's smaller layers on one thread). It sets how many blocks a job is
+ * cut into; a parallel region itself always asks for all thread_limit
+ * threads, because libgomp ends the surplus threads when a region asks for
+ * fewer than the last one and starts new ones when a later region asks for
+ * more, and starting threads on every product is slow. */
 static inline int team_size(double work, long units)
 {
     long by_work = (long)(work / (1 << 20));
@@ -314,17 +319,33 @@ static void gemm_chunk(const real *a, const real *b, real *c,
 
 /* Each thread's packing buffers, allocated by its first product and then
  * kept: allocating them (about half a megabyte) on every call costs more
- * than a small product. */
+ * than a small product. They are one block, freed by a thread-specific
+ * key's destructor when the thread ends; without that, every thread
+ * libgomp replaced leaked its buffers. */
 static _Thread_local real *thread_panel, *thread_packed;
+static pthread_key_t buffers_key;
+static pthread_once_t buffers_key_once = PTHREAD_ONCE_INIT;
+
+static void make_buffers_key(void)
+{
+    if (pthread_key_create(&buffers_key, free) != 0) {
+        abort();
+    }
+}
 
 static void thread_buffers(real **panel, real **packed)
 {
     if (thread_panel == NULL) {
-        thread_panel = aligned_alloc(64, sizeof(real) * K_BLOCK * TILE_COLS);  /* cache-line aligned vector loads */
-        thread_packed = aligned_alloc(64, sizeof(real) * (A_BLOCK + K_BLOCK * TILE_ROWS));
-        if (thread_panel == NULL || thread_packed == NULL) {
+        size_t panel_count = (size_t)K_BLOCK * TILE_COLS;         /* a multiple of 16: packed stays aligned */
+        size_t bytes = sizeof(real) * (panel_count + A_BLOCK + (size_t)K_BLOCK * TILE_ROWS);
+        real *block = aligned_alloc(64, (bytes + 63) / 64 * 64);  /* cache-line aligned vector loads */
+        if (block == NULL) {
             abort();
         }
+        pthread_once(&buffers_key_once, make_buffers_key);
+        pthread_setspecific(buffers_key, block);
+        thread_panel = block;
+        thread_packed = block + panel_count;
     }
     *panel = thread_panel;
     *packed = thread_packed;
@@ -348,7 +369,7 @@ void gemm(
         /* Four blocks per thread, handed out as threads come free: a thread
          * slowed by another program on its core then does fewer of them. */
         int chunks = team == 1 ? 1 : (units < 4L * team ? (int)units : 4 * team);
-        OMP(omp parallel num_threads(team) if (team > 1))
+        OMP(omp parallel num_threads(thread_limit) if (team > 1))
         {
             real *panel, *packed;
             thread_buffers(&panel, &packed);
@@ -438,7 +459,7 @@ void conv_forward(const real *image, const long *index, const real *kernel, real
     long col_tiles = (n + TILE_COLS - 1) / TILE_COLS, units = batches * col_tiles;
     int team = team_size((double)batches * m * k * n, units);
     int chunks = team == 1 ? 1 : (units < 4L * team ? (int)units : 4 * team);
-    OMP(omp parallel num_threads(team) if (team > 1))
+    OMP(omp parallel num_threads(thread_limit) if (team > 1))
     {
         real *panel, *packed;
         thread_buffers(&panel, &packed);
@@ -515,7 +536,7 @@ void conv_kernel_grad(const real *image, const long *index, const real *grad, re
     int team = team_size((double)batches * m * k * n, units);
     if (team == 1) bands = 1, units = col_tiles;
     int chunks = team == 1 ? 1 : (units < 4L * team ? (int)units : 4 * team);
-    OMP(omp parallel num_threads(team) if (team > 1))
+    OMP(omp parallel num_threads(thread_limit) if (team > 1))
     {
         real *panel, *packed;
         thread_buffers(&panel, &packed);
@@ -619,7 +640,7 @@ void conv_input_grad(const real *grad, const real *kernel, const long *index, re
     int team = 1;
 #endif
     (void)team;                                                /* used only with OpenMP */
-    OMP(omp parallel num_threads(team) if (team > 1))
+    OMP(omp parallel num_threads(thread_limit) if (team > 1))
     {
         real *block = malloc(sizeof(real) * block_rows * n);
         if (block == NULL) {
@@ -749,7 +770,7 @@ void conv_direct(const real *image, const real *kernel, real *out, long batches,
     long units = batches * groups;
     int team = team_size((double)batches * filters * patch * oh * ow, units);
     (void)team;                                                /* used only with OpenMP */
-    OMP(omp parallel for num_threads(team) if (team > 1) schedule(dynamic, 1))
+    OMP(omp parallel for num_threads(thread_limit) if (team > 1) schedule(dynamic, 1))
     for (long unit = 0; unit < units; unit++) {
         long b = unit / groups;
         int f0 = (int)(unit % groups) * DIRECT_GROUP;
@@ -1124,7 +1145,7 @@ void softmax_rows(const real *x, real *y, long rows, long width)
 {
     int team = rows_team(rows, width);
     (void)team;                                                /* used only with OpenMP */
-    OMP(omp parallel for num_threads(team) if (team > 1) schedule(static))
+    OMP(omp parallel for num_threads(thread_limit) if (team > 1) schedule(static))
     for (long r = 0; r < rows; r++) {
         const real *in = x + r * width;
         real *out = y + r * width;
@@ -1138,7 +1159,7 @@ void softmax_rows_backward(const real *y, const real *grad, real *dx, long rows,
 {
     int team = rows_team(rows, width);
     (void)team;                                                /* used only with OpenMP */
-    OMP(omp parallel for num_threads(team) if (team > 1) schedule(static))
+    OMP(omp parallel for num_threads(thread_limit) if (team > 1) schedule(static))
     for (long r = 0; r < rows; r++) {
         const real *yr = y + r * width, *gr = grad + r * width;
         real *out = dx + r * width;
@@ -1165,7 +1186,7 @@ void softmax_xent_rows(real *x, const long *targets, double factor, double *nll,
 {
     int team = rows_team(rows, width);
     (void)team;                                                /* used only with OpenMP */
-    OMP(omp parallel for num_threads(team) if (team > 1) schedule(static))
+    OMP(omp parallel for num_threads(thread_limit) if (team > 1) schedule(static))
     for (long r = 0; r < rows; r++) {
         real *row = x + r * width;
         long target = targets[r];
@@ -1190,7 +1211,7 @@ void add_rows(const real *x, real *out, long rows, long width)
     long blocks = (width + COLUMNS - 1) / COLUMNS;
     int team = team_size((double)rows * width * 4, blocks);
     (void)team;                                                /* used only with OpenMP */
-    OMP(omp parallel for num_threads(team) if (team > 1) schedule(static))
+    OMP(omp parallel for num_threads(thread_limit) if (team > 1) schedule(static))
     for (long block = 0; block < blocks; block++) {
         long s0 = block * COLUMNS, s1 = s0 + COLUMNS < width ? s0 + COLUMNS : width;
         for (long o = 0; o < rows; o++)

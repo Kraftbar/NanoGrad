@@ -361,6 +361,35 @@ class KernelBackendTests(unittest.TestCase):
         self.assertEqual(python_at[0], 0)
         self.assertEqual(python_at[3], 12 + max((0, 1, 4, 5), key=lambda i: image[12 + i]))
 
+    def test_changing_teams_do_not_leak(self) -> None:
+        # A big product runs on every thread and a small one on fewer. libgomp
+        # used to replace the threads between them, and each new thread's
+        # packing buffers (about 0.3 MB) were never freed.
+        import os
+
+        import kernels_c
+
+        status = "/proc/self/status"
+        if not os.path.exists(status):
+            self.skipTest("needs /proc")
+
+        def resident_mb() -> float:
+            with open(status) as file:
+                return int(file.read().split("VmRSS:")[1].split()[0]) / 1024
+
+        big, small = Tensor(values(320 * 320, 80), (320, 320)), Tensor(values(128 * 128, 81), (128, 128))
+        previous = kernels_c.threads
+        kernels_c.set_threads(8)
+        try:
+            for _ in range(20):
+                big @ big, small @ small
+            before = resident_mb()
+            for _ in range(300):
+                big @ big, small @ small
+            self.assertLess(resident_mb() - before, 20)          # the leak was about 100 MB here
+        finally:
+            kernels_c.set_threads(previous)
+
     def test_thread_count_does_not_change_any_bit(self) -> None:
         # Large enough that the products and convolutions really use the
         # threads; sizes that are not multiples of the tiles; every way gemm
