@@ -17,13 +17,23 @@ The model is MLPerf's DS-CNN, a MobileNet for audio: a 10 x 4 stride-2
 convolution with 64 filters, four depthwise-separable blocks of 64,
 global average pooling and a linear layer (about 23K parameters). The
 training follows the reference (Adam, batch 100, lr 5e-4, divided by 5
-after each third of training), without its dropout layers. With
---augment, each training clip is shifted and mixed with background noise
-afresh every epoch, as the reference does (see ``augmented``), and its
-MFCCs are recomputed; without it they are computed once and cached. The
-reference DS-CNN reaches about 92% (MLPerf Tiny's quality target is 90%).
+after each third of training; the reference trains 36 epochs), without
+its dropout layers. The reference DS-CNN reaches about 92% (MLPerf Tiny's
+quality target is 90%).
 
-    python3 kws.py --epochs 24 [--augment]
+The reference's code asks for random time shifts and background noise,
+but draws them with NumPy inside the function it hands to tf.data's
+``map``, which runs once, when the graph is built: its shift is a
+constant 2-sample pad-and-slice (no shift), and every training clip gets
+the same noise slice at the same volume. What it does have is more data:
+TensorFlow Datasets' training split labels every other word's clip
+"unknown" (85,511 clips; ``--all-unknown``). ``--augment`` is real
+augmentation, as in TensorFlow's original speech_commands example: each
+training clip is shifted and mixed with noise afresh every epoch (see
+``augmented``), and its MFCCs are recomputed; without it they are
+computed once and cached.
+
+    python3 kws.py --epochs 24 [--augment] [--all-unknown]
     .venv/bin/python kws.py --frameworks nanograd torch --epochs 1 --train-limit 2000 --test-limit 500
 
 Data: data/speech_commands/ (see data/speech_commands/DOWNLOAD.md).
@@ -50,7 +60,7 @@ KEYWORDS = ("yes", "no", "up", "down", "left", "right", "on", "off", "stop", "go
 CLASSES = ("_silence_", "_unknown_") + KEYWORDS
 RATE, WINDOW, HOP, FFT, MELS, COEFFICIENTS = 16000, 480, 320, 512, 40, 10
 FRAMES = (RATE - WINDOW) // HOP + 1                       # 49
-SHIFT, NOISE_CHANCE, NOISE_VOLUME = RATE // 10, 0.8, 0.1   # the reference's augmentation: 100 ms, 80%, 0.1
+SHIFT, NOISE_CHANCE, NOISE_VOLUME = RATE // 10, 0.8, 0.1   # TensorFlow's speech_commands defaults: 100 ms, 80%, 0.1
 
 
 class MFCC:
@@ -90,11 +100,13 @@ def one_second(samples: list[float]) -> list[float]:
     return (samples + [0.0] * RATE)[:RATE]
 
 
-def example_sources(folder: Path, seed: int = 0):
+def example_sources(folder: Path, seed: int = 0, all_unknown: bool = False):
     """(train, test, noise): (source, class) lists and the background-noise recordings. The
     training set is every keyword clip outside the validation and test lists, plus as many
-    again "unknown" words and "silence" slices as 10% of the keyword clips each. A source is
-    a file, or (recording, offset, volume) for a slice of background noise."""
+    again "unknown" words and "silence" slices as 10% of the keyword clips each; with
+    ``all_unknown``, every other word's clip is an "unknown" example, as in TensorFlow
+    Datasets' split that MLPerf's reference trains on. A source is a file, or (recording,
+    offset, volume) for a slice of background noise."""
 
     held_out = set((folder / "validation_list.txt").read_text().split()) | set(
         (folder / "testing_list.txt").read_text().split())
@@ -112,7 +124,8 @@ def example_sources(folder: Path, seed: int = 0):
     noise = [read_wav(path) for path in sorted((folder / "_background_noise_").glob("*.wav"))]
     # Each example is read only when its chunk is processed: 40,000 clips of
     # 16,000 Python floats would not fit in memory at once.
-    train = [(path, label) for path, label in keyword_files + rng.sample(other_files, extra)]
+    unknown = other_files if all_unknown else rng.sample(other_files, extra)
+    train = [(path, label) for path, label in keyword_files + unknown]
     for _ in range(extra):                              # silence: a quiet slice of background noise
         source = rng.randrange(len(noise))
         train.append(((source, rng.randrange(len(noise[source]) - RATE), rng.uniform(0.0, 0.1)),
@@ -129,14 +142,15 @@ def waveform(source, noise) -> list[float]:
     return [v * volume for v in noise[index][offset : offset + RATE]]
 
 
-def load_speech_commands(folder: str | Path, seed: int = 0) -> dict[str, list[tuple[list[float], int]]]:
+def load_speech_commands(folder: str | Path, seed: int = 0,
+                         all_unknown: bool = False) -> dict[str, list[tuple[list[float], int]]]:
     """{"train": [(mfcc, class)], "test": [...]}, computed once and cached."""
 
     folder = Path(folder)
-    cache = folder / "mfcc.pkl"
+    cache = folder / ("mfcc_all_unknown.pkl" if all_unknown else "mfcc.pkl")
     if cache.exists():
         return pickle.loads(cache.read_bytes())
-    train, test, noise = example_sources(folder, seed)
+    train, test, noise = example_sources(folder, seed, all_unknown)
     mfcc, splits = MFCC(), {}
     for split, examples in (("train", train), ("test", test)):
         features = []
@@ -148,11 +162,11 @@ def load_speech_commands(folder: str | Path, seed: int = 0) -> dict[str, list[tu
     return splits
 
 
-def load_waveforms(folder: str | Path, seed: int = 0):
+def load_waveforms(folder: str | Path, seed: int = 0, all_unknown: bool = False):
     """The training clips as float32 arrays (about 2.4 GB; 16-bit samples / 32768 are exact in
     float32), in the order of load_speech_commands' training features, and the background noise."""
 
-    train, _, noise = example_sources(Path(folder), seed)
+    train, _, noise = example_sources(Path(folder), seed, all_unknown)
     clips = []
     for source, label in train:
         silence = label == CLASSES.index("_silence_")
@@ -162,7 +176,7 @@ def load_waveforms(folder: str | Path, seed: int = 0):
 
 
 def augmented(samples: array, label: int, noise: list[list[float]], rng: random.Random) -> list[float]:
-    """The reference's augmentation (TensorFlow's speech_commands input_data.py): shift the clip
+    """TensorFlow's speech_commands augmentation (input_data.py): shift the clip
     by up to 100 ms either way, padding with silence, then, with probability 0.8 (always for
     silence), add a random second of background noise at a random volume up to 0.1, clipped
     to [-1, 1]."""
@@ -279,11 +293,13 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--train-limit", type=int)
     parser.add_argument("--test-limit", type=int)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--augment", action="store_true", help="the reference's time shifts and background noise")
+    parser.add_argument("--augment", action="store_true", help="random time shifts and background noise")
+    parser.add_argument("--all-unknown", action="store_true",
+                        help="every other word's clip as an unknown example (TensorFlow Datasets' split)")
     args = parser.parse_args(argv)
 
     start = perf_counter()
-    splits = load_speech_commands(args.data, args.seed)
+    splits = load_speech_commands(args.data, args.seed, args.all_unknown)
     rng = random.Random(args.seed)
     picked = list(range(len(splits["train"])))
     rng.shuffle(picked)
@@ -294,7 +310,7 @@ def main(argv: list[str] | None = None) -> dict:
     test_set = test_set[: args.test_limit]
     statistics = standardize(train_set, test_set)
     if args.augment:
-        clips, noise = load_waveforms(args.data, args.seed)
+        clips, noise = load_waveforms(args.data, args.seed, args.all_unknown)
         clips = [clips[i] for i in picked]
         mfcc = MFCC()
 

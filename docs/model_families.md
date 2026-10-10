@@ -496,10 +496,33 @@ MLPerf Tiny's audio benchmark: 12 classes (10 commands, unknown and
 silence) from one-second clips, using 49 x 10 MFCCs. The model is a
 MobileNet with a 10 x 4 stride-2 stem: the same `mobilenet.py`, with
 different arguments. Trained for 24 epochs with Adam (the reference's
-schedule), but without its dropout or its noise and time-shift
-augmentation, it reaches **90.33%** on the official 4,890-clip test set.
-MLPerf Tiny's quality target is 90%; the reference DS-CNN gets about 92%
-with augmentation.
+learning rates), without its dropout, it reaches **90.33%** on the
+official 4,890-clip test set. MLPerf Tiny's quality target is 90%; the
+reference DS-CNN gets about 92%.
+
+Closing that gap is under way:
+
+| run | test accuracy |
+| --- | ---: |
+| 24 epochs (above) | 90.33% |
+| 24 epochs, `--augment` (fresh time shifts and noise every epoch) | 87.59% |
+| 36 epochs (the reference's count) | 90.10% |
+| 36 epochs, `--all-unknown` (the reference's training data) | running |
+
+The reference's code asks for random time shifts and background noise,
+but draws them with NumPy inside the function it gives tf.data's `map`,
+which runs once, when the graph is built: the shift is a constant
+pad-and-slice that changes nothing, and every training clip gets the same
+noise slice at the same volume. So its 92% does not come from
+augmentation. Real augmentation, as in TensorFlow's original
+speech_commands example, cost 2.7 points here at 24 epochs (training
+loss still 0.28: the 23K-parameter model underfits the harder data), and
+more epochs alone overfit (training loss 0.07). What the reference does
+have is more data: TensorFlow Datasets' training split labels every
+other word's clip "unknown", 85,511 clips against our 36,921 (unknown
+words subsampled to 10% of the keyword clips); `--all-unknown` gives
+87,919. It also has dropout (0.2 after the stem, 0.4 before pooling) and
+L2 1e-4, which NanoGrad's DS-CNN does not.
 
 *Added*: separate row and column padding in `conv2d` / `pad2d` (the
 10 x 4 stem), and MFCCs: the log-mel spectrogram followed by a DCT, both
