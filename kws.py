@@ -222,16 +222,27 @@ def standardize(train, test) -> list[tuple[float, float]]:
     return statistics
 
 
+def conv_kernels(model: MobileNet) -> list[Tensor]:
+    """The convolution kernels, which the reference's L2 penalty covers (not the batch norm or
+    the classifier)."""
+
+    return [model.stem.kernel] + [w for block in model.blocks for w in (block.depthwise.kernel, block.pointwise.kernel)]
+
+
 class NanoGradRunner:
-    def __init__(self, model: MobileNet, lr: float) -> None:
+    def __init__(self, model: MobileNet, lr: float, l2: float = 0.0) -> None:
         self.model = model
         self.optimizer = TensorAdam(model.parameters(), lr=lr)
+        self.l2 = l2
 
     def train_step(self, features: list[float], labels: list[int], lr: float) -> float:
         self.model.train()
         self.optimizer.lr = lr
         self.optimizer.zero_grad()
         loss = softmax_cross_entropy(self.model(Tensor(features, (len(labels), 1, FRAMES, COEFFICIENTS))), labels)
+        if self.l2:                                     # Keras' l2(l2): l2 * sum(w^2) on each kernel
+            for weight in conv_kernels(self.model):
+                loss = loss + (weight * weight).sum() * self.l2
         loss.backward()
         self.optimizer.step()
         return loss.item()
@@ -248,13 +259,16 @@ class NanoGradRunner:
 
 
 class TorchRunner:
-    def __init__(self, model: MobileNet, lr: float) -> None:
+    def __init__(self, model: MobileNet, lr: float, l2: float = 0.0) -> None:
         import torch
         from torch_twin import TorchTwin
 
         self.torch = torch
         self.twin = TorchTwin(model)
         self.optimizer = torch.optim.Adam(self.twin.parameters, lr=lr)
+        kernels = {id(w) for w in conv_kernels(model)}
+        self.kernels = [twin for ours, twin in zip(model.parameters(), self.twin.parameters) if id(ours) in kernels]
+        self.l2 = l2
 
     def _inputs(self, features):
         return self.torch.tensor(features, dtype=self.torch.float64).reshape(-1, 1, FRAMES, COEFFICIENTS)
@@ -266,6 +280,9 @@ class TorchRunner:
             group["lr"] = lr
         self.optimizer.zero_grad()
         loss = torch.nn.functional.cross_entropy(self.twin(self._inputs(features)), torch.tensor(labels))
+        if self.l2:
+            for weight in self.kernels:
+                loss = loss + (weight * weight).sum() * self.l2
         loss.backward()
         self.optimizer.step()
         return loss.item()
@@ -279,13 +296,18 @@ class TorchRunner:
         return [p.detach().reshape(-1).tolist() for p in self.twin.parameters]
 
 
-def accuracy(runner, examples) -> float:
-    right = 0
+def accuracy(runner, examples) -> tuple[float, list[float]]:
+    """The share of clips classified right, overall and for each class (of its clips)."""
+
+    right, per_class, counts = 0, [0] * len(CLASSES), [0] * len(CLASSES)
     for first in range(0, len(examples), 500):
         chunk = examples[first : first + 500]
         predicted = runner.predict([v for f, _ in chunk for v in f], len(chunk))
-        right += sum(p == label for p, (_, label) in zip(predicted, chunk))
-    return right / len(examples)
+        for p, (_, label) in zip(predicted, chunk):
+            right += p == label
+            per_class[label] += p == label
+            counts[label] += 1
+    return right / len(examples), [r / max(1, n) for r, n in zip(per_class, counts)]
 
 
 def main(argv: list[str] | None = None) -> dict:
@@ -301,6 +323,8 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--augment", action="store_true", help="random time shifts and background noise")
     parser.add_argument("--all-unknown", action="store_true",
                         help="every other word's clip as an unknown example (TensorFlow Datasets' split)")
+    parser.add_argument("--l2", type=float, default=0.0,
+                        help="L2 penalty on the convolution kernels (the reference: 1e-4)")
     parser.add_argument("--dropout", action="store_true",
                         help="the reference's dropout: 0.2 after the first convolution, 0.4 before the pooling")
     args = parser.parse_args(argv)
@@ -335,9 +359,9 @@ def main(argv: list[str] | None = None) -> dict:
             import torch
 
             torch.set_num_threads(1)
-            runners[framework] = runner = TorchRunner(model, args.lr)
+            runners[framework] = runner = TorchRunner(model, args.lr, args.l2)
         else:
-            runners[framework] = runner = NanoGradRunner(model, args.lr)
+            runners[framework] = runner = NanoGradRunner(model, args.lr, args.l2)
         print(f"{framework} DS-CNN, {model.num_parameters()} parameters", flush=True)
         order, steps, start = list(range(len(train_set))), 0, perf_counter()
         shuffler, augmenter = random.Random(args.seed + 1), random.Random(args.seed + 2)
@@ -352,9 +376,13 @@ def main(argv: list[str] | None = None) -> dict:
             print(f"  epoch {epoch:2d}: lr {lr:.0e}, train loss {total / math.ceil(len(order) / args.batch_size):.4f}, "
                   f"{perf_counter() - start:.0f} s", flush=True)
         seconds = perf_counter() - start
-        results[framework] = {"accuracy": accuracy(runner, test_set), "ms_per_step": 1000 * seconds / steps}
-        print(f"{framework:8s}: test accuracy {100 * results[framework]['accuracy']:.2f}% "
-              f"({results[framework]['ms_per_step']:.0f} ms/step)", flush=True)
+        overall, per_class = accuracy(runner, test_set)
+        results[framework] = {"accuracy": overall, "per_class": dict(zip(CLASSES, per_class)),
+                              "ms_per_step": 1000 * seconds / steps}
+        print(f"{framework:8s}: test accuracy {100 * overall:.2f}% ({results[framework]['ms_per_step']:.0f} ms/step)",
+              flush=True)
+        print("  per class: " + ", ".join(f"{name} {100 * value:.1f}%" for name, value in zip(CLASSES, per_class)),
+              flush=True)
     if len(runners) == 2:
         difference = max(abs(a - b) for x, y in zip(runners["nanograd"].weights(), runners["torch"].weights())
                          for a, b in zip(x, y))
