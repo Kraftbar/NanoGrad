@@ -498,9 +498,12 @@ MobileNet with a 10 x 4 stride-2 stem: the same `mobilenet.py`, with
 different arguments. Trained for 24 epochs with Adam (the reference's
 learning rates), without its dropout, it reaches **90.33%** on the
 official 4,890-clip test set. MLPerf Tiny's quality target is 90%; the
-reference DS-CNN gets about 92%.
+reference DS-CNN gets about 92%. With the reference's regularization,
+dropout and an L2 penalty on the convolution kernels, and its 36 epochs,
+NanoGrad's DS-CNN gets there too: **92.09%**
+(`kws.py --epochs 36 --dropout --l2 1e-4`).
 
-Closing that gap is under way:
+How the gap closed:
 
 | run | test accuracy |
 | --- | ---: |
@@ -509,6 +512,7 @@ Closing that gap is under way:
 | 36 epochs (the reference's count) | 90.10% |
 | 36 epochs, `--all-unknown` (the reference's training data) | 87.77% |
 | 36 epochs, `--all-unknown --dropout` (its data and dropout) | 90.39% |
+| 36 epochs, `--dropout --l2 1e-4` (its dropout and L2) | **92.09%** |
 
 The reference's code asks for random time shifts and background noise,
 but draws them with NumPy inside the function it gives tf.data's `map`,
@@ -525,12 +529,13 @@ words subsampled to 10% of the keyword clips); `--all-unknown` gives
 87,919. It also has dropout (0.2 after the stem, 0.4 before pooling,
 `--dropout`) and L2 1e-4.
 
-Neither closes the gap. All the unknown words alone cost 2.3 points:
-58% of those training clips are "unknown", while the official test set
-has the 12 classes balanced, so the likely cause is a model that leans
-towards "unknown" (not yet checked class by class). Dropout wins those
-points back, to 90.39%, about where the subsampled data started. The
-reference's L2, and dropout on the subsampled data, are not tried yet.
+The data does not close the gap: all the unknown words alone cost 2.3
+points (58% of those training clips are "unknown", while the official
+test set has the 12 classes balanced), and dropout only wins them back.
+The regularization does: dropout plus L2 on the subsampled data gives
+92.09%, with every class between 86.0% (unknown) and 96.4% ("yes"):
+silence 92.6, unknown 86.0, yes 96.4, no 94.1, up 93.2, down 88.9,
+left 93.4, right 93.7, on 91.7, off 92.5, stop 92.5, go 89.8.
 
 *Added*: separate row and column padding in `conv2d` / `pad2d` (the
 10 x 4 stem), and MFCCs: the log-mel spectrogram followed by a DCT, both

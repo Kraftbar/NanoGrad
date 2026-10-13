@@ -27,7 +27,7 @@ and float64, and NanoGrad uses its C kernels.
 | Cora (citation graph) | GCN, pygcn's recipe, 10 seeds | **83.1% +- 0.6** test accuracy (PyTorch, own dropout masks: 82.9% +- 0.7) | GCN paper: 81.5% (on the Planetoid split) |
 | AG News (text classification) | fastText's model, words / words + bigrams, 5 epochs | **91.38% / 91.76%** | fastText paper: 91.5% / 92.5% |
 | Cora (link prediction) | GAE / VGAE, the authors' recipe, 5 edge splits | test AUC **91.8 / 92.4**, AP 92.6 / 93.4 | GAE paper: AUC 91.0 / 91.4, AP 92.0 / 92.6 |
-| Speech Commands (MLPerf Tiny keyword spotting) | DS-CNN, 12 classes, official test set, 24 epochs | **90.33%** test accuracy (with real augmentation 87.59%, 36 epochs 90.10%, the reference's data 87.77%, its data and dropout 90.39%) | MLPerf Tiny target: 90%; reference DS-CNN about 92% (trained on 2.3x the clips; its augmentation code draws once) |
+| Speech Commands (MLPerf Tiny keyword spotting) | DS-CNN, 12 classes, official test set; the reference's dropout and L2, 36 epochs | **92.09%** test accuracy (without them, 24 epochs: 90.33%) | MLPerf Tiny target: 90%; reference DS-CNN about 92% |
 | MNIST (adversarial robustness) | fast FGSM adversarial training (Wong et al.), eps 0.3 | 97.95% clean, **75.81%** under PGD-50 x 10 | PyTorch, same recipe: 98.7% / 88.8% |
 | UD English EWT (part-of-speech tagging) | BiLSTM-CRF, word + suffix + shape embeddings (+ a character BiLSTM), 15 epochs | 94.66% test accuracy (softmax output instead of the CRF: 94.45%); with the character model **94.83%** (mean of 2 seeds 94.95%) | |
 | CamVid (segmentation) | U-Net, half resolution, 20 epochs | 81.6% global accuracy, **36.9% mean IoU** | |
