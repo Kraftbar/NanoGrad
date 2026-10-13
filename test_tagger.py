@@ -2,6 +2,7 @@ import itertools
 import math
 import random
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -121,6 +122,82 @@ class TaggerTest(unittest.TestCase):
             difference = max(abs(a - b) for x, y in zip(runners[0].weights(), runners[1].weights()) for a, b in zip(x, y))
             self.assertLess(difference, 1e-10)
             self.assertEqual(runners[0].decode(batch), runners[1].decode(batch))
+
+
+
+def per_word_log_partition(model, e: Tensor) -> Tensor:
+    """Tagger.log_partition as it was before crf_forward: the loop built from per-word ops."""
+
+    batch_size, length, count = e.shape
+    steps = [step.reshape((batch_size, count)) for step in e.split([1] * length, axis=1)]
+    transition_weights = model.transitions.exp()
+    alpha = steps[0] + model.start
+    for step in steps[1:]:
+        data = alpha.data
+        m = Tensor([max(data[b * count : (b + 1) * count]) for b in range(batch_size)], (batch_size, 1))
+        alpha = ((alpha - m).exp() @ transition_weights).log() + m + step
+    return (alpha + model.end).logsumexp(axis=1)
+
+
+class ForwardAlgorithmTests(unittest.TestCase):
+    def run_both(self, batch, length, count):
+        results = []
+        for log_partition in (tagger.Tagger.log_partition, per_word_log_partition):
+            rng = random.Random(3)
+            model = types.SimpleNamespace(
+                **{name: Tensor([rng.uniform(-1, 1) for _ in range(size)], shape, requires_grad=True)
+                   for name, size, shape in (("transitions", count * count, (count, count)),
+                                             ("start", count, (count,)), ("end", count, (count,)))})
+            e = Tensor([rng.uniform(-5, 5) for _ in range(batch * length * count)], (batch, length, count),
+                       requires_grad=True)
+            tags = [[rng.randrange(count) for _ in range(length)] for _ in range(batch)]
+            log_z = log_partition(model, e)
+            # As in Tagger.loss, so e, start and transitions also get the gold score's gradient.
+            loss = (log_z - tagger.Tagger.gold_score(model, e, tags)).sum() * (1.0 / batch)
+            loss.backward()
+            tensors = (e, model.start, model.end, model.transitions)
+            results.append((list(log_z.data), [list(t.grad) for t in tensors]))
+        return results
+
+    def test_same_bits_as_the_per_word_ops(self) -> None:
+        import kernels
+
+        dtypes = ("float64", "float32") if kernels.BACKEND == "c" else ("float64",)
+        before = kernels.default_dtype()
+        try:
+            for dtype in dtypes:
+                kernels.set_default_dtype(dtype)
+                for shape in ((3, 1, 5), (2, 2, 17), (4, 6, 17), (32, 9, 17), (1, 4, 1)):
+                    with self.subTest(dtype=dtype, shape=shape):
+                        fused, per_word = self.run_both(*shape)
+                        self.assertEqual(fused, per_word)
+        finally:
+            kernels.set_default_dtype(before)
+
+    def test_reference_kernels_agree(self) -> None:
+        import kernels
+        import kernels_reference
+
+        if kernels.BACKEND != "c":
+            self.skipTest("C kernels are not built here")
+        import kernels_c
+
+        rng = random.Random(4)
+        batch, steps, tags = 3, 5, 6
+        e = [rng.uniform(-3, 3) for _ in range(batch * steps * tags)]
+        start = [rng.uniform(-1, 1) for _ in range(tags)]
+        weights = [math.exp(rng.uniform(-1, 1)) for _ in range(tags * tags)]
+        grad = [rng.uniform(-1, 1) for _ in range(batch * tags)]
+        ours, saved = kernels_c.crf_forward(e, start, weights, batch, steps, tags)
+        theirs, reference_saved = kernels_reference.crf_forward(e, start, weights, batch, steps, tags)
+        for a, b in zip(ours, theirs, strict=True):
+            self.assertAlmostEqual(a, b, places=12)
+        backward = kernels_c.crf_forward_backward(weights, saved, grad, batch, steps, tags)
+        reference_backward = kernels_reference.crf_forward_backward(weights, reference_saved, grad, batch, steps, tags)
+        for ours_grad, theirs_grad in zip(backward, reference_backward):
+            self.assertEqual(len(ours_grad), len(theirs_grad))
+            for a, b in zip(ours_grad, theirs_grad):
+                self.assertAlmostEqual(a, b, places=12)
 
 
 if __name__ == "__main__":

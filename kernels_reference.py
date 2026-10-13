@@ -603,6 +603,42 @@ def lstm_sequence_backward(weight, saved, grad, batch: int, steps: int, hidden: 
     return dinput, _transposed(dweight_t, hidden, width), recurrent, carry
 
 
+def crf_forward(e, start, weights, batch: int, steps: int, tags: int):
+    """The per-word ops of the CRF's forward algorithm, in order (see kernels.c)."""
+
+    def word(t: int) -> list[float]:                   # e's (batch, tags) slice for word t
+        return [e[(b * steps + t) * tags + j] for b in range(batch) for j in range(tags)]
+
+    alpha, ps, qs = add(word(0), list(start) * batch), [], []
+    for t in range(1, steps):
+        shift = [max(alpha[b * tags : (b + 1) * tags]) for b in range(batch) for _ in range(tags)]
+        p = exp(add_scaled(alpha, shift, -1.0))
+        q = gemm(p, weights, 1, batch, tags, tags, 0, 0, batch * tags, False, False)
+        alpha = add(add(log(q), shift), word(t))
+        ps.append(p)
+        qs.append(q)
+    return alpha, (ps, qs)
+
+
+def crf_forward_backward(weights, saved, grad, batch: int, steps: int, tags: int):
+    ps, qs = saved
+    n = batch * tags
+    de, dweights, dalpha = [0.0] * (batch * steps * tags), [0.0] * (tags * tags), list(grad)
+    for t in range(steps - 1, -1, -1):
+        for b in range(batch):
+            for j in range(tags):
+                de[(b * steps + t) * tags + j] += dalpha[b * tags + j]
+        if t == 0:
+            break
+        p, q = ps[t - 1], qs[t - 1]
+        dq = multiply(dalpha, reciprocal(q))
+        dp = gemm(dq, weights, 1, batch, tags, tags, n, 0, 0, False, True)
+        step_weights = gemm(p, dq, 1, tags, batch, tags, 0, n, 0, True, False)
+        dweights = step_weights if t == steps - 1 else add(dweights, step_weights)
+        dalpha = multiply(dp, p)
+    return de, sum_repeated(dalpha, batch, tags, 1), dweights
+
+
 def bce_with_logits_sum(x: list[float], t: list[float]) -> float:
     return math.fsum(max(v, 0.0) - v * target + math.log1p(math.exp(-abs(v))) for v, target in zip(x, t))
 

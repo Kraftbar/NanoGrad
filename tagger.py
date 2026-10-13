@@ -64,10 +64,11 @@ from collections import Counter
 from pathlib import Path
 from time import perf_counter
 
+import kernels
 from losses import softmax_cross_entropy
 from optim import TensorAdam
 from rnn import LSTM
-from tensor import Tensor, concat, gather_rows, no_grad
+from tensor import Tensor, _add_grad, _grad_data, _op_result, _set_backward, concat, gather_rows, no_grad
 from tensor_nn import TensorDropout, TensorEmbedding, TensorLinear, TensorModule
 from train import evaluation_mode
 
@@ -160,6 +161,30 @@ def length_batches(examples: list, batch_size: int, rng: random.Random | None) -
 # -- the model ----------------------------------------------------------------
 
 
+def crf_forward(e: Tensor, start: Tensor, transition_weights: Tensor) -> Tensor:
+    """The forward algorithm's last alpha (B, tags) from emissions e (B, T, tags),
+    start scores (tags,) and transition_weights = e^trans (tags, tags); see
+    ``Tagger.log_partition``. One op: the C kernels run every word's step forward,
+    and then backward, with the same results, bit for bit, as building the loop
+    out of per-word ops."""
+
+    batch, steps, tags = e.shape
+    sizes = dict(batch=batch, steps=steps, tags=tags)
+    data, saved = kernels.crf_forward(e.data, start.data, transition_weights.data, **sizes)
+    # One word uses no transitions, so (as before) they get no gradient from here.
+    parents = (e, start, transition_weights) if steps > 1 else (e, start)
+    out = _op_result(data, (batch, tags), parents, "crf_forward")
+
+    def _backward() -> None:
+        grads = kernels.crf_forward_backward(transition_weights.data, saved, _grad_data(out), **sizes)
+        for tensor, grad in zip(parents, grads):
+            if tensor.requires_grad:
+                _add_grad(tensor, grad)
+
+    _set_backward(out, _backward)
+    return out
+
+
 class Tagger(TensorModule):
     """Embeddings -> BiLSTM -> per-tag emissions, and a CRF's transition scores."""
 
@@ -236,17 +261,14 @@ class Tagger(TensorModule):
             logsumexp_i(alpha[i] + trans[i, j]) = m + log(sum_i e^(alpha[i] - m) * e^trans[i, j])
 
         with m the row's largest alpha (any constant works; the largest makes
-        every e^(alpha - m) <= 1, with one of them exactly 1).
+        every e^(alpha - m) <= 1, with one of them exactly 1). So, word by word,
+
+            alpha = log(e^(alpha - m) @ e^trans) + m + e_t
+
+        which ``crf_forward`` runs as one op.
         """
 
-        batch_size, length, count = e.shape
-        steps = [step.reshape((batch_size, count)) for step in e.split([1] * length, axis=1)]
-        transition_weights = self.transitions.exp()                        # e^trans[i, j]
-        alpha = steps[0] + self.start
-        for step in steps[1:]:
-            data = alpha.data
-            m = Tensor([max(data[b * count : (b + 1) * count]) for b in range(batch_size)], (batch_size, 1))
-            alpha = ((alpha - m).exp() @ transition_weights).log() + m + step
+        alpha = crf_forward(e, self.start, self.transitions.exp())         # e^trans[i, j]
         return (alpha + self.end).logsumexp(axis=1)
 
     def gold_score(self, e: Tensor, tags: list[list[int]]) -> Tensor:

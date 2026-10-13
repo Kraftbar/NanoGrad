@@ -505,6 +505,21 @@ def lstm_sequence_backward(weight, saved, grad, *, batch: int, steps: int, hidde
     return kernel(weight, saved, grad, batch, steps, hidden)
 
 
+def crf_forward(e, start, weights, *, batch: int, steps: int, tags: int):
+    """The CRF's forward algorithm (tagger.py's ``crf_forward``): (alpha, saved),
+    where alpha (batch, tags) is the last word's and saved feeds the backward pass."""
+
+    kernel = kernels_c.crf_forward if BACKEND == "c" else reference.crf_forward
+    return kernel(e, start, weights, batch, steps, tags)
+
+
+def crf_forward_backward(weights, saved, grad, *, batch: int, steps: int, tags: int):
+    """Gradients (for e, start, weights) of ``crf_forward``."""
+
+    kernel = kernels_c.crf_forward_backward if BACKEND == "c" else reference.crf_forward_backward
+    return kernel(weights, saved, grad, batch, steps, tags)
+
+
 def bce_with_logits_sum(x: list[float], t: list[float]) -> float:
     """Summed binary cross entropy of logits x against targets t (see losses.py)."""
 

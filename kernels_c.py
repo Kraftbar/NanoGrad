@@ -231,6 +231,8 @@ def _build_library(code: str) -> ctypes.CDLL | None:
         getattr(library, name).argtypes = [pointer, pointer, pointer, pointer, pointer, count, count]
     library.lstm_sequence.argtypes = [pointer] * 8 + [count] * 3
     library.lstm_sequence_backward.argtypes = [pointer] * 9 + [count] * 3
+    library.crf_forward.argtypes = [pointer] * 6 + [count] * 3
+    library.crf_forward_backward.argtypes = [pointer] * 7 + [count] * 3
     library.dropout_mask.argtypes = [pointer, count, ctypes.c_double, ctypes.c_ulong]
     library.add_scaled.argtypes = [pointer, pointer, ctypes.c_double, pointer, count]
     library.projected_sign_step.argtypes = [pointer, pointer, pointer, ctypes.c_double, ctypes.c_double, pointer,
@@ -685,6 +687,26 @@ def lstm_sequence_backward(weight, saved: tuple, grad, batch: int, steps: int, h
     library.lstm_sequence_backward(_buffer(weight_buffer), _buffer(gates), _buffer(cs), _buffer(hs), _buffer(grad_buffer),
                                    _buffer(dinput), _buffer(dweight), _buffer(dh0), _buffer(dc0), batch, steps, hidden)
     return dinput, dweight, dh0, dc0
+
+
+def crf_forward(e, start, weights, batch: int, steps: int, tags: int) -> tuple[array, tuple]:
+    """(alpha, saved): see kernels.c; saved is what the backward pass needs."""
+
+    inputs = [_reals(values) for values in (e, start, weights)]
+    ps, qs, alpha = zeros((steps - 1) * batch * tags), zeros((steps - 1) * batch * tags), zeros(batch * tags)
+    library.crf_forward(*map(_buffer, inputs), _buffer(ps), _buffer(qs), _buffer(alpha), batch, steps, tags)
+    return alpha, (ps, qs)
+
+
+def crf_forward_backward(weights, saved: tuple, grad, batch: int, steps: int, tags: int) -> tuple[array, ...]:
+    """(d e, d start, d weights)."""
+
+    ps, qs = saved
+    weights_buffer, grad_buffer = _reals(weights), _reals(grad)
+    de, dstart, dweights = zeros(batch * steps * tags), zeros(tags), zeros(tags * tags)
+    library.crf_forward_backward(_buffer(weights_buffer), _buffer(ps), _buffer(qs), _buffer(grad_buffer),
+                                 _buffer(de), _buffer(dstart), _buffer(dweights), batch, steps, tags)
+    return de, dstart, dweights
 
 
 def bce_with_logits_sum(x: list[float], t: list[float]) -> float:

@@ -1888,6 +1888,95 @@ void lstm_sequence_backward(const real *weight, const real *gates, const real *c
 }
 
 /*
+ * The CRF's forward algorithm over a batch of sentences in one call
+ * (tagger.py's crf_forward): alpha_0 = e_0 + start, then for each later word
+ *
+ *     m = the row max of alpha,   alpha = log(e^(alpha - m) @ weights) + m + e_t
+ *
+ * with weights = e^trans. Like lstm_sequence it makes the per-word ops'
+ * kernel calls, in the same order (add_scaled for the subtraction,
+ * exp_vector, gemm into a zeroed buffer, log_vector, then two add_vectors),
+ * so the results are the same bit for bit; what goes is eight Python ops and
+ * autograd nodes per word. The row max is picked as Python's max() did: the
+ * first value, replaced only by a strictly larger one.
+ *
+ * e is (batch, steps, tags), weights (tags, tags). ps and qs (steps - 1,
+ * batch, tags) keep each word's e^(alpha - m) and its product with weights
+ * for the backward pass. alpha (batch, tags) is the last word's.
+ */
+void crf_forward(const real *e, const real *start, const real *weights, real *ps, real *qs, real *alpha,
+                 long batch, long steps, long tags)
+{
+    long n = batch * tags;
+    real *buffer = malloc(sizeof(real) * 4 * n);
+    if (buffer == NULL) {
+        abort();
+    }
+    real *word = buffer, *shift = word + n, *spread = shift + n, *shifted = spread + n;
+
+    for (long b = 0; b < batch; b++) {                  /* start, broadcast over the batch */
+        memcpy(word + b * tags, e + b * steps * tags, sizeof(real) * tags);
+        memcpy(spread + b * tags, start, sizeof(real) * tags);
+    }
+    add_vectors(word, spread, alpha, n);
+    for (long t = 1; t < steps; t++) {
+        real *p = ps + (t - 1) * n, *q = qs + (t - 1) * n;
+        for (long b = 0; b < batch; b++) {
+            real best = alpha[b * tags];
+            for (long j = 1; j < tags; j++)
+                if (alpha[b * tags + j] > best) best = alpha[b * tags + j];
+            for (long j = 0; j < tags; j++) shift[b * tags + j] = best;
+            memcpy(word + b * tags, e + (b * steps + t) * tags, sizeof(real) * tags);
+        }
+        add_scaled(alpha, shift, -1.0, shifted, n);
+        exp_vector(shifted, p, n);
+        memset(q, 0, sizeof(real) * n);
+        gemm(p, weights, q, 1, (int)batch, (int)tags, (int)tags, 0, 0, n, 0, 0);
+        log_vector(q, spread, n);
+        add_vectors(spread, shift, shifted, n);
+        add_vectors(shifted, word, alpha, n);
+    }
+    free(buffer);
+}
+
+/* Its backward pass, from the last word, again the old ops' calls: log's
+ * gradient is grad * (1 / q), the product's two gemms, exp's is times p.
+ * dweights sums a fresh gemm per word, latest word first, as autograd did.
+ * e's gradient is added to zeros, as the per-word split's was; start's is
+ * alpha_0's summed over the batch (sum_repeated). */
+void crf_forward_backward(const real *weights, const real *ps, const real *qs, const real *grad,
+                          real *de, real *dstart, real *dweights, long batch, long steps, long tags)
+{
+    long n = batch * tags, square = tags * tags;
+    real *buffer = malloc(sizeof(real) * (4 * n + square));
+    if (buffer == NULL) {
+        abort();
+    }
+    real *dalpha = buffer, *inverse = dalpha + n, *dq = inverse + n, *dp = dq + n, *step_weights = dp + n;
+
+    memcpy(dalpha, grad, sizeof(real) * n);
+    for (long t = steps - 1; t >= 1; t--) {
+        const real *p = ps + (t - 1) * n, *q = qs + (t - 1) * n;
+        for (long b = 0; b < batch; b++)
+            for (long j = 0; j < tags; j++) de[(b * steps + t) * tags + j] += dalpha[b * tags + j];
+        reciprocal_vector(q, inverse, n);
+        multiply_vectors(dalpha, inverse, dq, n);
+        memset(dp, 0, sizeof(real) * n);
+        gemm(dq, weights, dp, 1, (int)batch, (int)tags, (int)tags, n, 0, 0, 0, 1);
+        real *target = t == steps - 1 ? dweights : step_weights;
+        memset(target, 0, sizeof(real) * square);
+        gemm(p, dq, target, 1, (int)tags, (int)batch, (int)tags, 0, n, 0, 1, 0);
+        if (t < steps - 1)
+            add_vectors(dweights, step_weights, dweights, square);
+        multiply_vectors(dp, p, dalpha, n);
+    }
+    for (long b = 0; b < batch; b++)
+        for (long j = 0; j < tags; j++) de[b * steps * tags + j] += dalpha[b * tags + j];
+    sum_repeated(dalpha, dstart, batch, tags, 1);
+    free(buffer);
+}
+
+/*
  * log(1 + u) for u in [0, 1], written to vectorize like fast_exp:
  *
  *     log y = 2 atanh(s) = 2 (s + s^3/3 + s^5/5 + ...),   s = (y - 1) / (y + 1)
