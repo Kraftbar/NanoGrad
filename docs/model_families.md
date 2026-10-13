@@ -507,7 +507,8 @@ Closing that gap is under way:
 | 24 epochs (above) | 90.33% |
 | 24 epochs, `--augment` (fresh time shifts and noise every epoch) | 87.59% |
 | 36 epochs (the reference's count) | 90.10% |
-| 36 epochs, `--all-unknown` (the reference's training data) | running |
+| 36 epochs, `--all-unknown` (the reference's training data) | 87.77% |
+| 36 epochs, `--all-unknown --dropout` (its data and dropout) | 90.39% |
 
 The reference's code asks for random time shifts and background noise,
 but draws them with NumPy inside the function it gives tf.data's `map`,
@@ -521,8 +522,15 @@ more epochs alone overfit (training loss 0.07). What the reference does
 have is more data: TensorFlow Datasets' training split labels every
 other word's clip "unknown", 85,511 clips against our 36,921 (unknown
 words subsampled to 10% of the keyword clips); `--all-unknown` gives
-87,919. It also has dropout (0.2 after the stem, 0.4 before pooling) and
-L2 1e-4, which NanoGrad's DS-CNN does not.
+87,919. It also has dropout (0.2 after the stem, 0.4 before pooling,
+`--dropout`) and L2 1e-4.
+
+Neither closes the gap. All the unknown words alone cost 2.3 points:
+58% of those training clips are "unknown", while the official test set
+has the 12 classes balanced, so the likely cause is a model that leans
+towards "unknown" (not yet checked class by class). Dropout wins those
+points back, to 90.39%, about where the subsampled data started. The
+reference's L2, and dropout on the subsampled data, are not tried yet.
 
 *Added*: separate row and column padding in `conv2d` / `pad2d` (the
 10 x 4 stem), and MFCCs: the log-mel spectrogram followed by a DCT, both
