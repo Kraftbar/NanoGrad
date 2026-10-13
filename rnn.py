@@ -16,8 +16,12 @@ the memory to show. Because c is updated by addition, gradients flow back
 through many steps far better than in a plain RNN.
 
 Training unrolls the loop over the sequence and backpropagates through
-every step ("backpropagation through time"); autograd does that for free.
-Gate order (i, f, g, o) matches PyTorch's ``nn.LSTM``.
+every step ("backpropagation through time"). ``LSTM.run`` does the whole
+layer as one op, ``lstm_sequence``, whose C kernels walk the steps forward
+and then backward; it gives the same results, bit for bit, as building the
+loop out of per-step ops (``lstm_memory``, ``lstm_output`` and a matrix
+product), without six Python ops and autograd nodes per step. Gate order
+(i, f, g, o) matches PyTorch's ``nn.LSTM``.
 
 The GRU (Cho et al., 2014) is a lighter variant with two gates and no
 separate memory cell:
@@ -80,6 +84,30 @@ def lstm_output(gates: Tensor, c: Tensor) -> Tensor:
     return out
 
 
+def lstm_sequence(input_gates: Tensor, hidden_weight: Tensor, h0: Tensor, c0: Tensor) -> Tensor:
+    """A whole LSTM layer from the input part of its gates, x_t W_x^T + b (B, T, 4H),
+    and a starting state h0, c0 (B, H). Returns (B, T + 1, H): h_1 .. h_T, then the
+    final c. One op: the C kernels run every step's h W_h^T, lstm_memory and
+    lstm_output forward, and then backpropagate through time."""
+
+    batch, steps, width = input_gates.shape
+    hidden = width // 4
+    if steps < 1:
+        raise ValueError("lstm_sequence needs at least one step")
+    sizes = dict(batch=batch, steps=steps, hidden=hidden)
+    data, saved = kernels.lstm_sequence(input_gates.data, hidden_weight.data, h0.data, c0.data, **sizes)
+    out = _op_result(data, (batch, steps + 1, hidden), (input_gates, hidden_weight, h0, c0), "lstm_sequence")
+
+    def _backward() -> None:
+        grads = kernels.lstm_sequence_backward(hidden_weight.data, saved, _grad_data(out), **sizes)
+        for tensor, grad in zip((input_gates, hidden_weight, h0, c0), grads):
+            if tensor.requires_grad:
+                _add_grad(tensor, grad)
+
+    _set_backward(out, _backward)
+    return out
+
+
 class LSTM(TensorModule):
     """One LSTM layer over (batch, time, inputs) -> (batch, time, hidden)."""
 
@@ -108,22 +136,12 @@ class LSTM(TensorModule):
         backpropagation through time."""
 
         batch, length, _ = inputs.shape
-        hidden_size = self.hidden
         # The input part of every gate, for all time steps in one product.
         input_gates = matmul(inputs, self.input_weight.T) + self.bias        # (B, T, 4H)
-        steps = input_gates.split([1] * length, axis=1)
-
-        hidden_weight_t = self.hidden_weight.T            # transpose once, not every step
         if state is None:
-            state = (Tensor.zeros((batch, hidden_size)), Tensor.zeros((batch, hidden_size)))
-        h, c = state
-        outputs = []
-        for step in steps:
-            gates = step.reshape((batch, 4 * hidden_size)) + matmul(h, hidden_weight_t)
-            c = lstm_memory(gates, c)        # sigmoid(f) * c + sigmoid(i) * tanh(g)
-            h = lstm_output(gates, c)        # sigmoid(o) * tanh(c)
-            outputs.append(h.reshape((batch, 1, hidden_size)))
-        return concat(outputs, axis=1), (h, c)
+            state = (Tensor.zeros((batch, self.hidden)), Tensor.zeros((batch, self.hidden)))
+        packed = lstm_sequence(input_gates, self.hidden_weight, *state)    # h_1 .. h_T, then c_T
+        return packed[:, :length], (packed[:, length - 1], packed[:, length])
 
     def parameters(self) -> list[Tensor]:
         return [self.input_weight, self.hidden_weight, self.bias]

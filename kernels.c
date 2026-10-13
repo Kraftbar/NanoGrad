@@ -1780,6 +1780,114 @@ void lstm_output_backward(const real *gates, const real *c_new, const real *grad
 }
 
 /*
+ * A whole LSTM layer over `steps` time steps in one call (rnn.py's
+ * lstm_sequence). It makes the same kernel calls, in the same order, as the
+ * per-step ops it replaces: the recurrent product h W^T into a zeroed
+ * buffer (with W^T materialized once, as `.T` did), plus the input part of
+ * the gates, then lstm_memory and lstm_output. So the results are the same,
+ * bit for bit; what goes is six Python ops and autograd nodes per step.
+ *
+ * input_gates is (batch, steps, 4H) and weight (4H, H). gates (steps, batch,
+ * 4H) and cs, hs (steps + 1, batch, H; entry 0 is the starting state) are
+ * kept for the backward pass. packed (batch, steps + 1, H) is h_1 .. h_T,
+ * then the final c.
+ */
+static real *transposed(const real *x, long rows, long cols)
+{
+    real *t = malloc(sizeof(real) * rows * cols);
+    if (t == NULL) {
+        abort();
+    }
+    for (long i = 0; i < rows; i++)
+        for (long j = 0; j < cols; j++) t[j * rows + i] = x[i * cols + j];
+    return t;
+}
+
+void lstm_sequence(const real *input_gates, const real *weight, const real *h0, const real *c0,
+                   real *gates, real *cs, real *hs, real *packed, long batch, long steps, long hidden)
+{
+    long width = 4 * hidden, state = batch * hidden;
+    real *weight_t = transposed(weight, width, hidden);                 /* (H, 4H) */
+    real *product = malloc(sizeof(real) * batch * width);
+    if (product == NULL) {
+        abort();
+    }
+    memcpy(hs, h0, sizeof(real) * state);
+    memcpy(cs, c0, sizeof(real) * state);
+    for (long t = 0; t < steps; t++) {
+        real *g = gates + t * batch * width;
+        memset(product, 0, sizeof(real) * batch * width);
+        gemm(hs + t * state, weight_t, product, 1, (int)batch, (int)hidden, (int)width, 0, 0, batch * width, 0, 0);
+        for (long b = 0; b < batch; b++)
+            for (long j = 0; j < width; j++)
+                g[b * width + j] = input_gates[(b * steps + t) * width + j] + product[b * width + j];
+        lstm_memory(g, cs + t * state, cs + (t + 1) * state, batch, hidden);
+        lstm_output(g, cs + (t + 1) * state, hs + (t + 1) * state, batch, hidden);
+    }
+    for (long b = 0; b < batch; b++) {
+        for (long t = 0; t < steps; t++)
+            memcpy(packed + (b * (steps + 1) + t) * hidden, hs + (t + 1) * state + b * hidden, sizeof(real) * hidden);
+        memcpy(packed + (b * (steps + 1) + steps) * hidden, cs + steps * state + b * hidden, sizeof(real) * hidden);
+    }
+    free(product);
+    free(weight_t);
+}
+
+/* Its backward pass, through time from the last step, again the old ops'
+ * calls and sums: h_t's gradient is its output gradient plus dgates_t+1 W,
+ * c_t's is lstm_output's plus lstm_memory's from step t + 1, and dW^T sums a
+ * fresh h_t-1^T dgates_t per step, latest step first. grad is (batch, steps
+ * + 1, H) like packed. */
+void lstm_sequence_backward(const real *weight, const real *gates, const real *cs, const real *hs,
+                            const real *grad, real *dinput_gates, real *dweight, real *dh0, real *dc0,
+                            long batch, long steps, long hidden)
+{
+    long width = 4 * hidden, state = batch * hidden;
+    real *weight_t = transposed(weight, width, hidden);
+    real *buffer = malloc(sizeof(real) * (5 * state + 2 * batch * width + 2 * hidden * width));
+    if (buffer == NULL) {
+        abort();
+    }
+    real *dh = buffer, *dc = dh + state, *carry = dc + state, *dc_new = carry + state, *recurrent = dc_new + state;
+    real *dgates_out = recurrent + state, *dgates_mem = dgates_out + batch * width;
+    real *dweight_t = dgates_mem + batch * width, *step_weight = dweight_t + hidden * width;
+
+    for (long b = 0; b < batch; b++) {
+        memcpy(dh + b * hidden, grad + (b * (steps + 1) + steps - 1) * hidden, sizeof(real) * hidden);
+        memcpy(carry + b * hidden, grad + (b * (steps + 1) + steps) * hidden, sizeof(real) * hidden);
+    }
+    for (long t = steps - 1; t >= 0; t--) {
+        const real *g = gates + t * batch * width;
+        lstm_output_backward(g, cs + (t + 1) * state, dh, dgates_out, dc_new, batch, hidden);
+        for (long i = 0; i < state; i++) dc[i] = dc_new[i] + carry[i];
+        lstm_memory_backward(g, cs + t * state, dc, dgates_mem, carry, batch, hidden);
+        for (long i = 0; i < batch * width; i++) dgates_out[i] = dgates_out[i] + dgates_mem[i];
+        for (long b = 0; b < batch; b++)
+            memcpy(dinput_gates + (b * steps + t) * width, dgates_out + b * width, sizeof(real) * width);
+
+        real *target = t == steps - 1 ? dweight_t : step_weight;
+        memset(target, 0, sizeof(real) * hidden * width);
+        gemm(hs + t * state, dgates_out, target, 1, (int)hidden, (int)batch, (int)width, 0, batch * width, 0, 1, 0);
+        if (t < steps - 1)
+            for (long i = 0; i < hidden * width; i++) dweight_t[i] = dweight_t[i] + step_weight[i];
+
+        memset(recurrent, 0, sizeof(real) * state);
+        gemm(dgates_out, weight_t, recurrent, 1, (int)batch, (int)width, (int)hidden, batch * width, 0, 0, 0, 1);
+        if (t > 0) {
+            for (long b = 0; b < batch; b++)
+                for (long j = 0; j < hidden; j++)
+                    dh[b * hidden + j] = grad[(b * (steps + 1) + t - 1) * hidden + j] + recurrent[b * hidden + j];
+        }
+    }
+    memcpy(dh0, recurrent, sizeof(real) * state);
+    memcpy(dc0, carry, sizeof(real) * state);
+    for (long i = 0; i < hidden; i++)
+        for (long j = 0; j < width; j++) dweight[j * hidden + i] = dweight_t[i * width + j];
+    free(buffer);
+    free(weight_t);
+}
+
+/*
  * log(1 + u) for u in [0, 1], written to vectorize like fast_exp:
  *
  *     log y = 2 atanh(s) = 2 (s + s^3/3 + s^5/5 + ...),   s = (y - 1) / (y + 1)

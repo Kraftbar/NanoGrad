@@ -490,6 +490,21 @@ def lstm_output_backward(gates, c_new, grad, *, batch: int, hidden: int):
     return reference.lstm_output_backward(gates, c_new, grad, batch, hidden)
 
 
+def lstm_sequence(input_gates, weight, h0, c0, *, batch: int, steps: int, hidden: int):
+    """A whole LSTM layer (rnn.py's ``lstm_sequence``): (packed, saved), where packed is
+    (batch, steps + 1, H), h_1 .. h_T then the final c, and saved feeds the backward pass."""
+
+    kernel = kernels_c.lstm_sequence if BACKEND == "c" else reference.lstm_sequence
+    return kernel(input_gates, weight, h0, c0, batch, steps, hidden)
+
+
+def lstm_sequence_backward(weight, saved, grad, *, batch: int, steps: int, hidden: int):
+    """Gradients (for input_gates, weight, h0, c0) of ``lstm_sequence``."""
+
+    kernel = kernels_c.lstm_sequence_backward if BACKEND == "c" else reference.lstm_sequence_backward
+    return kernel(weight, saved, grad, batch, steps, hidden)
+
+
 def bce_with_logits_sum(x: list[float], t: list[float]) -> float:
     """Summed binary cross entropy of logits x against targets t (see losses.py)."""
 

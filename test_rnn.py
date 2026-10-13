@@ -109,6 +109,86 @@ class GRUTests(unittest.TestCase):
                 self.assertAlmostEqual(a, b, places=12)
 
 
+def per_step_lstm(layer: LSTM, inputs: Tensor, state):
+    """LSTM.run as it was before lstm_sequence: the loop built from per-step ops."""
+
+    from rnn import lstm_memory, lstm_output
+    from tensor import concat, matmul
+
+    batch, length, _ = inputs.shape
+    input_gates = matmul(inputs, layer.input_weight.T) + layer.bias
+    hidden_weight_t = layer.hidden_weight.T
+    h, c = state
+    outputs = []
+    for step in input_gates.split([1] * length, axis=1):
+        gates = step.reshape((batch, 4 * layer.hidden)) + matmul(h, hidden_weight_t)
+        c = lstm_memory(gates, c)
+        h = lstm_output(gates, c)
+        outputs.append(h.reshape((batch, 1, layer.hidden)))
+    return concat(outputs, axis=1), (h, c)
+
+
+class SequenceTests(unittest.TestCase):
+    def run_both(self, batch, length, inputs_size, hidden, given_state, uses):
+        results = []
+        for run in (lambda layer, x, state: layer.run(x, state), per_step_lstm):
+            layer = LSTM(inputs_size, hidden, seed=7)
+            inputs = random_tensor((batch, length, inputs_size), 8)
+            state = ((random_tensor((batch, hidden), 9), random_tensor((batch, hidden), 10)) if given_state
+                     else (Tensor.zeros((batch, hidden)), Tensor.zeros((batch, hidden))))
+            out, (h, c) = run(layer, inputs, state)
+            loss = None
+            for used, tensor, seed in zip(uses, (out, h, c), (11, 12, 13)):
+                if used:
+                    term = (tensor * random_tensor(tensor.shape, seed, requires_grad=False)).sum()
+                    loss = term if loss is None else loss + term
+            loss.backward()
+            tensors = [inputs, *layer.parameters(), *(state if given_state else ())]
+            results.append(([list(t.data) for t in (out, h, c)], [list(t.grad) for t in tensors]))
+        return results
+
+    def test_same_bits_as_the_per_step_ops(self) -> None:
+        import kernels
+
+        dtypes = ("float64", "float32") if kernels.BACKEND == "c" else ("float64",)
+        before = kernels.default_dtype()
+        try:
+            for dtype in dtypes:
+                kernels.set_default_dtype(dtype)
+                for shape in ((3, 5, 4, 6), (2, 1, 3, 9), (5, 7, 6, 20)):
+                    for given_state, uses in ((False, (True, False, False)), (True, (True, True, True)),
+                                              (False, (False, True, False))):
+                        with self.subTest(dtype=dtype, shape=shape, given_state=given_state, uses=uses):
+                            fused, steps = self.run_both(*shape, given_state, uses)
+                            self.assertEqual(fused, steps)
+        finally:
+            kernels.set_default_dtype(before)
+
+    def test_reference_kernels_agree(self) -> None:
+        import kernels
+        import kernels_reference
+
+        if kernels.BACKEND != "c":
+            self.skipTest("C kernels are not built here")
+        import kernels_c
+
+        rng = random.Random(14)
+        batch, steps, hidden = 3, 4, 5
+        values = [[rng.uniform(-1, 1) for _ in range(n)]
+                  for n in (batch * steps * 4 * hidden, 4 * hidden * hidden, batch * hidden, batch * hidden)]
+        grad = [rng.uniform(-1, 1) for _ in range(batch * (steps + 1) * hidden)]
+        ours, saved = kernels_c.lstm_sequence(*values, batch, steps, hidden)
+        theirs, reference_saved = kernels_reference.lstm_sequence(*values, batch, steps, hidden)
+        for a, b in zip(ours, theirs):
+            self.assertAlmostEqual(a, b, places=12)
+        backward = kernels_c.lstm_sequence_backward(values[1], saved, grad, batch, steps, hidden)
+        reference_backward = kernels_reference.lstm_sequence_backward(values[1], reference_saved, grad, batch, steps, hidden)
+        for ours_grad, theirs_grad in zip(backward, reference_backward):
+            self.assertEqual(len(ours_grad), len(theirs_grad))
+            for a, b in zip(ours_grad, theirs_grad):
+                self.assertAlmostEqual(a, b, places=12)
+
+
 class FusedCellTests(unittest.TestCase):
     def test_fused_lstm_ops_match_finite_differences(self) -> None:
         import random

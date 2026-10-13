@@ -229,6 +229,8 @@ def _build_library(code: str) -> ctypes.CDLL | None:
         getattr(library, name).argtypes = [pointer, pointer, pointer, count, count]
     for name in ("lstm_memory_backward", "lstm_output_backward"):
         getattr(library, name).argtypes = [pointer, pointer, pointer, pointer, pointer, count, count]
+    library.lstm_sequence.argtypes = [pointer] * 8 + [count] * 3
+    library.lstm_sequence_backward.argtypes = [pointer] * 9 + [count] * 3
     library.dropout_mask.argtypes = [pointer, count, ctypes.c_double, ctypes.c_ulong]
     library.add_scaled.argtypes = [pointer, pointer, ctypes.c_double, pointer, count]
     library.projected_sign_step.argtypes = [pointer, pointer, pointer, ctypes.c_double, ctypes.c_double, pointer,
@@ -660,6 +662,29 @@ def lstm_step_backward(name: str, gates, state, grad, batch: int, hidden: int) -
     dgates, dstate = zeros(batch * 4 * hidden), zeros(batch * hidden)
     getattr(library, name)(*map(_buffer, buffers), _buffer(dgates), _buffer(dstate), batch, hidden)
     return dgates, dstate
+
+
+def lstm_sequence(input_gates, weight, h0, c0, batch: int, steps: int, hidden: int) -> tuple[array, tuple]:
+    """(packed, saved): see kernels.c; saved is what the backward pass needs."""
+
+    inputs = [_reals(values) for values in (input_gates, weight, h0, c0)]
+    gates, cs, hs = zeros(steps * batch * 4 * hidden), zeros((steps + 1) * batch * hidden), zeros((steps + 1) * batch * hidden)
+    packed = zeros(batch * (steps + 1) * hidden)
+    library.lstm_sequence(*map(_buffer, inputs), _buffer(gates), _buffer(cs), _buffer(hs), _buffer(packed),
+                          batch, steps, hidden)
+    return packed, (gates, cs, hs)
+
+
+def lstm_sequence_backward(weight, saved: tuple, grad, batch: int, steps: int, hidden: int) -> tuple[array, ...]:
+    """(d input_gates, d weight, d h0, d c0)."""
+
+    gates, cs, hs = saved
+    weight_buffer, grad_buffer = _reals(weight), _reals(grad)
+    dinput, dweight = zeros(batch * steps * 4 * hidden), zeros(4 * hidden * hidden)
+    dh0, dc0 = zeros(batch * hidden), zeros(batch * hidden)
+    library.lstm_sequence_backward(_buffer(weight_buffer), _buffer(gates), _buffer(cs), _buffer(hs), _buffer(grad_buffer),
+                                   _buffer(dinput), _buffer(dweight), _buffer(dh0), _buffer(dc0), batch, steps, hidden)
+    return dinput, dweight, dh0, dc0
 
 
 def bce_with_logits_sum(x: list[float], t: list[float]) -> float:

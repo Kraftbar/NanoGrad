@@ -557,6 +557,52 @@ def lstm_output_backward(gates, c_new, grad, batch: int, hidden: int) -> tuple[l
     return dgates, dc_new
 
 
+def _transposed(x, rows: int, cols: int) -> list[float]:
+    return [x[i * cols + j] for j in range(cols) for i in range(rows)]
+
+
+def lstm_sequence(input_gates, weight, h0, c0, batch: int, steps: int, hidden: int):
+    """The per-step ops of a whole LSTM layer, in order (see kernels.c)."""
+
+    width, weight_t = 4 * hidden, _transposed(weight, 4 * hidden, hidden)
+    gates, cs, hs = [], [list(c0)], [list(h0)]
+    for t in range(steps):
+        product = gemm(hs[t], weight_t, 1, batch, hidden, width, 0, 0, batch * width, False, False)
+        g = [input_gates[(b * steps + t) * width + j] + product[b * width + j] for b in range(batch) for j in range(width)]
+        cs.append(lstm_memory(g, cs[t], batch, hidden))
+        hs.append(lstm_output(g, cs[t + 1], batch, hidden))
+        gates.append(g)
+    packed = []
+    for b in range(batch):
+        for t in range(steps):
+            packed += hs[t + 1][b * hidden : (b + 1) * hidden]
+        packed += cs[steps][b * hidden : (b + 1) * hidden]
+    return packed, (gates, cs, hs)
+
+
+def lstm_sequence_backward(weight, saved, grad, batch: int, steps: int, hidden: int):
+    gates, cs, hs = saved
+    width, weight_t, rows = 4 * hidden, _transposed(weight, 4 * hidden, hidden), steps + 1
+
+    def at(t: int) -> list[float]:                    # grad's (batch, H) slice for time slot t
+        return [grad[(b * rows + t) * hidden + j] for b in range(batch) for j in range(hidden)]
+
+    dh, carry = at(steps - 1), at(steps)
+    dinput, dweight_t = [0.0] * (batch * steps * width), None
+    for t in range(steps - 1, -1, -1):
+        dgates_out, dc_new = lstm_output_backward(gates[t], cs[t + 1], dh, batch, hidden)
+        dgates_mem, carry = lstm_memory_backward(gates[t], cs[t], add(dc_new, carry), batch, hidden)
+        dgates = add(dgates_out, dgates_mem)
+        for b in range(batch):
+            dinput[(b * steps + t) * width : (b * steps + t + 1) * width] = dgates[b * width : (b + 1) * width]
+        step_weight = gemm(hs[t], dgates, 1, hidden, batch, width, 0, batch * width, 0, True, False)
+        dweight_t = step_weight if dweight_t is None else add(dweight_t, step_weight)
+        recurrent = gemm(dgates, weight_t, 1, batch, width, hidden, batch * width, 0, 0, False, True)
+        if t > 0:
+            dh = add(at(t - 1), recurrent)
+    return dinput, _transposed(dweight_t, hidden, width), recurrent, carry
+
+
 def bce_with_logits_sum(x: list[float], t: list[float]) -> float:
     return math.fsum(max(v, 0.0) - v * target + math.log1p(math.exp(-abs(v))) for v, target in zip(x, t))
 
