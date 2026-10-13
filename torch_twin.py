@@ -10,7 +10,9 @@ work in both.
 
 Supported: the vision models in ``vision.py`` (TwoConvCNN), ``resnet.py``
 and ``vit.py``, the encoder in ``bert.py``, and the layers they are built
-from. Requires PyTorch.
+from. Dropout draws PyTorch's own masks, so with dropout on the twin
+matches only in evaluation mode (``twin.training = False``). Requires
+PyTorch.
 """
 
 from __future__ import annotations
@@ -229,10 +231,10 @@ class TorchTwin:
         return F.relu(self._batch_norm(block.norm2, self._conv(block.pointwise, x)))
 
     def _mobilenet(self, model: MobileNet, x):
-        x = F.relu(self._batch_norm(model.stem_norm, self._conv(model.stem, x)))
+        x = self._dropout(model.stem_dropout, F.relu(self._batch_norm(model.stem_norm, self._conv(model.stem, x))))
         for block in model.blocks:
             x = self._separable_block(block, x)
-        return self._linear(model.classifier, x.mean(dim=(2, 3)))
+        return self._linear(model.classifier, self._dropout(model.head_dropout, x).mean(dim=(2, 3)))
 
     def _unet(self, model: UNet, x):
         skips = []

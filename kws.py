@@ -17,9 +17,11 @@ The model is MLPerf's DS-CNN, a MobileNet for audio: a 10 x 4 stride-2
 convolution with 64 filters, four depthwise-separable blocks of 64,
 global average pooling and a linear layer (about 23K parameters). The
 training follows the reference (Adam, batch 100, lr 5e-4, divided by 5
-after each third of training; the reference trains 36 epochs), without
-its dropout layers. The reference DS-CNN reaches about 92% (MLPerf Tiny's
-quality target is 90%).
+after each third of training; the reference trains 36 epochs). Its dropout
+layers, 0.2 after the first convolution and 0.4 before the pooling, are
+``--dropout``; with it the PyTorch twin draws different masks, so the two
+frameworks' weights no longer agree. The reference DS-CNN reaches about
+92% (MLPerf Tiny's quality target is 90%).
 
 The reference's code asks for random time shifts and background noise,
 but draws them with NumPy inside the function it hands to tf.data's
@@ -33,7 +35,7 @@ training clip is shifted and mixed with noise afresh every epoch (see
 ``augmented``), and its MFCCs are recomputed; without it they are
 computed once and cached.
 
-    python3 kws.py --epochs 24 [--augment] [--all-unknown]
+    python3 kws.py --epochs 24 [--augment] [--all-unknown] [--dropout]
     .venv/bin/python kws.py --frameworks nanograd torch --epochs 1 --train-limit 2000 --test-limit 500
 
 Data: data/speech_commands/ (see data/speech_commands/DOWNLOAD.md).
@@ -194,11 +196,14 @@ def augmented(samples: array, label: int, noise: list[list[float]], rng: random.
     return clip
 
 
-def ds_cnn(seed: int = 0) -> MobileNet:
-    """MLPerf Tiny's DS-CNN: (B, 1, 49, 10) MFCCs -> 12 class scores."""
+def ds_cnn(seed: int = 0, dropout: bool = False) -> MobileNet:
+    """MLPerf Tiny's DS-CNN: (B, 1, 49, 10) MFCCs -> 12 class scores; ``dropout`` adds
+    the reference's 0.2 after the stem and 0.4 before the pooling."""
 
+    stem_dropout, head_dropout = (0.2, 0.4) if dropout else (0.0, 0.0)
     return MobileNet(image_shape=(1, FRAMES, COEFFICIENTS), classes=len(CLASSES), stem=64, stem_kernel=(10, 4),
-                     stem_stride=2, stem_padding=(5, 1), stages=((64, 1),) * 4, seed=seed)
+                     stem_stride=2, stem_padding=(5, 1), stages=((64, 1),) * 4, stem_dropout=stem_dropout,
+                     head_dropout=head_dropout, seed=seed)
 
 
 def standardize(train, test) -> list[tuple[float, float]]:
@@ -296,6 +301,8 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--augment", action="store_true", help="random time shifts and background noise")
     parser.add_argument("--all-unknown", action="store_true",
                         help="every other word's clip as an unknown example (TensorFlow Datasets' split)")
+    parser.add_argument("--dropout", action="store_true",
+                        help="the reference's dropout: 0.2 after the first convolution, 0.4 before the pooling")
     args = parser.parse_args(argv)
 
     start = perf_counter()
@@ -323,7 +330,7 @@ def main(argv: list[str] | None = None) -> dict:
     print(f"{len(train_set)} training and {len(test_set)} test clips ({perf_counter() - start:.0f} s)", flush=True)
     results, runners = {}, {}
     for framework in args.frameworks:
-        model = ds_cnn(seed=args.seed)
+        model = ds_cnn(seed=args.seed, dropout=args.dropout)
         if framework == "torch":
             import torch
 
@@ -351,7 +358,8 @@ def main(argv: list[str] | None = None) -> dict:
     if len(runners) == 2:
         difference = max(abs(a - b) for x, y in zip(runners["nanograd"].weights(), runners["torch"].weights())
                          for a, b in zip(x, y))
-        print(f"largest weight difference after training: {difference:.1e}")
+        print(f"largest weight difference after training: {difference:.1e}"
+              + (" (different dropout masks)" if args.dropout else ""))
         results["max_weight_difference"] = difference
     return results
 

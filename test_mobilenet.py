@@ -44,6 +44,45 @@ class DepthwiseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             copy.load_state_dict({"parameters": []})
 
+    def test_dropout_off_by_default_leaves_the_forward_pass_unchanged(self) -> None:
+        model = MobileNet(image_shape=(3, 8, 8), stem=4, seed=1)
+        images = Tensor(values(2 * 3 * 8 * 8, 5), (2, 3, 8, 8))
+        x = model.stem_norm(model.stem(images)).relu()          # the forward pass before dropout existed
+        for block in model.blocks:
+            x = block(x)
+        expected = model.classifier(x.reshape((2, x.shape[1], x.shape[2] * x.shape[3])).mean(axis=-1))
+        self.assertEqual(list(model(images).data), list(expected.data))
+        self.assertEqual((model.stem_dropout.p, model.head_dropout.p), (0.0, 0.0))
+
+    def test_dropout_is_on_in_training_and_off_in_evaluation(self) -> None:
+        plain = MobileNet(image_shape=(3, 8, 8), stem=4, seed=1)
+        dropped = MobileNet(image_shape=(3, 8, 8), stem=4, stem_dropout=0.2, head_dropout=0.4, seed=1)
+        self.assertEqual([p.data for p in plain.parameters()], [p.data for p in dropped.parameters()])
+        images = Tensor(values(2 * 3 * 8 * 8, 5), (2, 3, 8, 8))
+        plain.eval()
+        dropped.eval()
+        self.assertEqual(list(dropped(images).data), list(plain(images).data))
+        self.assertEqual(list(dropped(images).data), list(dropped(images).data))
+        dropped.train()
+        self.assertNotEqual(list(dropped(images).data), list(dropped(images).data))
+
+    @unittest.skipUnless(HAS_TORCH, "PyTorch not installed")
+    def test_twin_drops_out_in_training_and_matches_in_evaluation(self) -> None:
+        import torch
+
+        from torch_twin import TorchTwin
+
+        model = MobileNet(image_shape=(3, 8, 8), stem=4, stem_dropout=0.2, head_dropout=0.4, seed=1)
+        images = values(2 * 3 * 8 * 8, 5)
+        twin = TorchTwin(model)
+        inputs = torch.tensor(images, dtype=torch.float64).reshape(2, 3, 8, 8)
+        self.assertFalse(torch.equal(twin(inputs), twin(inputs)))      # PyTorch's own masks, fresh each call
+        model.eval()
+        twin, twin.training = TorchTwin(model), False                # fresh running statistics, as the model's
+        ours = model(Tensor(images, (2, 3, 8, 8)))
+        for a, b in zip(ours.data, twin(inputs).reshape(-1).tolist()):
+            self.assertAlmostEqual(a, b, places=10)
+
     @unittest.skipUnless(HAS_TORCH, "PyTorch not installed")
     def test_mobilenet_matches_pytorch(self) -> None:
         import torch

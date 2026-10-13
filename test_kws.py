@@ -33,6 +33,12 @@ class KeywordSpottingTest(unittest.TestCase):
         predicted = runner.predict([0.1] * (2 * kws.FRAMES * kws.COEFFICIENTS), 2)
         self.assertEqual(len(predicted), 2)
 
+    def test_dropout_flag_adds_the_reference_rates_and_no_parameters(self) -> None:
+        plain, dropped = kws.ds_cnn(seed=2), kws.ds_cnn(seed=2, dropout=True)
+        self.assertEqual((plain.stem_dropout.p, plain.head_dropout.p), (0.0, 0.0))
+        self.assertEqual((dropped.stem_dropout.p, dropped.head_dropout.p), (0.2, 0.4))
+        self.assertEqual([p.data for p in plain.parameters()], [p.data for p in dropped.parameters()])
+
     def test_matches_torch(self) -> None:
         try:
             import torch  # noqa: F401
