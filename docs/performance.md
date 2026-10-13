@@ -186,6 +186,30 @@ cannot use the parent's OpenMP threads (libgomp's pool does not survive
 (`os.register_at_fork`), and with one thread the kernels never start an
 OpenMP team. Use one or the other.
 
+## A Whole LSTM Layer In One Op
+
+An LSTM layer used to be built from per-step ops: a matrix product
+`h W_h^T`, an add, the fused `lstm_memory` and `lstm_output` kernels, and
+a reshape, six Python ops and autograd nodes per time step, each paying
+for buffer wrapping and a fresh zero array. `rnn.lstm_sequence` runs the
+whole layer as one op: its C kernels walk the steps forward, then
+backpropagate through time. They make the same kernel calls in the same
+order (the same gemms into zeroed buffers, the same two-term sums, `dW`
+summed latest step first), so results are identical bit for bit in
+float64 and float32 (`test_rnn.SequenceTests`).
+
+UD English EWT tagger, training step on one core:
+
+| tagger | per-step ops | one op | speedup |
+| --- | ---: | ---: | ---: |
+| BiLSTM-CRF | 58.5 ms | 48 ms | 1.22x |
+| + character BiLSTM | 121 ms | 83 ms | 1.45x |
+
+The character model gains most: it runs many short LSTMs (one per word
+length in a batch), where per-step overhead was most of the cost. What
+is left is the tagger's other small ops (embedding gathers, the CRF's
+per-word forward algorithm, dropout, Adam).
+
 ## Where The Time Goes Now
 
 See [benchmarks.md](./benchmarks.md#how-the-gap-closed). In short, with the

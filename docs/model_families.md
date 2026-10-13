@@ -619,8 +619,10 @@ it adds 0.3 points on both dev and test:
 | 1 | 94.44 / 94.62 | 94.69 / 95.06 |
 | mean | 94.38 / 94.64 | 94.66 / **94.95** |
 
-An epoch takes 2.3x as long (166 vs 72 ms per step), almost all of it
-the many small per-letter LSTM steps. The PyTorch twin runs the same
+An epoch took 2.3x as long (166 vs 72 ms per step), almost all of it
+the many small per-letter LSTM steps; with the whole LSTM layer as one
+op (`rnn.lstm_sequence`, see [performance.md](./performance.md)) a step
+is 83 vs 48 ms. The PyTorch twin runs the same
 character model and agrees to 1e-10 (`test_tagger.py`).
 
 *Added*: `logsumexp` (the lane's largest value as a constant shift, so
