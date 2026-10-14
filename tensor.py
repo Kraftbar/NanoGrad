@@ -292,14 +292,18 @@ class Tensor:
         adds to them (as PyTorch always does): run backward on several
         micro-batches, then take one optimizer step.
 
-        Afterwards the graph is freed (as in PyTorch): each intermediate
-        result drops its backward function and its links to its inputs.
-        Those links form reference cycles, so without this every step's
-        graph would linger until Python's cycle collector ran. Pass
+        The graph is freed as the pass goes (as in PyTorch): once an
+        intermediate result's backward function has run, it drops that
+        function and its links to its inputs. Those links form reference
+        cycles, and the backward functions hold the forward pass's values,
+        so this frees each step's intermediate results (and their
+        gradients) during the pass instead of whenever Python's cycle
+        collector runs, which keeps peak memory down. Pass
         ``retain_graph=True`` to call backward on the same graph again.
         """
 
         topo = _topological_order(self)
+        leaves = [node for node in topo if node.requires_grad and not node._prev]
 
         # Start every gradient empty; the first _add_grad adopts its list.
         for node in topo:
@@ -308,7 +312,10 @@ class Tensor:
 
         _add_grad(self, _seed_grad(self, grad))
 
-        for node in reversed(topo):
+        # Outputs before inputs. Popping drops this pass's reference to each
+        # node, so a freed intermediate nobody else holds goes right away.
+        while topo:
+            node = topo.pop()
             if node.requires_grad:
                 if _profiler is None:
                     node._backward()
@@ -316,17 +323,15 @@ class Tensor:
                     start = perf_counter()
                     node._backward()
                     _profiler.backward(node._op, perf_counter() - start)
+            if not retain_graph and node._prev:
+                node._prev = set()
+                node._backward = _freed_backward
+        node = None
 
         # Leaves the output does not depend on get zeros, not None.
-        for node in topo:
-            if node.requires_grad and node.grad is None and not node._prev:
-                node.zero_grad()
-
-        if not retain_graph:
-            for node in topo:
-                if node._prev:
-                    node._prev = set()
-                    node._backward = _freed_backward
+        for leaf in leaves:
+            if leaf.grad is None:
+                leaf.zero_grad()
 
 
 def _no_backward() -> None:

@@ -79,7 +79,7 @@ CASES = {
     "ResNet-8, CIFAR-10, batch 256": image_case("resnet8", (3, 32, 32), 256),
     "ViT, MNIST, batch 32": image_case("vit", (1, 28, 28), 32),
     "baby GPT (4 x 128, context 64), batch 12": gpt_case(64, 128, 4, 4, 12),
-    "nanoGPT Shakespeare (6 x 384, context 256), batch 16": gpt_case(256, 384, 6, 6, 16),
+    "GPT (6 x 384, context 256), batch 32": gpt_case(256, 384, 6, 6, 32),
     "diffusion U-Net (width 32, norm + attention), batch 128": diffusion_case(32, 128, 8, True),
 }
 
