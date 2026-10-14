@@ -126,12 +126,19 @@ NANOGRAD_THREADS=8 .venv/bin/python diffusion_demo.py --dataset mnist --dtype fl
 
 | U-Net | parameters | FID, 1,000 samples (real images: 2.4) | time |
 | --- | ---: | ---: | --- |
-| width 32, 20 epochs | 404K | **24.8** | 2.8 h on 8 threads |
+| width 32, 20 epochs | 404K | 24.8 | 2.8 h on 8 threads |
+| + group norm and attention (`--groups 8 --attention`) | 455K | **18.1** | 4.5 h on 8 threads |
 
-![64 DDIM samples](images/diffusion_mnist.png)
+Over training (FID after 5 / 10 / 15 / 20 epochs) the second goes
+118 / 48 / 27 / 18. Group norm (`--groups`) switches the residual blocks to
+DDPM's order (norm, SiLU, convolution); `--attention` adds a single-head
+transformer block over the 7 x 7 middle, where every position sees the
+whole digit.
 
-*Added*: DDIM sampling, the clipped DDPM posterior step, an EMA of the
-weights, and the FID.
+![64 DDIM samples from the group norm + attention U-Net](images/diffusion_mnist.png)
+
+*Added*: group norm, DDIM sampling, the clipped DDPM posterior step, an
+EMA of the weights, and the FID.
 
 ## Graph networks: GCN (`gcn.py`)
 
