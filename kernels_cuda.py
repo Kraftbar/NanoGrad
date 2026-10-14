@@ -528,6 +528,268 @@ def expand_repeated(x, outer: int, size: int, inner: int) -> DeviceArray:
 # Convolutions, pooling, gathers and scatters (kernels.cu, same section)
 # ---------------------------------------------------------------------------
 
+CONV_TILE, CONV_STEP, CONV_THREADS = 64, 16, 256   # as in kernels.cu
+_CONV_BUSY = 256                  # blocks that keep the GPU busy (conv_kernel_grad splits its sum to reach it)
+
+
+def _conv_inputs(first, *others):
+    """The float inputs on the GPU, in the precision of the first."""
+
+    first = _device(first)
+    return (first,) + tuple(_device(x, first.typecode) for x in others)
+
+
+import weakref                    # (for the cache of inverted index tables below)
+
+_conv_inverses: dict[int, tuple] = {}   # id(table) -> (weak reference to it, {targets: (starts, sources)})
+
+
+def _conv_inverse(index, targets: int) -> tuple[DeviceArray, DeviceArray] | None:
+    """The index table inverted, for scatters done as gathers: entries
+    sources[starts[t] : starts[t + 1]] (ascending) are those with index[e] == t.
+
+    Built on the host, so only for tables whose values are on the host
+    already (index_table keeps them: tables never change), and cached per
+    table; None for indices that live only on the GPU (max-pool winners).
+    """
+
+    if isinstance(index, DeviceArray):
+        if index._host is None:
+            return None
+        host = index._host
+        cached = _conv_inverses.get(id(index))
+        if cached is None or cached[0]() is not index:
+            cached = (weakref.ref(index, lambda _, key=id(index): _conv_inverses.pop(key, None)), {})
+            _conv_inverses[id(index)] = cached
+        inverses = cached[1]
+    else:
+        host, inverses = index, {}
+    if targets not in inverses:
+        counts = [0] * (targets + 1)
+        for t in host:
+            counts[t + 1] += 1
+        for t in range(targets):
+            counts[t + 1] += counts[t]
+        sources = sorted(range(len(host)), key=host.__getitem__)   # stable: ascending within a target
+        inverses[targets] = (index_table(counts), index_table(sources))
+    return inverses[targets]
+
+
+def _conv_product_grid(rows: int, cols: int, depth: int) -> tuple[int, int, int]:
+    """One block per 64 x 64 tile of a rows x cols product, for each of ``depth`` images."""
+
+    return blocks(cols, CONV_TILE), blocks(rows, CONV_TILE), depth
+
+
+def conv_forward(image, index, kernel, batches: int, image_size: int,
+                 filters: int, patch_size: int, positions: int) -> DeviceArray:
+    image, kernel = _conv_inputs(image, kernel)
+    index = _indices(index)
+    out = DeviceArray.empty(batches * filters * positions, image.typecode)
+    if out.count:
+        launch("conv_forward", image.typecode, _conv_product_grid(filters, positions, batches), CONV_THREADS,
+               image, index, kernel, out, batches, image_size, filters, patch_size, positions)
+    return out
+
+
+def conv_kernel_grad(image, index, grad, batches: int, image_size: int,
+                     filters: int, patch_size: int, positions: int) -> DeviceArray:
+    image, grad = _conv_inputs(image, grad)
+    index = _indices(index)
+    code, count = image.typecode, filters * patch_size
+    dkernel = zeros(count, code)
+    if not count or not batches * positions:
+        return dkernel
+    # Split the sum over (image, position) into enough slices to fill the GPU:
+    # runs of whole images when there are many, else parts of each image.
+    grid = _conv_product_grid(filters, patch_size, 1)
+    wanted = max(1, _CONV_BUSY // (grid[0] * grid[1]))
+    if wanted <= batches:
+        images_per_slice, slices_per_image, chunk = -(-batches // wanted), 1, positions
+        slices = -(-batches // images_per_slice)
+    else:
+        parts = min(-(-wanted // batches), blocks(positions, CONV_STEP))
+        chunk = blocks(-(-positions // parts), CONV_STEP) * CONV_STEP
+        images_per_slice, slices_per_image = 1, -(-positions // chunk)
+        slices = batches * slices_per_image
+    partial = dkernel if slices == 1 else DeviceArray.empty(slices * count, code)
+    launch("conv_kernel_grad", code, grid[:2] + (slices,), CONV_THREADS, image, index, grad, partial,
+           batches, image_size, filters, patch_size, positions, images_per_slice, slices_per_image, chunk)
+    if slices > 1:
+        launch("conv_sum_slices", code, blocks(count), BLOCK, partial, dkernel, slices, count)
+    return dkernel
+
+
+def conv_input_grad(grad, kernel, index, batches: int, image_size: int,
+                    filters: int, patch_size: int, positions: int) -> DeviceArray:
+    grad, kernel = _conv_inputs(grad, kernel)
+    index = _indices(index)
+    image_grad = zeros(batches * image_size, grad.typecode)
+    if image_grad.count and positions and patch_size:
+        launch("conv_input_grad", grad.typecode, _conv_product_grid(positions, patch_size, batches), CONV_THREADS,
+               grad, kernel, index, image_grad, batches, image_size, filters, patch_size, positions)
+    return image_grad
+
+
+def conv_direct(image, kernel, batches: int, channels: int, height: int, width: int,
+                filters: int, kernel_rows: int, kernel_cols: int) -> DeviceArray:
+    image, kernel = _conv_inputs(image, kernel)
+    out = DeviceArray.empty(batches * filters * (height - kernel_rows + 1) * (width - kernel_cols + 1), image.typecode)
+    if out.count:
+        launch("conv_direct", image.typecode, blocks(out.count), BLOCK, image, kernel, out, batches,
+               channels, height, width, filters, kernel_rows, kernel_cols)
+    return out
+
+
+def pad_planes(x, planes: int, rows: int, cols: int, pad_rows: int, pad_cols: int) -> DeviceArray:
+    x = _device(x)
+    out = DeviceArray.empty(planes * (rows + 2 * pad_rows) * (cols + 2 * pad_cols), x.typecode)
+    if out.count:
+        launch("pad_planes", x.typecode, blocks(out.count), BLOCK, x, out, planes, rows, cols, pad_rows, pad_cols)
+    return out
+
+
+def crop_planes(padded, planes: int, rows: int, cols: int, pad_rows: int, pad_cols: int) -> DeviceArray:
+    padded = _device(padded)
+    out = DeviceArray.empty(planes * rows * cols, padded.typecode)
+    if out.count:
+        launch("crop_planes", padded.typecode, blocks(out.count), BLOCK, padded, out,
+               planes, rows, cols, pad_rows, pad_cols)
+    return out
+
+
+def gather_indexed(image, index, batches: int, image_size: int) -> DeviceArray:
+    image, index = _device(image), _indices(index)
+    out = DeviceArray.empty(batches * index.count, image.typecode)
+    if out.count:
+        launch("gather_indexed", image.typecode, blocks(out.count), BLOCK, image, index, out,
+               batches, image_size, index.count)
+    return out
+
+
+def scatter_add_indexed(grad, index, batches: int, image_size: int, into: DeviceArray | None = None) -> DeviceArray:
+    if into is not None and (not isinstance(into, DeviceArray) or into.typecode != typecode):
+        raise TypeError("scatter_add_indexed(into=...) needs a buffer from zeros() in the current precision")
+    grad = _device(grad, into.typecode if into is not None else None)
+    image_grad = zeros(batches * image_size, grad.typecode) if into is None else into
+    count = len(index)
+    if not batches * count:
+        return image_grad
+    inverse = _conv_inverse(index, image_size)
+    if inverse is not None:                       # a gather: reproducible
+        launch("scatter_add_indexed", grad.typecode, blocks(batches * image_size), BLOCK, grad, *inverse,
+               image_grad, batches, image_size, count)
+    else:                                         # atomics: the indices are only on the GPU
+        launch("scatter_add_indexed_atomic", grad.typecode, blocks(batches * count), BLOCK, grad, _indices(index),
+               image_grad, batches, image_size, count)
+    image_grad.changed()
+    return image_grad
+
+
+def depthwise_forward(image, index, kernel, batches: int, channels: int, channel_size: int,
+                      q_size: int) -> DeviceArray:
+    image, kernel = _conv_inputs(image, kernel)
+    index = _indices(index)
+    positions = index.count // q_size
+    out = DeviceArray.empty(batches * channels * positions, image.typecode)
+    if out.count:
+        launch("depthwise_forward", image.typecode, blocks(out.count), BLOCK, image, index, kernel, out,
+               batches, channels, channel_size, positions, q_size)
+    return out
+
+
+def depthwise_backward(image, index, kernel, grad, batches: int, channels: int, channel_size: int,
+                       q_size: int) -> tuple[DeviceArray, DeviceArray]:
+    image, kernel, grad = _conv_inputs(image, kernel, grad)
+    inverse = _conv_inverse(index, channel_size) or _conv_inverse(list(index), channel_size)
+    index = _indices(index)
+    code, positions = image.typecode, index.count // q_size
+    dkernel = DeviceArray.empty(channels * q_size, code)
+    dimage = DeviceArray.empty(batches * channels * channel_size, code)
+    sizes = (batches, channels, channel_size, positions, q_size)
+    if dkernel.count:
+        launch("depthwise_kernel_grad", code, dkernel.count, CONV_THREADS, image, index, grad, dkernel, *sizes)
+    if dimage.count:
+        launch("depthwise_image_grad", code, blocks(dimage.count), BLOCK, *inverse, kernel, grad, dimage, *sizes)
+    return dkernel, dimage
+
+
+def csr_matmul(row_start, cols, values, dense, rows: int, n: int) -> DeviceArray:
+    values, dense = _conv_inputs(values, dense)
+    row_start, cols = _indices(row_start), _indices(cols)
+    out = DeviceArray.empty(rows * n, values.typecode)
+    if out.count:
+        launch("csr_matmul", values.typecode, blocks(out.count), BLOCK, row_start, cols, values, dense, out, rows, n)
+    return out
+
+
+def gather_rows(table, ids, width: int) -> DeviceArray:
+    table, ids = _device(table), _indices(ids)
+    out = DeviceArray.empty(ids.count * width, table.typecode)
+    if out.count:
+        launch("gather_rows", table.typecode, blocks(out.count), BLOCK, table, ids, out, ids.count, width)
+    return out
+
+
+def scatter_add_rows(grad, ids, width: int, rows: int, into: DeviceArray | None = None) -> DeviceArray:
+    if into is not None and (not isinstance(into, DeviceArray) or into.typecode != typecode
+                             or into.count != rows * width):
+        raise TypeError("scatter_add_rows(into=...) needs a table in the current precision")
+    grad, ids = _device(grad, into.typecode if into is not None else None), _indices(ids)
+    table_grad = zeros(rows * width, grad.typecode) if into is None else into
+    if ids.count * width:
+        launch("scatter_add_rows", grad.typecode, blocks(ids.count * width), BLOCK, grad, ids, table_grad,
+               ids.count, width)
+        table_grad.changed()
+    return table_grad
+
+
+def window_mean(image, index, planes: int, plane_size: int, window_size: int) -> DeviceArray:
+    image, index = _device(image), _indices(index)
+    windows = index.count // window_size
+    out = DeviceArray.empty(planes * windows, image.typecode)
+    if out.count:
+        launch("window_mean", image.typecode, blocks(out.count), BLOCK, image, index, out,
+               planes, plane_size, windows, window_size)
+    return out
+
+
+def window_mean_backward(grad, index, planes: int, plane_size: int, window_size: int) -> DeviceArray:
+    grad = _device(grad)
+    inverse = _conv_inverse(index, plane_size) or _conv_inverse(list(index), plane_size)
+    windows = len(index) // window_size
+    image_grad = DeviceArray.empty(planes * plane_size, grad.typecode)
+    if image_grad.count:
+        launch("window_mean_backward", grad.typecode, blocks(image_grad.count), BLOCK, grad, *inverse, image_grad,
+               planes, plane_size, windows, window_size)
+    return image_grad
+
+
+def window_max(image, index, planes: int, plane_size: int, window_size: int) -> tuple[DeviceArray, DeviceArray]:
+    """The maxima and, as int64 offsets on the GPU, where they were (max_pool2d's
+    backward pass hands them to scatter_add_indexed without a copy)."""
+
+    image, index = _device(image), _indices(index)
+    windows = index.count // window_size
+    out = DeviceArray.empty(planes * windows, image.typecode)
+    argmax = DeviceArray.empty(planes * windows, "l")
+    if out.count:
+        launch("window_max", image.typecode, blocks(out.count), BLOCK, image, index, out, argmax,
+               planes, plane_size, windows, window_size)
+    return out, argmax
+
+
+def sum_repeated(x, outer: int, size: int, inner: int) -> DeviceArray:
+    if len(x) != outer * size * inner:
+        raise ValueError("sum_repeated needs outer * size * inner values")
+    x = _device(x)
+    out = DeviceArray.empty(size, x.typecode)
+    if inner == 1 and size >= BLOCK:              # many sums: one thread each
+        launch("sum_repeated_rows", x.typecode, blocks(size), BLOCK, x, out, outer, size)
+    elif size:                                    # few, long sums: one block each
+        launch("sum_repeated", x.typecode, size, CONV_THREADS, x, out, outer, size, inner)
+    return out
+
 # (end of conv)
 
 
