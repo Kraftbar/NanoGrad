@@ -2,6 +2,7 @@ import importlib.util
 import random
 import unittest
 
+import kernels
 from gradcheck import max_gradient_error
 from rnn import GRU, LSTM, CharLSTMModel
 from tensor import Tensor
@@ -147,6 +148,7 @@ class SequenceTests(unittest.TestCase):
             results.append(([list(t.data) for t in (out, h, c)], [list(t.grad) for t in tensors]))
         return results
 
+    @unittest.skipIf(kernels.BACKEND == "cuda", "bit identity with the fused C kernels holds on the CPU backends only")
     def test_same_bits_as_the_per_step_ops(self) -> None:
         import kernels
 

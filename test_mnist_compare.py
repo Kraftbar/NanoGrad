@@ -2,6 +2,7 @@ import importlib.util
 import random
 import unittest
 
+import kernels
 from mnist_compare import IMAGE_SIZE, augmented_pixels, NanoGradRunner, TorchRunner, build_nanograd, epoch_batches
 
 
@@ -12,6 +13,7 @@ class EpochBatchTests(unittest.TestCase):
         self.assertEqual(sorted(i for batch in batches for i in batch), list(range(10)))
 
 
+@unittest.skipIf(kernels.BACKEND == "cuda", "worker processes are forked, and CUDA does not survive a fork")
 class WorkerTests(unittest.TestCase):
     def test_workers_give_the_single_process_step(self) -> None:
         rng = random.Random(5)

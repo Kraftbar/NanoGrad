@@ -1,6 +1,7 @@
 import random
 import unittest
 
+import kernels
 from datasets import TinySequenceDataset
 from language import CharTransformerModel
 from parallel import DataParallel, _split, sequence_loss, target_count
@@ -18,6 +19,7 @@ def random_batch(rows: int, seed: int = 0):
     return xs, ys
 
 
+@unittest.skipIf(kernels.BACKEND == "cuda", "worker processes are forked, and CUDA does not survive a fork")
 class DataParallelTests(unittest.TestCase):
     def test_split_is_contiguous_and_balanced(self) -> None:
         shards = _split(list(range(10)), list(range(10)), 4)

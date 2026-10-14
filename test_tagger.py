@@ -6,6 +6,7 @@ import types
 import unittest
 from pathlib import Path
 
+import kernels
 import tagger
 from tensor import Tensor
 
@@ -159,6 +160,7 @@ class ForwardAlgorithmTests(unittest.TestCase):
             results.append((list(log_z.data), [list(t.grad) for t in tensors]))
         return results
 
+    @unittest.skipIf(kernels.BACKEND == "cuda", "bit identity with the fused C kernels holds on the CPU backends only")
     def test_same_bits_as_the_per_word_ops(self) -> None:
         import kernels
 
