@@ -542,6 +542,126 @@ def expand_repeated(x, outer: int, size: int, inner: int) -> DeviceArray:
 # Recurrent: the LSTM cell and layer, the CRF (kernels.cu, same section)
 # ---------------------------------------------------------------------------
 
+_LSTM_TILE = 16                   # LSTM_TILE in kernels.cu: the tiled products' blocks are 16 x 16 threads
+
+
+def lstm_memory(gates, c, batch: int, hidden: int) -> DeviceArray:
+    gates = _device(gates)
+    c, out = _device(c, gates.typecode), DeviceArray.empty(batch * hidden, gates.typecode)
+    if batch * hidden:
+        launch("lstm_memory", gates.typecode, blocks(batch * hidden), BLOCK, gates, c, out, batch, hidden)
+    return out
+
+
+def lstm_output(gates, c_new, batch: int, hidden: int) -> DeviceArray:
+    gates = _device(gates)
+    c_new, out = _device(c_new, gates.typecode), DeviceArray.empty(batch * hidden, gates.typecode)
+    if batch * hidden:
+        launch("lstm_output", gates.typecode, blocks(batch * hidden), BLOCK, gates, c_new, out, batch, hidden)
+    return out
+
+
+def _lstm_cell_backward(name: str, gates, state, grad, batch: int, hidden: int) -> tuple[DeviceArray, DeviceArray]:
+    gates = _device(gates)
+    state, grad = _device(state, gates.typecode), _device(grad, gates.typecode)
+    dgates = DeviceArray.empty(batch * 4 * hidden, gates.typecode)     # every value is written
+    dstate = DeviceArray.empty(batch * hidden, gates.typecode)
+    if batch * hidden:
+        launch(name, gates.typecode, blocks(batch * hidden), BLOCK, gates, state, grad, dgates, dstate, batch, hidden)
+    return dgates, dstate
+
+
+def lstm_memory_backward(gates, c, grad, batch: int, hidden: int) -> tuple[DeviceArray, DeviceArray]:
+    return _lstm_cell_backward("lstm_memory_backward", gates, c, grad, batch, hidden)
+
+
+def lstm_output_backward(gates, c_new, grad, batch: int, hidden: int) -> tuple[DeviceArray, DeviceArray]:
+    return _lstm_cell_backward("lstm_output_backward", gates, c_new, grad, batch, hidden)
+
+
+def _lstm_tiles(rows: int, columns: int) -> tuple[int, int]:
+    """The grid for a tiled product with a rows x columns output (x runs along columns)."""
+
+    return blocks(columns, _LSTM_TILE), blocks(rows, _LSTM_TILE)
+
+
+def lstm_sequence(input_gates, weight, h0, c0, batch: int, steps: int, hidden: int) -> tuple[DeviceArray, tuple]:
+    """(packed, saved), as kernels_c's: two launches per time step (see kernels.cu)."""
+
+    input_gates = _device(input_gates)
+    code, state, width = input_gates.typecode, batch * hidden, 4 * hidden
+    weight, h0, c0 = (_device(x, code) for x in (weight, h0, c0))
+    gates = DeviceArray.empty(steps * batch * width, code)
+    cs, hs = DeviceArray.empty((steps + 1) * state, code), DeviceArray.empty((steps + 1) * state, code)
+    packed = DeviceArray.empty(batch * (steps + 1) * hidden, code)
+    _copy(h0, 0, hs, 0, state)
+    _copy(c0, 0, cs, 0, state)
+    if state:
+        for t in range(steps):
+            launch("lstm_step_gates", code, _lstm_tiles(batch, width), (_LSTM_TILE, _LSTM_TILE),
+                   input_gates, weight, hs, gates, t, batch, steps, hidden)
+            launch("lstm_step_cell", code, blocks(state), BLOCK, gates, cs, hs, t, batch, hidden)
+        launch("lstm_pack", code, blocks(packed.count), BLOCK, cs, hs, packed, batch, steps, hidden)
+    return packed, (gates, cs, hs)
+
+
+def lstm_sequence_backward(weight, saved: tuple, grad, batch: int, steps: int, hidden: int) -> tuple[DeviceArray, ...]:
+    """(d input_gates, d weight, d h0, d c0): two launches per time step, then the weight's product."""
+
+    gates, cs, hs = saved
+    code, state, width = gates.typecode, batch * hidden, 4 * hidden
+    weight, grad = _device(weight, code), _device(grad, code)
+    dinput = DeviceArray.empty(batch * steps * width, code)            # every value is written
+    dweight = zeros(width * hidden, code)
+    dh, dh0, dc0 = DeviceArray.empty(state, code), DeviceArray.empty(state, code), DeviceArray.empty(state, code)
+    if not state:
+        return dinput, dweight, dh0, dc0
+    launch("lstm_grad_start", code, blocks(state), BLOCK, grad, dh, dc0, batch, steps, hidden)   # dc0 is the carry
+    for t in range(steps - 1, -1, -1):
+        launch("lstm_step_cell_backward", code, blocks(state), BLOCK, gates, cs, dh, dc0, dinput, t, batch, steps, hidden)
+        launch("lstm_step_recurrent", code, _lstm_tiles(batch, hidden), (_LSTM_TILE, _LSTM_TILE),
+               dinput, weight, grad, dh if t > 0 else dh0, t, batch, steps, hidden)
+    launch("lstm_weight_grad", code, _lstm_tiles(width, hidden), (_LSTM_TILE, _LSTM_TILE),
+           dinput, hs, dweight, batch, steps, hidden)
+    return dinput, dweight, dh0, dc0
+
+
+def _crf_block(tags: int) -> int:
+    """Threads for one sentence's block: one per tag, in whole warps (at most BLOCK; more tags loop)."""
+
+    return min(BLOCK, (tags + 31) // 32 * 32)
+
+
+def crf_forward(e, start, weights, batch: int, steps: int, tags: int) -> tuple[DeviceArray, tuple]:
+    """(alpha, saved), as kernels_c's: one block per sentence, all words in one launch."""
+
+    e = _device(e)
+    code, n = e.typecode, batch * tags
+    start, weights = _device(start, code), _device(weights, code)
+    ps, qs = DeviceArray.empty((steps - 1) * n, code), DeviceArray.empty((steps - 1) * n, code)
+    alpha = DeviceArray.empty(n, code)
+    if n:
+        launch("crf_forward", code, batch, _crf_block(tags), e, start, weights, ps, qs, alpha, batch, steps, tags,
+               shared=2 * tags * _ITEM_SIZE[code])
+    return alpha, (ps, qs)
+
+
+def crf_forward_backward(weights, saved: tuple, grad, batch: int, steps: int, tags: int) -> tuple[DeviceArray, ...]:
+    """(d e, d start, d weights)."""
+
+    ps, qs = saved
+    code, n = ps.typecode, batch * tags
+    weights, grad = _device(weights, code), _device(grad, code)
+    de, dstart, dweights = DeviceArray.empty(batch * steps * tags, code), zeros(tags, code), zeros(tags * tags, code)
+    if not n:
+        return de, dstart, dweights
+    dqs = DeviceArray.empty((steps - 1) * n, code)
+    launch("crf_forward_backward", code, batch, _crf_block(tags), weights, ps, qs, grad, de, dqs, batch, steps, tags,
+           shared=2 * tags * _ITEM_SIZE[code])
+    launch("crf_weights_grad", code, blocks(tags * tags), BLOCK, ps, dqs, dweights, (steps - 1) * batch, tags)
+    launch("crf_start_grad", code, blocks(tags), BLOCK, de, dstart, batch, steps, tags)
+    return de, dstart, dweights
+
 # (end of recurrent)
 
 

@@ -148,6 +148,81 @@ class ElementwiseTests(CudaTestCase):
 
 # Recurrent: the LSTM cell and layer, the CRF.
 
+
+def in_float32(function):
+    """function run with float32 tensors (on whichever backend is active)."""
+
+    def run():
+        kernels.set_default_dtype("float32")
+        try:
+            return function()
+        finally:
+            kernels.set_default_dtype("float64")
+    return run
+
+
+class RecurrentTests(CudaTestCase):
+    # (batch, hidden) pairs: one value, sizes off the 16 x 16 tiles and the 256-thread blocks
+    SHAPES = ((1, 1), (3, 5), (2, 17), (5, 70))
+
+    def test_lstm_cell_kernels_agree(self) -> None:
+        for batch, hidden in self.SHAPES:
+            gates, state = values(batch * 4 * hidden, 1, -6, 6), values(batch * hidden, 2, -3, 3)
+            grad = values(batch * hidden, 3)
+            sizes = dict(batch=batch, hidden=hidden)
+            with self.subTest(batch=batch, hidden=hidden):
+                self.agree(lambda: kernels.lstm_memory(gates, state, **sizes))
+                self.agree(lambda: kernels.lstm_output(gates, state, **sizes))
+                self.agree(lambda: kernels.lstm_memory_backward(gates, state, grad, **sizes))
+                self.agree(lambda: kernels.lstm_output_backward(gates, state, grad, **sizes))
+
+    def lstm_layer(self, batch, steps, hidden):
+        """lstm_sequence forward and backward, as plain lists."""
+
+        width = 4 * hidden
+        input_gates = kernels.storage(values(batch * steps * width, 4, -2, 2))
+        weight = kernels.storage(values(width * hidden, 5, -0.5, 0.5))
+        h0, c0 = kernels.storage(values(batch * hidden, 6)), kernels.storage(values(batch * hidden, 7))
+        grad = kernels.storage(values(batch * (steps + 1) * hidden, 8))
+        sizes = dict(batch=batch, steps=steps, hidden=hidden)
+        packed, saved = kernels.lstm_sequence(input_gates, weight, h0, c0, **sizes)
+        grads = kernels.lstm_sequence_backward(weight, saved, grad, **sizes)
+        return (packed, *saved, *grads)
+
+    def test_lstm_sequence_agrees(self) -> None:
+        for batch, steps, hidden in ((1, 1, 1), (3, 4, 5), (2, 7, 17), (5, 3, 70), (17, 2, 9)):
+            with self.subTest(batch=batch, steps=steps, hidden=hidden):
+                self.agree(lambda: self.lstm_layer(batch, steps, hidden))
+
+    def test_lstm_sequence_in_float32(self) -> None:
+        self.agree(in_float32(lambda: self.lstm_layer(3, 6, 21)), tolerance=1e-4)
+
+    def test_lstm_sequence_keeps_its_state_on_the_gpu(self) -> None:
+        kernels.use_backend("cuda")
+        before = kernels_cuda.syncs
+        result = self.lstm_layer(4, 5, 8)
+        self.assertEqual(kernels_cuda.syncs, before)
+        self.assertTrue(all(isinstance(part, kernels_cuda.DeviceArray) for part in result))
+
+    def crf(self, batch, steps, tags):
+        """crf_forward forward and backward, as plain lists."""
+
+        e = kernels.storage(values(batch * steps * tags, 9, -3, 3))
+        start = kernels.storage(values(tags, 10))
+        weights = kernels.storage(values(tags * tags, 11, 0.1, 3))
+        grad = kernels.storage(values(batch * tags, 12))
+        sizes = dict(batch=batch, steps=steps, tags=tags)
+        alpha, saved = kernels.crf_forward(e, start, weights, **sizes)
+        return (alpha, *saved, *kernels.crf_forward_backward(weights, saved, grad, **sizes))
+
+    def test_crf_agrees(self) -> None:
+        for batch, steps, tags in ((1, 1, 1), (1, 1, 5), (3, 2, 4), (4, 9, 17), (2, 5, 40), (2, 3, 300)):
+            with self.subTest(batch=batch, steps=steps, tags=tags):
+                self.agree(lambda: self.crf(batch, steps, tags))
+
+    def test_crf_in_float32(self) -> None:
+        self.agree(in_float32(lambda: self.crf(3, 8, 17)), tolerance=1e-4)
+
 # (end of recurrent tests)
 
 
