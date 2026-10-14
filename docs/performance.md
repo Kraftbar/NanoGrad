@@ -220,6 +220,6 @@ Adam).
 ## Where The Time Goes Now
 
 See [benchmarks.md](./benchmarks.md#how-the-gap-closed). In short, with the
-C kernels on, most of a GPT step is now matrix products, and NanoGrad's
-plain C loop runs at about 8 GFLOP/s against about 60 for PyTorch's tuned
-BLAS.
+C kernels on, most of a GPT step is now matrix products. The tiled `gemm`
+runs at about 47 GFLOP/s in float64 against PyTorch's 62 on the cloud
+Xeon, and at or above PyTorch on the Ryzen 7 3700X (53 vs 51 on one core).

@@ -151,11 +151,16 @@ weight difference after those steps):
 | FGSM training on MNIST | 99.8 | 106.1 | 0.9x | 1.1e-13 |
 | CNN on spoken digits | 193.9 | 176.0 | 1.1x | 2.4e-13 |
 | DS-CNN keyword spotting | 295.9 | 406.7 | 0.7x | 7.8e-13 |
-| BiLSTM-CRF tagger on UD EWT | 65.1 | 47.3 | 1.4x | 6.5e-13 |
+| BiLSTM-CRF tagger on UD EWT (fused LSTM and CRF; Ryzen, see below) | 25.5 | 26.3 | 1.0x | 5.9e-13 |
 | U-Net on CamVid | 2724.8 | 2541.0 | 1.1x | 1.2e-12 |
 
 (The pure-Python reference path, kept to be read, is 30-300x slower than
 the C kernels on the same ops.)
+
+The tagger row was re-measured on the Ryzen 7 3700X after its LSTM layers
+and CRF became one op each (`rnn.lstm_sequence`, `tagger.crf_forward`).
+On the same machine, the per-step ops took 41-46 ms against PyTorch's
+26 ms (1.6-1.7x); the other rows are from the cloud Xeon.
 
 ### Threads
 
@@ -230,6 +235,18 @@ uses the ideas of every fast BLAS, in about 150 lines:
 - partial tiles at the edges with zero padding, instead of scalar loops
 
 It reaches 40-47 GFLOP/s in float64 and 90-100 in float32 on one core.
+On the Ryzen 7 3700X (Zen 2, AVX2, 2026-10-14), the same code is at or
+above PyTorch 2.14's BLAS, GFLOP/s, best of 7:
+
+| product (m x k x n) | float64, 1 thread | float32, 1 thread | float64, 8 threads | float32, 8 threads |
+| --- | ---: | ---: | ---: | ---: |
+| 1024^3 | 53 vs 51 | 114 vs 97 | 219 vs 180 | 535 vs 451 |
+| 2048 x 512 x 512 | 54 vs 46 | 115 vs 99 | 247 vs 156 | 575 vs 441 |
+| A^T, 512 x 2048 x 512 | 51 vs 47 | 112 vs 97 | 185 vs 151 | 466 vs 434 |
+
+So here the gap is gone. Blocks of A from 16K to 128K numbers were also
+tried: 16K and 32K are 5-10% slower, and 98K and 128K are within the
+noise of 64K, so 64K stays.
 Convolutions use the same micro-kernel without building the patch matrix
 ("implicit GEMM": the panel is packed straight from the image through an
 index table), and softmax uses a vectorizable exp (range reduction plus a

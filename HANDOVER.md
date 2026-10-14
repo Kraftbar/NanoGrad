@@ -86,11 +86,11 @@ command, and each family script's docstring gives its run command.
 
 ## Open items
 
-- **gemm tuning**: float64 reaches about 47 GFLOP/s against PyTorch's 62, and float32
-  95-110 against 125. Several tile and block sizes were tried and rejected (see the git
-  log); what's left has diminishing returns.
+- **gemm tuning**: done. On the cloud Xeon (AVX-512), float64 reaches about 47 GFLOP/s against PyTorch's 62,
+  and float32 95-110 against 125. On the Ryzen 7 3700X (AVX2) it is at or above PyTorch
+  on 1 and 8 threads (docs/benchmarks.md); a sweep of the A block size found nothing better.
 - **Large-vocabulary output layers**: these are the main remaining gap.
-- **The tagger**: its PyTorch speed ratio (1.4x) is limited by many small per-word ops.
+- **The tagger**: done. With the LSTM layers and the CRF as one op each, it runs at PyTorch's speed (25.5 vs 26.3 ms per step).
 - **SLAM / geometry**: parked on purpose.
 
 ## Caveats
