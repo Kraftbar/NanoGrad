@@ -133,6 +133,109 @@ class ElementwiseTests(CudaTestCase):
 
 # Matrix products (gemm).
 
+class GemmTests(CudaTestCase):
+    # Odd sizes around the tiles (32, 64, 128) and the k steps (8, 16),
+    # matrix-vector shapes (the dot-product kernel), and a long k (split-k).
+    SHAPES = ((1, 1, 1), (3, 4, 5), (1, 37, 9), (9, 37, 1), (17, 33, 65), (130, 9, 129), (40, 1500, 3))
+
+    def gemm(self, m, k, n, batches, steps, trans_a, trans_b, initial=False):
+        a, b = values(m * k * batches, m + k), values(k * n * batches, k + n)
+        size = steps[2] * (batches - 1) + m * n if steps[2] else m * n
+        start = values(size, 7) if initial else None
+        return lambda: kernels.gemm(a, b, batches=batches, m=m, k=k, n=n, a_step=steps[0], b_step=steps[1],
+                                    c_step=steps[2], trans_a=trans_a, trans_b=trans_b,
+                                    initial=None if start is None else kernels.storage(start))
+
+    def cases(self):
+        for m, k, n in self.SHAPES:
+            for trans_a in (False, True):
+                for trans_b in (False, True):
+                    for batches, steps in ((1, (0, 0, 0)), (3, (m * k, k * n, m * n)), (2, (0, k * n, m * n + 2)),
+                                           (3, (m * k, 0, 0)), (3, (m * k, k * n, 0))):
+                        yield m, k, n, batches, steps, trans_a, trans_b
+
+    def test_every_layout_and_batch_step_agrees(self) -> None:
+        for case in self.cases():
+            for initial in (False, True):
+                with self.subTest(case=case, initial=initial):
+                    self.agree(self.gemm(*case, initial=initial))
+
+    def test_every_tile_size_agrees(self) -> None:
+        # float64 normally uses only the 32 x 32 tile; force each one in turn.
+        saved = kernels_cuda._GEMM_TILES["d"]
+        try:
+            for edge in (128, 64):
+                kernels_cuda._GEMM_TILES["d"] = (edge,)
+                for m, k, n in ((130, 70, 260), (64, 16, 64), (5, 3000, 7)):
+                    for trans_a in (False, True):
+                        for trans_b in (False, True):
+                            for batches, steps in ((1, (0, 0, 0)), (2, (m * k, k * n, m * n)), (3, (m * k, 0, 0))):
+                                with self.subTest(edge=edge, shape=(m, k, n), layout=(trans_a, trans_b),
+                                                  batches=batches):
+                                    self.agree(self.gemm(m, k, n, batches, steps, trans_a, trans_b, initial=True))
+        finally:
+            kernels_cuda._GEMM_TILES["d"] = saved
+
+    def test_float32_agrees(self) -> None:
+        import kernels_c
+
+        try:
+            kernels_c.set_precision("f")
+            kernels_cuda.set_precision("f")
+            for m, k, n in ((300, 200, 270), (100, 784, 256), (70, 40, 1)):
+                for trans_a in (False, True):
+                    for trans_b in (False, True):
+                        a, b = values(m * k, 1), values(k * n, 2)
+                        args = (1, m, k, n, 0, 0, 0, trans_a, trans_b)
+                        c = list(kernels_c.gemm(array("f", a), array("f", b), *args))
+                        cuda = kernels_cuda.gemm(a, b, *args)
+                        self.assertEqual(cuda.typecode, "f")
+                        self.assertClose(c, list(cuda), tolerance=1e-4)
+        finally:
+            kernels_c.set_precision("d")
+            kernels_cuda.set_precision("d")
+
+    def test_initial_is_consumed_in_place(self) -> None:
+        kernels.use_backend("cuda")
+        start = kernels.storage([1.0, 2.0, 3.0, 4.0])
+        list(start)                                   # a host copy, which the product must drop
+        out = kernels.gemm([1.0, 2.0], [3.0, 4.0], batches=1, m=2, k=1, n=2, a_step=0, b_step=0, c_step=0,
+                           initial=start)
+        self.assertIs(out, start)
+        self.assertEqual(list(out), [4.0, 6.0, 9.0, 12.0])
+        with self.assertRaises(ValueError):
+            kernels.gemm([1.0], [1.0], batches=1, m=1, k=1, n=1, a_step=0, b_step=0, c_step=0,
+                         initial=kernels.storage([0.0, 0.0]))
+
+    def test_matmul_and_linear_agree(self) -> None:
+        from tensor import matmul
+        from tensor_nn import TensorLinear
+
+        cases = [((4,), (4, 3)), ((5, 4), (4,)), ((2, 3, 4), (4, 5)), ((2, 3, 4), (2, 4, 5)), ((3, 4), (2, 4, 5))]
+        for left_shape, right_shape in cases:
+            with self.subTest(left=left_shape, right=right_shape):
+                def run():
+                    left = Tensor(values(_gemm_numel(left_shape), 5), left_shape, requires_grad=True)
+                    right = Tensor(values(_gemm_numel(right_shape), 6), right_shape, requires_grad=True)
+                    out = matmul(left, right)
+                    (out * Tensor(values(out.numel, 7), out.shape)).sum().backward()
+                    return list(out.data), list(left.grad), list(right.grad)
+                self.agree(run)
+
+        def linear():
+            layer = TensorLinear(20, 7, seed=3)
+            x = Tensor(values(6 * 20, 8), (6, 20), requires_grad=True)
+            (layer(x) * Tensor(values(6 * 7, 9), (6, 7))).sum().backward()
+            return tuple(list(t) for t in (x.grad, layer.weight.grad, layer.bias.grad))
+        self.agree(linear)
+
+
+def _gemm_numel(shape):
+    count = 1
+    for size in shape:
+        count *= size
+    return count
+
 # (end of gemm tests)
 
 
