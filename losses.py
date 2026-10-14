@@ -127,13 +127,15 @@ def softmax_cross_entropy(
 
     def _backward() -> None:
         # d(loss)/d(logits) = (softmax - smoothed one_hot(target)) / rows, times the
-        # output's gradient: scale the softmax (one pass, a new array), then fix the targets.
+        # output's gradient: scale the softmax (one pass, a new array), then fix the
+        # targets (one scatter-add of -(1 - smoothing) * factor at each row's target).
         factor = _grad_data(out)[0] / rows
         grad = kernels.scale(probabilities, factor)
-        for row, target in enumerate(classes):
-            grad[row * cols + target] -= (1.0 - label_smoothing) * factor
+        targets = kernels.index_table([row * cols + target for row, target in enumerate(classes)])
+        kernels.scatter_add_indexed(kernels.storage([-(1.0 - label_smoothing) * factor] * rows), targets,
+                                    batches=1, image_size=rows * cols, into=grad)
         if label_smoothing:
-            grad = kernels.add(grad, kernels.storage([-label_smoothing * factor / cols]) * len(grad))
+            grad = kernels.add(grad, kernels.storage([-label_smoothing * factor / cols] * len(grad)))
         _add_grad(logits, grad)
 
     _set_backward(out, _backward)

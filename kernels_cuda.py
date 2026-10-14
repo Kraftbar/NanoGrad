@@ -341,9 +341,12 @@ class DeviceArray:
         return list(self) == list(other)
 
     def __mul__(self, times: int) -> DeviceArray:     # repetition, as for arrays and lists
-        out = DeviceArray.empty(self.count * times, self.typecode)
-        for copy in range(times):
-            _copy(self, 0, out, copy * self.count, self.count)
+        out = DeviceArray.empty(self.count * max(0, times), self.typecode)
+        if out.count and self.typecode in ("d", "f"):
+            launch("repeat_values", self.typecode, blocks(out.count), BLOCK, self, self.count, out, out.count)
+        else:
+            for copy in range(max(0, times)):
+                _copy(self, 0, out, copy * self.count, self.count)
         return out
 
     def __add__(self, other) -> DeviceArray:          # concatenation
@@ -504,6 +507,16 @@ def sigmoid_backward(y, grad) -> DeviceArray:
     return _map("sigmoid_backward", y, grad)
 
 
+def expand_repeated(x, outer: int, size: int, inner: int) -> DeviceArray:
+    x = _device(x)
+    if x.count != size:
+        raise ValueError("expand_repeated needs size values")
+    out = DeviceArray.empty(outer * size * inner, x.typecode)
+    if out.count:
+        launch("expand_repeated", x.typecode, blocks(out.count), BLOCK, x, out, size, inner, out.count)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Matrix products (gemm) (kernels.cu, same section)
 # ---------------------------------------------------------------------------
@@ -547,7 +560,7 @@ KERNELS = (
     "adam_update", "sum_repeated", "sigmoid", "sigmoid_backward", "lstm_memory", "lstm_memory_backward",
     "lstm_output", "lstm_output_backward", "lstm_sequence", "lstm_sequence_backward", "crf_forward",
     "crf_forward_backward", "bce_with_logits_sum", "bce_with_logits_backward", "relu", "relu_backward", "tanh",
-    "tanh_backward", "window_mean", "window_mean_backward", "window_max",
+    "tanh_backward", "window_mean", "window_mean_backward", "window_max", "expand_repeated",
 )
 _LSTM_STEPS = {"lstm_memory", "lstm_output"}          # kernels_c names these through lstm_step(name, ...)
 _fallbacks: set[str] = set()

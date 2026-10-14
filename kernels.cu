@@ -129,6 +129,21 @@ KERNEL sigmoid_backward(const real *y, const real *grad, real *dx, long count)
     if (i < count) dx[i] = grad[i] * y[i] * ((real)1 - y[i]);
 }
 
+/* sum_repeated's forward (a block broadcast): `outer` copies of [each of
+ * the `size` values of x repeated `inner` times], `total` values in all. */
+KERNEL expand_repeated(const real *x, real *out, long size, long inner, long total)
+{
+    long i = thread_index();
+    if (i < total) out[i] = x[(i / inner) % size];
+}
+
+/* `times` copies of x one after another (DeviceArray's x * times, like a list's). */
+KERNEL repeat_values(const real *x, long count, real *out, long total)
+{
+    long i = thread_index();
+    if (i < total) out[i] = x[i % count];
+}
+
 /* ------------------------------------------------------------------------
  * Matrix products (gemm).
  * --------------------------------------------------------------------- */

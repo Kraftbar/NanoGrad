@@ -1601,6 +1601,15 @@ void sum_repeated(const real *x, real *out, long outer, long size, long inner)
     }
 }
 
+/* sum_repeated's forward (a block broadcast): out is `outer` copies of
+ * [each of the `size` values of x repeated `inner` times]. */
+void expand_repeated(const real *x, real *out, long outer, long size, long inner)
+{
+    for (long s = 0; s < size; s++)
+        for (long i = 0; i < inner; i++) out[s * inner + i] = x[s];
+    for (long o = 1; o < outer; o++) memcpy(out + o * size * inner, out, sizeof(real) * size * inner);
+}
+
 /*
  * RMSNorm over each contiguous row of `width` values (LLaMA's LayerNorm):
  *     r = 1 / sqrt(mean(x^2) + eps),   y = x * r * weight

@@ -669,7 +669,7 @@ def _repeated_block(
 
         outer copies of [each source value repeated inner times]
 
-    which list repetition builds at C speed. Other patterns return None.
+    which one kernel (expand_repeated) builds. Other patterns return None.
     """
 
     padded = (1,) * (len(out_shape) - len(source_shape)) + source_shape
@@ -692,12 +692,7 @@ def _expand(tensor: Tensor, out_shape: tuple[int, ...]) -> list[float]:
         outer, inner = block
         if inner == 1:
             return data * outer
-        # Repeat each value inner times by repeating length-1 slices, which
-        # works at C speed for lists and arrays alike.
-        repeated = data[:0]
-        for index in range(len(data)):
-            repeated += data[index : index + 1] * inner
-        return repeated * outer
+        return kernels.expand_repeated(data, outer=outer, size=len(data), inner=inner)
     table = _broadcast_index_table(out_shape, tensor.shape, kernels.BACKEND)
     return kernels.gather_indexed(data, table, batches=1, image_size=len(data))
 

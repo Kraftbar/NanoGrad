@@ -477,6 +477,13 @@ def sum_repeated(x: list[float], *, outer: int, size: int, inner: int) -> list[f
     return kernel(x, outer, size, inner)
 
 
+def expand_repeated(x: list[float], *, outer: int, size: int, inner: int) -> list[float]:
+    """A block broadcast, ``sum_repeated``'s forward: ``outer`` copies of
+    [each of the ``size`` values repeated ``inner`` times]."""
+
+    return _kernels().expand_repeated(x, outer, size, inner)
+
+
 def sigmoid(x: list[float]) -> list[float]:
     return _kernels().sigmoid(x)
 

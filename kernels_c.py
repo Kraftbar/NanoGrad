@@ -641,6 +641,14 @@ def sum_repeated(x: list[float], outer: int, size: int, inner: int) -> array:
     return out
 
 
+def expand_repeated(x: list[float], outer: int, size: int, inner: int) -> array:
+    if len(x) != size:
+        raise ValueError("expand_repeated needs size values")
+    x_buffer, block = _reals(x), zeros(size * inner)
+    library.expand_repeated(_buffer(x_buffer), _buffer(block), 1, size, inner)
+    return block * outer               # array repetition copies the block without zeroing first
+
+
 def sigmoid(x: list[float]) -> array:
     x_buffer, y = _reals(x), zeros(len(x))
     library.sigmoid_forward(_buffer(x_buffer), _buffer(y), len(x))

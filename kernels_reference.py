@@ -504,6 +504,11 @@ def sum_repeated(x: list[float], outer: int, size: int, inner: int) -> list[floa
     ]
 
 
+def expand_repeated(x: list[float], outer: int, size: int, inner: int) -> list[float]:
+    # sum_repeated's forward: outer copies of [each of the size values repeated inner times].
+    return [value for value in x for _ in range(inner)] * outer
+
+
 def _sigmoid1(x: float) -> float:
     if x >= 0.0:
         return 1.0 / (1.0 + math.exp(-x))

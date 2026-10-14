@@ -124,6 +124,12 @@ class ElementwiseTests(CudaTestCase):
             with self.subTest(kernel=name):
                 self.agree(lambda: getattr(kernels, name)(*args))
 
+    def test_expand_repeated_agrees(self) -> None:
+        x = values(5, 6)
+        for outer, inner in ((1, 1), (3, 1), (2, 7), (4, 300)):
+            with self.subTest(outer=outer, inner=inner):
+                self.agree(lambda: kernels.expand_repeated(x, outer=outer, size=5, inner=inner))
+
 
 # Matrix products (gemm).
 
