@@ -210,13 +210,9 @@ def _global_grad_scale(
     if max_grad_norm is None:
         return 1.0
 
-    grad_norm_sq = 0.0
-    for parameter in parameters:
-        if parameter.grad is None:
-            continue
-        grad = parameter.grad
-        values = grad.coalesced().values if isinstance(grad, RowGrad) else grad
-        grad_norm_sq += kernels.sum_of_squares(values)
+    grads = [parameter.grad for parameter in parameters if parameter.grad is not None]
+    grad_norm_sq = kernels.total_sum_of_squares(
+        [grad.coalesced().values if isinstance(grad, RowGrad) else grad for grad in grads])
 
     # PyTorch's clip_grad_norm_ rule (with its 1e-6), so runs can be compared.
     return min(1.0, max_grad_norm / (math.sqrt(grad_norm_sq) + 1e-6))

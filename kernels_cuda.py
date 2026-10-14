@@ -960,7 +960,26 @@ def _total(name: str, x: DeviceArray, *arrays) -> float:
     count = min(_REDUCE_BLOCKS, blocks(x.count))
     partial, total = DeviceArray.empty(count, "d"), DeviceArray.empty(1, "d")
     launch(name, x.typecode, count, BLOCK, x, *arrays, partial, x.count)
-    launch("rows_sum_partials", x.typecode, 1, BLOCK, partial, total, count)
+    launch("rows_sum_partials", x.typecode, 1, BLOCK, partial, total, 0, count)
+    return total.host()[0]
+
+
+def total_sum_of_squares(arrays) -> float:
+    """sum_of_squares over several arrays, with one copy back to the host for
+    all of them: each array's sum goes into its own slot of one buffer, on the
+    GPU, and the slots are added up there too."""
+
+    arrays = [_device(x) for x in arrays if len(x)]
+    if not arrays:
+        return 0.0
+    totals = DeviceArray.empty(len(arrays), "d")
+    for slot, x in enumerate(arrays):
+        count = min(_REDUCE_BLOCKS, blocks(x.count))
+        partial = DeviceArray.empty(count, "d")
+        launch("sum_of_squares", x.typecode, count, BLOCK, x, partial, x.count)
+        launch("rows_sum_partials", x.typecode, 1, BLOCK, partial, totals, slot, count)
+    total = DeviceArray.empty(1, "d")
+    launch("rows_sum_partials", arrays[0].typecode, 1, BLOCK, totals, total, 0, len(arrays))
     return total.host()[0]
 
 
@@ -1262,6 +1281,7 @@ KERNELS = (
     "lstm_output", "lstm_output_backward", "lstm_sequence", "lstm_sequence_backward", "crf_forward",
     "crf_forward_backward", "bce_with_logits_sum", "bce_with_logits_backward", "relu", "relu_backward", "tanh",
     "tanh_backward", "window_mean", "window_mean_backward", "window_max", "expand_repeated",
+    "total_sum_of_squares",
 )
 _LSTM_STEPS = {"lstm_memory", "lstm_output"}          # kernels_c names these through lstm_step(name, ...)
 _fallbacks: set[str] = set()

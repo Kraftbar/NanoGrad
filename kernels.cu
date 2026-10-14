@@ -1004,12 +1004,12 @@ KERNEL rows_column_finish(const double *partial, real *out, long chunks, long wi
  * number of threads launched, ...) into partial[block], and then one block
  * adds up the partials (this kernel).
  */
-KERNEL rows_sum_partials(const double *partial, double *total, long count)
+KERNEL rows_sum_partials(const double *partial, double *total, long slot, long count)
 {
     double sum = 0.0;
     for (long i = threadIdx.x; i < count; i += blockDim.x) sum += partial[i];
     sum = rows_sum(sum);
-    if (threadIdx.x == 0) total[0] = sum;
+    if (threadIdx.x == 0) total[slot] = sum;      /* slot: several sums can share one buffer */
 }
 
 /* GELU (exact erf form), one thread per value:  y = x Phi(x),  cdf = Phi(x),

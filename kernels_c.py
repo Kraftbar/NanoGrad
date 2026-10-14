@@ -633,6 +633,13 @@ def adam_update(w, grad, m, v, *hyperparameters) -> tuple[array, array, array]:
     return new_w, buffers[2], buffers[3]
 
 
+def total_sum_of_squares(arrays) -> float:
+    total = 0.0
+    for x in arrays:
+        total += sum_of_squares(x)
+    return total
+
+
 def sum_repeated(x: list[float], outer: int, size: int, inner: int) -> array:
     if len(x) != outer * size * inner:
         raise ValueError("sum_repeated needs outer * size * inner values")

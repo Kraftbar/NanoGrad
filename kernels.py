@@ -458,6 +458,13 @@ def sum_of_squares(x: list[float]) -> float:
     return _kernels().sum_of_squares(x)
 
 
+def total_sum_of_squares(arrays: Sequence[list[float]]) -> float:
+    """``sum_of_squares`` added up over several arrays (a global gradient norm),
+    in one call: on the GPU that is one wait for the result instead of one each."""
+
+    return _kernels().total_sum_of_squares(arrays)
+
+
 def adam_update(
     w: list[float], grad: list[float], m: list[float], v: list[float], *,
     grad_scale: float, beta1: float, beta2: float, decay: float,

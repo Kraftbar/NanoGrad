@@ -494,6 +494,13 @@ def adam_update(
     return new_w, m, v
 
 
+def total_sum_of_squares(arrays) -> float:
+    total = 0.0
+    for x in arrays:
+        total += sum_of_squares(x)
+    return total
+
+
 def sum_repeated(x: list[float], outer: int, size: int, inner: int) -> list[float]:
     # Source value s appears at positions (o * size + s) * inner + i.
     if inner == 1:

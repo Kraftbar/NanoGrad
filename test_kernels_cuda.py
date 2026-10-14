@@ -124,6 +124,15 @@ class ElementwiseTests(CudaTestCase):
             with self.subTest(kernel=name):
                 self.agree(lambda: getattr(kernels, name)(*args))
 
+    def test_total_sum_of_squares_agrees_with_one_host_copy(self) -> None:
+        arrays = [values(5, 41), values(1, 42), [], values(70000, 43)]
+        self.agree(lambda: kernels.total_sum_of_squares(arrays))
+        kernels.use_backend("cuda")
+        stored = [kernels.storage(a) for a in arrays]
+        before = kernels_cuda.syncs
+        kernels.total_sum_of_squares(stored)
+        self.assertEqual(kernels_cuda.syncs, before + 1)
+
     def test_expand_repeated_agrees(self) -> None:
         x = values(5, 6)
         for outer, inner in ((1, 1), (3, 1), (2, 7), (4, 300)):

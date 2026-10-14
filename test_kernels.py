@@ -310,6 +310,12 @@ class KernelBackendTests(unittest.TestCase):
             for left, right in zip(python, c_out):
                 self.assertListsClose(left, right)
 
+    def test_total_sum_of_squares_adds_up_every_array(self) -> None:
+        arrays = [values(5, 41), values(1, 42), [], values(300, 43)]
+        python, c = self.run_both(lambda: kernels.total_sum_of_squares(arrays))
+        self.assertAlmostEqual(python, c, places=10)
+        self.assertAlmostEqual(c, sum(v * v for a in arrays for v in a), places=10)
+
     def test_add_scaled_and_sum_of_squares_agree(self) -> None:
         x, y = values(50, 41), values(50, 42)
         python, c = self.run_both(lambda: kernels.add_scaled(x, y, -0.3))
