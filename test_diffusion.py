@@ -91,6 +91,25 @@ class SamplerTests(unittest.TestCase):
         for value, expected in zip(samples, target):
             self.assertAlmostEqual(value, expected, places=9)
 
+    def test_ddpm_posterior_mean_matches_the_noise_form_without_clipping(self) -> None:
+        # Inside the data range the clip does nothing, so the x0 / posterior
+        # mean form must give the same samples as the eps form.
+        # The oracle's noise estimate always implies the same in-range x0.
+        target = [0.5, -0.25, 0.75, 0.0]
+
+        class Oracle:
+            def __call__(self, images: Tensor, steps: list[int]) -> Tensor:
+                a = process.alpha_bars[steps[0]]
+                return Tensor([(x - a ** 0.5 * x0) / (1 - a) ** 0.5 for x, x0 in zip(images.data, target)],
+                              images.shape)
+
+        process = Diffusion(TinyUNet(width=4, time_width=8), steps=5, beta_start=0.1, beta_end=0.2)
+        process.model = Oracle()
+        clipped = process.sample((1, 1, 2, 2), random.Random(3))
+        plain = process.sample((1, 1, 2, 2), random.Random(3), clip=False)
+        for a, b in zip(clipped, plain):
+            self.assertAlmostEqual(a, b, places=12)
+
     def test_ddim_stays_bounded_when_the_clip_is_active(self) -> None:
         # A model whose noise estimate does not match x (here eps = 1e6 x)
         # keeps the x0 clip active. Re-noising with that eps made x grow

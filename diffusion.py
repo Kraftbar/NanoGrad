@@ -143,8 +143,21 @@ class Diffusion:
         error = predicted - Tensor(noise, shape)
         return (error * error).mean()
 
-    def sample(self, shape, rng: random.Random) -> list[float]:
-        """Generate images by denoising pure noise, from step T - 1 down to 0."""
+    def sample(self, shape, rng: random.Random, *, clip: bool = True) -> list[float]:
+        """Generate images by denoising pure noise, from step T - 1 down to 0.
+
+        With ``clip`` (as in Ho et al.'s released code) each step first
+        predicts the clean image x0 = (x_t - sqrt(1 - alpha_bar_t) eps) /
+        sqrt(alpha_bar_t), clips it to [-1, 1], and steps to the mean of
+        q(x_{t-1} | x_t, x0),
+
+            sqrt(alpha_bar_{t-1}) beta_t / (1 - alpha_bar_t) x0
+              + sqrt(1 - beta_t) (1 - alpha_bar_{t-1}) / (1 - alpha_bar_t) x_t,
+
+        which without the clip is the same as the formula in the module
+        docstring. Fresh noise of variance beta_t is added on every step but
+        the last.
+        """
 
         from tensor import no_grad
 
@@ -152,9 +165,17 @@ class Diffusion:
         with no_grad():
             for step in reversed(range(self.steps)):
                 beta, alpha_bar = self.betas[step], self.alpha_bars[step]
+                previous = self.alpha_bars[step - 1] if step > 0 else 1.0
                 predicted = self.model(Tensor(x, shape), [step] * shape[0]).data
-                scale = beta / math.sqrt(1.0 - alpha_bar)
-                x = [(value - scale * eps) / math.sqrt(1.0 - beta) for value, eps in zip(x, predicted)]
+                if clip:
+                    a, b = math.sqrt(alpha_bar), math.sqrt(1.0 - alpha_bar)
+                    clean_weight = math.sqrt(previous) * beta / (1.0 - alpha_bar)
+                    x_weight = math.sqrt(1.0 - beta) * (1.0 - previous) / (1.0 - alpha_bar)
+                    x = [clean_weight * min(1.0, max(-1.0, (value - b * eps) / a)) + x_weight * value
+                         for value, eps in zip(x, predicted)]
+                else:
+                    scale = beta / math.sqrt(1.0 - alpha_bar)
+                    x = [(value - scale * eps) / math.sqrt(1.0 - beta) for value, eps in zip(x, predicted)]
                 if step > 0:
                     x = [value + math.sqrt(beta) * rng.gauss(0.0, 1.0) for value in x]
         return x
