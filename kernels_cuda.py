@@ -27,6 +27,7 @@ This file is plumbing: the math is in ``kernels.cu`` and, readably, in
 from __future__ import annotations
 
 import ctypes
+import gc
 import glob
 import hashlib
 import os
@@ -235,7 +236,8 @@ def _allocate(size: int) -> int:
         return kept.pop()
     pointer = ctypes.c_uint64()
     result = _driver.cuMemAlloc_v2(ctypes.byref(pointer), size)
-    if result == 2:                                   # out of memory: give the kept blocks back, retry
+    if result == 2:                                   # out of memory: free what is garbage, retry
+        gc.collect()                                  # (autograd graphs are cycles: dead tensors wait for this)
         release_memory()
         result = _driver.cuMemAlloc_v2(ctypes.byref(pointer), size)
     _check(result, f"cuMemAlloc({size})")
