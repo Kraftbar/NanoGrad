@@ -51,11 +51,16 @@ class DiffusionTests(unittest.TestCase):
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "PyTorch is not installed")
     def test_unet_matches_pytorch(self) -> None:
+        self.check_unet_against_pytorch(TinyUNet(width=4, time_width=8, seed=2))
+
+    def test_unet_with_group_norm_and_attention_matches_pytorch(self) -> None:
+        self.check_unet_against_pytorch(TinyUNet(width=4, time_width=8, groups=2, attention=True, seed=2))
+
+    def check_unet_against_pytorch(self, model: TinyUNet) -> None:
         import torch
 
         from torch_twin import TorchTwin
 
-        model = TinyUNet(width=4, time_width=8, seed=2)
         twin = TorchTwin(model)
         rng = random.Random(3)
         pixels = [rng.uniform(-1.0, 1.0) for _ in range(2 * 784)]

@@ -495,6 +495,36 @@ class TensorLayerNorm(TensorModule):
         self.bias.data = _state_data(state, "bias", self.bias.shape)
 
 
+class TensorGroupNorm(TensorModule):
+    """Group normalization (Wu and He, 2018) of (batch, channels, ...) inputs:
+    the channels are split into ``groups``, each image's group is normalized
+    to zero mean and unit variance over its channels and positions, then
+    every channel gets its own scale and shift. It is a layer norm over the
+    rows of a (batch * groups, rest) view, so it reuses that fused kernel."""
+
+    def __init__(self, groups: int, channels: int, *, eps: float = 1e-5) -> None:
+        if groups <= 0 or channels % groups:
+            raise ValueError("TensorGroupNorm needs a positive group count that divides channels")
+        self.groups, self.channels, self.eps = groups, channels, eps
+        self.weight = Tensor([1.0] * channels, (channels,), requires_grad=True)
+        self.bias = Tensor.zeros((channels,), requires_grad=True)
+        self._unit: dict[int, tuple[Tensor, Tensor]] = {}
+
+    def __call__(self, inputs: Tensor) -> Tensor:
+        if inputs.shape[1] != self.channels:
+            raise ValueError("input channels must match TensorGroupNorm")
+        width = inputs.numel // (inputs.shape[0] * self.groups)
+        if width not in self._unit:                 # a plain normalization: unit scale, zero shift, no gradient
+            self._unit[width] = (Tensor([1.0] * width, (width,)), Tensor.zeros((width,)))
+        rows = inputs.reshape((inputs.shape[0] * self.groups, width))
+        normed = layer_norm(rows, *self._unit[width], eps=self.eps).reshape(inputs.shape)
+        per_channel = (1, self.channels) + (1,) * (len(inputs.shape) - 2)
+        return normed * self.weight.reshape(per_channel) + self.bias.reshape(per_channel)
+
+    def parameters(self) -> list[Tensor]:
+        return [self.weight, self.bias]
+
+
 class TensorMLP(TensorModule):
     """A compact multilayer perceptron for tensor experiments."""
 

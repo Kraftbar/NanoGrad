@@ -3,6 +3,7 @@ import unittest
 import math
 from pathlib import Path
 
+import kernels
 from tensor import Tensor, avg_pool2d
 from tensor_nn import (
     TensorConv2D,
@@ -928,6 +929,35 @@ class TensorNNTests(unittest.TestCase):
                 Tensor.from_list([0]),
             )
 
+
+
+class GroupNormTests(unittest.TestCase):
+    def test_values_and_gradients(self) -> None:
+        import random
+
+        from gradcheck import max_gradient_error
+        from tensor_nn import TensorGroupNorm
+
+        rng = random.Random(0)
+        values = [rng.gauss(0.0, 2.0) for _ in range(2 * 4 * 3)]
+        layer = TensorGroupNorm(2, 4)
+        layer.weight.data = kernels.storage([0.5, 1.5, -1.0, 2.0])
+        layer.bias.data = kernels.storage([0.1, 0.2, 0.3, 0.4])
+        x = Tensor(values, (2, 4, 3), requires_grad=True)
+        out = layer(x).data
+        # By hand: each image's two groups of 2 channels x 3 positions.
+        for image in range(2):
+            for group in range(2):
+                start = image * 12 + group * 6
+                chunk = values[start : start + 6]
+                mean = sum(chunk) / 6
+                std = (sum((v - mean) ** 2 for v in chunk) / 6 + 1e-5) ** 0.5
+                for offset, value in enumerate(chunk):
+                    channel = group * 2 + offset // 3
+                    expected = (value - mean) / std * layer.weight.data[channel] + layer.bias.data[channel]
+                    self.assertAlmostEqual(out[start + offset], expected, places=12)
+        weights = Tensor([rng.uniform(-1.0, 1.0) for _ in values], (2, 4, 3))
+        self.assertLess(max_gradient_error(lambda: (layer(x) * weights).sum(), [x, layer.weight, layer.bias]), 1e-6)
 
 if __name__ == "__main__":
     unittest.main()

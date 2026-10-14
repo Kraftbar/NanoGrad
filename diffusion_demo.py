@@ -74,7 +74,7 @@ def sample(process: Diffusion, count: int, args: argparse.Namespace, seed: int) 
 def run(args: argparse.Namespace) -> dict:
     kernels.set_default_dtype(args.dtype)
     images, _ = load_split(args.dataset, Path(DATASETS[args.dataset][0]), "train", args.train_limit)
-    model = TinyUNet(width=args.width, seed=args.seed)
+    model = TinyUNet(width=args.width, groups=args.groups, attention=args.attention, seed=args.seed)
     process = Diffusion(model, steps=args.diffusion_steps)
     optimizer = TensorAdam(model.parameters(), lr=args.lr)
     ema = EMA(model.parameters(), args.ema) if args.ema else None
@@ -136,6 +136,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=2e-3)
     parser.add_argument("--width", type=int, default=16)
+    parser.add_argument("--groups", type=int, default=0, help="group norm with this many groups in every block (DDPM: 32)")
+    parser.add_argument("--attention", action="store_true", help="self-attention over the 7 x 7 middle")
     parser.add_argument("--diffusion-steps", type=int, default=200)
     parser.add_argument("--ema", type=float, default=0.0, help="decay of an averaged copy of the weights to sample from (DDPM: 0.9999)")
     parser.add_argument("--ddim-steps", type=int, default=0, help="sample with DDIM in this many steps (0: DDPM's full chain)")

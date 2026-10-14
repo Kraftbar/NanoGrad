@@ -312,16 +312,27 @@ class TorchTwin:
         embedding = torch.tensor(list(timestep_embedding(steps, model.time_width).data), dtype=self.dtype)
         time = self._linear(model.time_out, silu(self._linear(model.time_in, embedding.reshape(len(steps), -1))))
 
+        def norm(layer, x):
+            return F.group_norm(x, layer.groups, self._p(layer.weight), self._p(layer.bias), layer.eps)
+
         def block(b, x):
-            hidden = silu(self._conv(b.conv1, x))
-            hidden = hidden + self._linear(b.time, time).reshape(x.shape[0], b.out_channels, 1, 1)
-            hidden = silu(self._conv(b.conv2, hidden))
+            t = self._linear(b.time, time).reshape(x.shape[0], b.out_channels, 1, 1)
+            if b.norms:
+                hidden = self._conv(b.conv1, silu(norm(b.norms[0], x))) + t
+                hidden = self._conv(b.conv2, silu(norm(b.norms[1], hidden)))
+            else:
+                hidden = silu(self._conv(b.conv1, x)) + t
+                hidden = silu(self._conv(b.conv2, hidden))
             return hidden + (x if b.skip is None else self._conv(b.skip, x))
 
         up = lambda x: F.interpolate(x, scale_factor=2, mode="nearest")
         skip1 = block(model.down1, self._conv(model.stem, images))
         skip2 = block(model.down2, self._conv(model.shrink1, skip1))
         hidden = block(model.middle, self._conv(model.shrink2, skip2))
+        if model.attend is not None:
+            batch, wide = hidden.shape[:2]
+            tokens = self._transformer_block(model.attend, hidden.reshape(batch, wide, 49).transpose(1, 2))
+            hidden = tokens.transpose(1, 2).reshape(batch, wide, 7, 7)
         hidden = block(model.up2, torch.cat([up(hidden), skip2], dim=1))
         hidden = block(model.up1, torch.cat([up(hidden), skip1], dim=1))
         return self._conv(model.head, hidden)
