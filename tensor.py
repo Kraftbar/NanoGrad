@@ -1808,14 +1808,13 @@ def conv2d_valid(image: Tensor, kernel: Tensor, *, stride: int = 1) -> Tensor:
                 image.data, patch_index, grad, batches=batches, image_size=image_size,
                 filters=filters, patch_size=patch_size, positions=positions,
             ))
-        # Stride 1: the gradient as a full convolution, when that runs on the direct
-        # loop (few channels) or the image is large; on small images with many
-        # channels the padding and flipping cost more than the scatter they save.
-        # The full convolution also multiplies the zero border: only worth it
-        # while the image is not much larger than the output (3x3, not 5x5 on 8x8).
+        # Stride 1: the gradient as a full convolution. It multiplies the zero border
+        # too, so it is only worth it while the image is not much larger than the
+        # output (3x3 on 8x8, not on 4x4; not 5x5 on 8x8); otherwise the scatter.
+        # The scatter is never much faster, and far slower with few filters (its
+        # product's inner dimension): 40x for SRCNN's last layer (32 -> 1, 5x5).
         image_pixels, out_pixels = image_rows * image_cols, out_shape[-2] * out_shape[-1]
-        if (image.requires_grad and stride == 1 and kernel.ndim == 4 and image_pixels <= 1.5 * out_pixels
-                and (channels <= _DIRECT_FILTERS or image_pixels >= 4096)):
+        if image.requires_grad and stride == 1 and kernel.ndim == 4 and image_pixels <= 2 * out_pixels:
             _add_grad(image, _conv2d_input_grad_full(grad, kernel, batches, image_rows, image_cols, out_shape))
         elif image.requires_grad:
             # dPatches_b = dOut_b^T (P x O) @ K (O x K), then col2im: add each
@@ -1854,11 +1853,8 @@ def _conv2d_input_grad_full(grad, kernel: Tensor, batches: int, image_rows: int,
     padded_rows, padded_cols = out_rows + 2 * pad_rows, out_cols + 2 * pad_cols
     padded = kernels.pad_planes(grad, planes=batches * filters, rows=out_rows, cols=out_cols,
                                 pad_rows=pad_rows, pad_cols=pad_cols)
-    k = kernel.data
-    flipped = kernels.storage([                                  # (C, F, kh, kw), rotated 180 degrees
-        k[((f * channels + c) * kernel_rows + kernel_rows - 1 - i) * kernel_cols + kernel_cols - 1 - j]
-        for c in range(channels) for f in range(filters) for i in range(kernel_rows) for j in range(kernel_cols)
-    ])
+    flip = _flipped_kernel_index(filters, channels, kernel_rows, kernel_cols)
+    flipped = kernels.gather_indexed(kernel.data, flip, batches=1, image_size=len(flip))
     if channels <= _DIRECT_FILTERS:                              # C filters of this convolution
         return kernels.conv_direct(
             padded, flipped, batches=batches, channels=filters, height=padded_rows, width=padded_cols,
@@ -1868,6 +1864,16 @@ def _conv2d_input_grad_full(grad, kernel: Tensor, batches: int, image_rows: int,
     return kernels.conv_forward(
         padded, index, flipped, batches=batches, image_size=filters * padded_rows * padded_cols,
         filters=channels, patch_size=filters * kernel_rows * kernel_cols, positions=image_rows * image_cols,
+    )
+
+
+@lru_cache(maxsize=256)
+def _flipped_kernel_index(filters: int, channels: int, kernel_rows: int, kernel_cols: int):
+    """Where each value of the (C, F, kh, kw) kernel, rotated 180 degrees, sits in the (F, C, kh, kw) one."""
+
+    return kernels.index_table(
+        ((f * channels + c) * kernel_rows + kernel_rows - 1 - i) * kernel_cols + kernel_cols - 1 - j
+        for c in range(channels) for f in range(filters) for i in range(kernel_rows) for j in range(kernel_cols)
     )
 
 
