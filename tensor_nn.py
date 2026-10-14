@@ -92,7 +92,7 @@ class TensorModule:
             parameter.data = [float(value) for value in values]
         buffers = [values for module in self.modules() for values in _buffers(module)]
         for target, values in zip(buffers, state.get("buffers", []), strict=True):
-            target[:] = [float(value) for value in values]
+            target[:] = kernels.storage([float(value) for value in values])
 
     def save(self, path: str | Path) -> None:
         path = Path(path)
@@ -326,8 +326,8 @@ class TensorBatchNorm2d(TensorModule):
         self.momentum = momentum
         self.weight = Tensor([1.0] * channels, (channels,), requires_grad=True)
         self.bias = Tensor.zeros((channels,), requires_grad=True)
-        self.running_mean = [0.0] * channels
-        self.running_var = [1.0] * channels
+        self.running_mean = kernels.storage([0.0] * channels)
+        self.running_var = kernels.storage([1.0] * channels)
 
     def __call__(self, inputs: Tensor) -> Tensor:
         if inputs.ndim != 4 or inputs.shape[1] != self.channels:
@@ -345,10 +345,9 @@ class TensorBatchNorm2d(TensorModule):
 
     def _update_running_statistics(self, mean: Sequence[float], variance: Sequence[float], count: int) -> None:
         momentum = self.momentum
-        for channel in range(self.channels):
-            unbiased = variance[channel] * count / max(count - 1, 1)
-            self.running_mean[channel] = (1 - momentum) * self.running_mean[channel] + momentum * mean[channel]
-            self.running_var[channel] = (1 - momentum) * self.running_var[channel] + momentum * unbiased
+        unbiased = kernels.scale(variance, count / max(count - 1, 1))
+        self.running_mean = kernels.add_scaled(kernels.scale(self.running_mean, 1 - momentum), mean, momentum)
+        self.running_var = kernels.add_scaled(kernels.scale(self.running_var, 1 - momentum), unbiased, momentum)
 
     def parameters(self) -> list[Tensor]:
         return [self.weight, self.bias]
@@ -368,7 +367,7 @@ class TensorBatchNorm2d(TensorModule):
             values = state.get(name)
             if not isinstance(values, list) or len(values) != self.channels:
                 raise ValueError(f"state {name} does not match TensorBatchNorm2d")
-            setattr(self, name, [float(value) for value in values])
+            setattr(self, name, kernels.storage([float(value) for value in values]))
 
 
 
