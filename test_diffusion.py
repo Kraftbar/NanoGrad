@@ -91,6 +91,20 @@ class SamplerTests(unittest.TestCase):
         for value, expected in zip(samples, target):
             self.assertAlmostEqual(value, expected, places=9)
 
+    def test_ddim_stays_bounded_when_the_clip_is_active(self) -> None:
+        # A model whose noise estimate does not match x (here eps = 1e6 x)
+        # keeps the x0 clip active. Re-noising with that eps made x grow
+        # geometrically until it overflowed and the sample came out NaN;
+        # with the eps that the clipped x0 implies, x stays in the data range.
+        class Inconsistent:
+            def __call__(self, images: Tensor, steps: list[int]) -> Tensor:
+                return Tensor([1e6 * x for x in images.data], images.shape)
+
+        process = Diffusion(TinyUNet(width=4, time_width=8), steps=1000)
+        process.model = Inconsistent()
+        samples = process.ddim_sample((1, 1, 2, 2), random.Random(0), steps=100)
+        self.assertTrue(all(-1.0 <= value <= 1.0 for value in samples))
+
     def test_ema_tracks_and_swaps(self) -> None:
         from diffusion_demo import EMA
 

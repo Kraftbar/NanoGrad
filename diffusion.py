@@ -165,9 +165,14 @@ class Diffusion:
         fresh noise. Each step predicts the clean image from the noise
         estimate, x0 = (x_t - sqrt(1 - alpha_bar_t) eps) / sqrt(alpha_bar_t),
         clipped to the data range [-1, 1] as DDPM's sampler does, then noises
-        it back to the earlier step with that same eps:
+        it back to the earlier step:
 
-            x_prev = sqrt(alpha_bar_prev) x0 + sqrt(1 - alpha_bar_prev) eps
+            x_prev = sqrt(alpha_bar_prev) x0 + sqrt(1 - alpha_bar_prev) eps'
+
+        where eps' = (x_t - sqrt(alpha_bar_t) x0) / sqrt(1 - alpha_bar_t) is the
+        noise that the clipped x0 implies. Re-noising with the model's own eps
+        instead lets x drift away from x0 whenever the clip is active, and
+        nothing pulls it back: x grows geometrically until it overflows.
         """
 
         from tensor import no_grad
@@ -181,6 +186,6 @@ class Diffusion:
                 predicted = self.model(Tensor(x, shape), [step] * shape[0]).data
                 a, b = math.sqrt(alpha_bar), math.sqrt(1.0 - alpha_bar)
                 a_prev, b_prev = math.sqrt(previous), math.sqrt(1.0 - previous)
-                x = [a_prev * min(1.0, max(-1.0, (value - b * eps) / a)) + b_prev * eps
-                     for value, eps in zip(x, predicted)]
+                clean = [min(1.0, max(-1.0, (value - b * eps) / a)) for value, eps in zip(x, predicted)]
+                x = [a_prev * x0 + b_prev * (value - a * x0) / b for value, x0 in zip(x, clean)]
         return x
