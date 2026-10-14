@@ -432,7 +432,7 @@ class KernelBackendTests(unittest.TestCase):
 
     def test_unknown_backend(self) -> None:
         with self.assertRaises(ValueError):
-            kernels.use_backend("cuda")
+            kernels.use_backend("tpu")
 
 
 def _numel(shape):
