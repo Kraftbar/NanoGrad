@@ -125,6 +125,26 @@ class ElementwiseTests(CudaTestCase):
                 self.agree(lambda: getattr(kernels, name)(*args))
 
 
+# Matrix products (gemm).
+
+# (end of gemm tests)
+
+
+# Convolutions, pooling, gathers and scatters.
+
+# (end of conv tests)
+
+
+# Rows and channels: softmax, norms, losses, GELU, the optimizer.
+
+# (end of rows tests)
+
+
+# Recurrent: the LSTM cell and layer, the CRF.
+
+# (end of recurrent tests)
+
+
 class ModelTests(CudaTestCase):
     def test_a_small_network_trains_the_same(self) -> None:
         from optim import TensorAdam
