@@ -186,7 +186,7 @@ cannot use the parent's OpenMP threads (libgomp's pool does not survive
 (`os.register_at_fork`), and with one thread the kernels never start an
 OpenMP team. Use one or the other.
 
-## A Whole LSTM Layer In One Op
+## A Whole LSTM Layer (And The CRF) In One Op
 
 An LSTM layer used to be built from per-step ops: a matrix product
 `h W_h^T`, an add, the fused `lstm_memory` and `lstm_output` kernels, and
@@ -198,17 +198,24 @@ order (the same gemms into zeroed buffers, the same two-term sums, `dW`
 summed latest step first), so results are identical bit for bit in
 float64 and float32 (`test_rnn.SequenceTests`).
 
-UD English EWT tagger, training step on one core:
+The CRF's forward algorithm got the same treatment: `tagger.crf_forward`
+replaces eight Python ops per word (`alpha - m`, exp, a matrix product,
+log, two adds and the reshapes) with one op whose C kernels make the same
+calls in the same order, so log Z and every gradient are again the same
+bit for bit (`test_tagger`, `test_same_bits_as_the_per_word_ops`).
 
-| tagger | per-step ops | one op | speedup |
-| --- | ---: | ---: | ---: |
-| BiLSTM-CRF | 58.5 ms | 48 ms | 1.22x |
-| + character BiLSTM | 121 ms | 83 ms | 1.45x |
+UD English EWT tagger, training step on one core (best of three runs of
+60 batches of 32, idle machine, 2026-10-14):
+
+| tagger | per-step ops | fused LSTM | fused CRF | both | speedup |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| BiLSTM-CRF | 53.7 ms | 44.3 ms | 49.4 ms | 40.4 ms | 1.33x |
+| + character BiLSTM | 115.7 ms | 79.4 ms | 110.5 ms | 75.5 ms | 1.53x |
 
 The character model gains most: it runs many short LSTMs (one per word
 length in a batch), where per-step overhead was most of the cost. What
-is left is the tagger's other small ops (embedding gathers, the CRF's
-per-word forward algorithm, dropout, Adam).
+is left is the tagger's other small ops (embedding gathers, dropout,
+Adam).
 
 ## Where The Time Goes Now
 

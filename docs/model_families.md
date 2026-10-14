@@ -626,8 +626,9 @@ it adds 0.3 points on both dev and test:
 
 An epoch took 2.3x as long (166 vs 72 ms per step), almost all of it
 the many small per-letter LSTM steps; with the whole LSTM layer as one
-op (`rnn.lstm_sequence`, see [performance.md](./performance.md)) a step
-is 83 vs 48 ms. The PyTorch twin runs the same
+op (`rnn.lstm_sequence`) and the CRF's forward algorithm as another
+(`tagger.crf_forward`, see [performance.md](./performance.md)) a step
+is 75.5 vs 40.4 ms. The PyTorch twin runs the same
 character model and agrees to 1e-10 (`test_tagger.py`).
 
 *Added*: `logsumexp` (the lane's largest value as a constant shift, so
