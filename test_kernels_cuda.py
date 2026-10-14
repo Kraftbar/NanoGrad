@@ -137,6 +137,161 @@ class ElementwiseTests(CudaTestCase):
 
 # Rows and channels: softmax, norms, losses, GELU, the optimizer.
 
+# (rows, width): one value; rows a warp takes (up to 1024 wide, 8 to a
+# block: row counts that are not multiples of 8 leave spare warps) and rows
+# a block takes (wider); widths that are not multiples of 32.
+ROW_SHAPES = ((1, 1), (3, 5), (7, 37), (2, 300), (9, 1024), (5, 1031), (3, 2500), (130, 64))
+
+
+class RowsTests(CudaTestCase):
+    def test_gelu(self) -> None:
+        for count in (1, 257, 3000):
+            x, grad = values(count, 1, -5, 5), values(count, 2)
+            with self.subTest(count=count):
+                self.agree(lambda: kernels.gelu(x))
+                self.agree(lambda: kernels.gelu_backward(x, kernels.gelu(x)[1], grad))
+
+    def test_softmax_rows(self) -> None:
+        for rows, width in ROW_SHAPES:
+            x, grad = values(rows * width, 3, -20, 20), values(rows * width, 4)
+            with self.subTest(rows=rows, width=width):
+                self.agree(lambda: kernels.softmax_rows(x, width))
+                self.agree(lambda: kernels.softmax_rows_backward(kernels.softmax_rows(x, width), grad, width))
+
+    def test_softmax_xent_rows_works_in_place(self) -> None:
+        for rows, width in ROW_SHAPES:
+            x = values(rows * width, 5, -10, 10)
+            targets = [random.Random(row).randrange(width) for row in range(rows)]
+            if rows > 1:
+                x[width + targets[1]] = -900.0                 # p_target underflows to 0: the logsumexp branch
+
+            def run():
+                logits = kernels.storage(x)
+                grad, nll = kernels.softmax_xent_rows(logits, targets, 0.25, width)
+                self.assertIs(grad, logits)
+                return grad, nll
+
+            with self.subTest(rows=rows, width=width):
+                self.agree(run)
+
+    def test_add_rows_adds_in_place(self) -> None:
+        for rows, width in ROW_SHAPES + ((3000, 3),):
+            x = values(rows * width, 6)
+
+            def run():
+                out = kernels.storage(values(width, 7))
+                self.assertIs(kernels.add_rows(x, out, width), out)
+                return out
+
+            with self.subTest(rows=rows, width=width):
+                self.agree(run)
+
+    def test_layer_norm_rows(self) -> None:
+        for rows, width in ROW_SHAPES + ((2000, 3),):
+            x, grad = values(rows * width, 8, -3, 5), values(rows * width, 9)
+            weight, bias = values(width, 10, 0.5, 2), values(width, 11)
+
+            def backward(need_dx):
+                _, x_hat, inv_std = kernels.layer_norm_rows(x, weight, bias, width, 1e-5)
+                return kernels.layer_norm_rows_backward(grad, x_hat, inv_std, weight, width, need_dx)
+
+            with self.subTest(rows=rows, width=width):
+                self.agree(lambda: kernels.layer_norm_rows(x, weight, bias, width, 1e-5))
+                self.agree(lambda: backward(True))
+                self.agree(lambda: backward(False))
+
+    def test_rms_norm_rows(self) -> None:
+        for rows, width in ROW_SHAPES + ((2000, 3),):
+            x, grad, weight = values(rows * width, 12, -3, 5), values(rows * width, 13), values(width, 14, 0.5, 2)
+
+            def backward():
+                _, inv_rms = kernels.rms_norm_rows(x, weight, width, 1e-6)
+                return kernels.rms_norm_rows_backward(grad, x, inv_rms, weight, width)
+
+            with self.subTest(rows=rows, width=width):
+                self.agree(lambda: kernels.rms_norm_rows(x, weight, width, 1e-6))
+                self.agree(backward)
+
+    def test_batch_norm_channels(self) -> None:
+        for batch, channels, plane in ((1, 1, 1), (4, 3, 1), (2, 5, 49), (3, 2, 700), (16, 4, 9)):
+            size = batch * channels * plane
+            x, grad = values(size, 15, -2, 4), values(size, 16)
+            weight, bias = values(channels, 17, 0.5, 2), values(channels, 18)
+            shape = {"batch": batch, "channels": channels, "plane": plane}
+
+            def backward():
+                _, x_hat, inv_std, _, _ = kernels.batch_norm_channels(x, weight, bias, eps=1e-5, **shape)
+                return kernels.batch_norm_channels_backward(grad, x_hat, inv_std, weight, **shape)
+
+            with self.subTest(**shape):
+                self.agree(lambda: kernels.batch_norm_channels(x, weight, bias, eps=1e-5, **shape))
+                self.agree(backward)
+
+    def test_sums_are_floats(self) -> None:
+        for count in (0, 1, 255, 100_000):
+            x, t = values(count, 19, -30, 30), values(count, 20, 0, 1)
+            with self.subTest(count=count):
+                self.agree(lambda: kernels.sum_of_squares(x))
+                self.agree(lambda: kernels.bce_with_logits_sum(x, t))
+                self.agree(lambda: kernels.bce_with_logits_backward(x, t, 0.7))
+        kernels.use_backend("cuda")
+        self.assertIsInstance(kernels.sum_of_squares(kernels.storage([3.0, 4.0])), float)
+
+    def test_dropout_mask_is_the_same_mask(self) -> None:
+        for count, p, seed in ((1, 0.5, 0), (1000, 0.1, 12345), (4097, 0.5, 2**64 - 1), (300, 0.9, 2**63)):
+            with self.subTest(count=count, seed=seed):
+                c, cuda = self.run_both(lambda: kernels.dropout_mask(count, p, seed))
+                self.assertEqual(c, cuda)
+
+    def test_projected_sign_step(self) -> None:
+        delta, grad, x = values(999, 21, -0.1, 0.1), values(999, 22), values(999, 23, 0, 1)
+        grad[:10] = [0.0] * 10
+        self.agree(lambda: kernels.projected_sign_step(delta, grad, x, 0.03, 0.05))
+
+    def test_adam_updates_the_moments_in_place(self) -> None:
+        w, grad = values(1001, 24), values(1001, 25)
+        settings = {"grad_scale": 0.5, "beta1": 0.9, "beta2": 0.999, "decay": 0.99,
+                    "step_size": 1e-3, "sqrt_correction": 0.3, "eps": 1e-8}
+
+        def run():
+            m, v = kernels.storage(values(1001, 26)), kernels.storage(values(1001, 27, 0, 1))
+            new_w, new_m, new_v = kernels.adam_update(w, grad, m, v, **settings)
+            self.assertIs(new_m, m)
+            self.assertIs(new_v, v)
+            return new_w, m, v
+
+        self.agree(run)
+
+    def test_float32(self) -> None:
+        def float32(function):
+            def run():
+                kernels.set_default_dtype("float32")
+                try:
+                    return function()
+                finally:
+                    kernels.set_default_dtype("float64")
+            return run
+
+        x, grad, weight = values(9 * 300, 28, -3, 3), values(9 * 300, 29), values(300, 30, 0.5, 2)
+        cases = {
+            "gelu": lambda: kernels.gelu(kernels.storage(x)),
+            "softmax": lambda: kernels.softmax_rows(kernels.storage(x), 300),
+            "softmax_xent": lambda: kernels.softmax_xent_rows(kernels.storage(x), list(range(9)), 0.5, 300),
+            "layer_norm": lambda: kernels.layer_norm_rows_backward(
+                kernels.storage(grad), *kernels.layer_norm_rows(kernels.storage(x), weight, weight, 300, 1e-5)[1:],
+                kernels.storage(weight), 300, True),
+            "rms_norm": lambda: kernels.rms_norm_rows(kernels.storage(x), kernels.storage(weight), 300, 1e-6),
+            "batch_norm": lambda: kernels.batch_norm_channels(kernels.storage(x), weight[:3], weight[:3],
+                                                               batch=3, channels=3, plane=300, eps=1e-5),
+            "sum_of_squares": lambda: kernels.sum_of_squares(kernels.storage(x)),
+            "adam": lambda: kernels.adam_update(
+                kernels.storage(x), kernels.storage(grad), kernels.zeros(len(x)), kernels.zeros(len(x)),
+                grad_scale=1.0, beta1=0.9, beta2=0.999, decay=1.0, step_size=1e-3, sqrt_correction=1.0, eps=1e-8),
+        }
+        for name, case in cases.items():
+            with self.subTest(kernel=name):
+                self.agree(float32(case), tolerance=1e-5)
+
 # (end of rows tests)
 
 

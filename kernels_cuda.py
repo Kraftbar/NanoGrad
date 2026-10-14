@@ -522,6 +522,216 @@ def sigmoid_backward(y, grad) -> DeviceArray:
 # Rows and channels: softmax, norms, losses, GELU, the optimizer (kernels.cu, same section)
 # ---------------------------------------------------------------------------
 
+_REDUCE_BLOCKS = 256              # blocks for a sum over a whole array (sum_of_squares, bce_with_logits_sum)
+
+
+_WARP_ROWS = 8                    # rows per block when a warp takes each row
+_WIDEST_WARP_ROW = 1024           # rows wider than this get a block of BLOCK threads each
+
+
+def _launch_rows(name: str, code: str, rows: int, width: int, *args) -> None:
+    """Launch row kernel ``name`` with a team of threads per row (kernels.cu, idea 1):
+    a warp per row (8 rows per 32 x 8 block) or, for wide rows, a block per row."""
+
+    if not rows:
+        return
+    if width <= _WIDEST_WARP_ROW:
+        launch(name, code, blocks(rows, _WARP_ROWS), (32, _WARP_ROWS), *args)
+    else:
+        launch(name, code, rows, BLOCK, *args)
+
+
+def _rows(name: str, x, width: int, *arrays) -> DeviceArray:
+    """y = a row kernel over x and ``arrays``, with a new output of x's shape."""
+
+    x = _device(x)
+    arrays = [_device(a, x.typecode) for a in arrays]
+    y, rows = _like(x), x.count // width
+    _launch_rows(name, x.typecode, rows, width, x, *arrays, y, rows, width)
+    return y
+
+
+def _add_column_sums(out: DeviceArray, a: DeviceArray, rows: int, width: int, b=None, scale=None) -> None:
+    """out[s] += the sum over rows r of a[r, s] * b[r, s] * scale[r] (b and scale optional),
+    in two deterministic passes (kernels.cu, idea 2)."""
+
+    if not rows:
+        return
+    chunk = max(16, -(-rows // 1024))              # rows per partial sum; at most 1024 partials
+    chunks = -(-rows // chunk)
+    partial = DeviceArray.empty(chunks * width, "d")
+    code = a.typecode
+    launch("rows_column_partials", code, (blocks(width), chunks), BLOCK, a,
+           a if b is None else b, a if scale is None else scale, int(b is not None), int(scale is not None),
+           partial, rows, width, chunk)
+    launch("rows_column_finish", code, blocks(width), BLOCK, partial, out, chunks, width)
+    out.changed()
+
+
+def _total(name: str, x: DeviceArray, *arrays) -> float:
+    """A sum over the whole array: per-block partial sums, added up by one block, read back as a float."""
+
+    if not x.count:
+        return 0.0
+    count = min(_REDUCE_BLOCKS, blocks(x.count))
+    partial, total = DeviceArray.empty(count, "d"), DeviceArray.empty(1, "d")
+    launch(name, x.typecode, count, BLOCK, x, *arrays, partial, x.count)
+    launch("rows_sum_partials", x.typecode, 1, BLOCK, partial, total, count)
+    return total.host()[0]
+
+
+def gelu(x) -> tuple[DeviceArray, DeviceArray]:
+    x = _device(x)
+    y, cdf = _like(x), _like(x)
+    if x.count:
+        launch("gelu_forward", x.typecode, blocks(x.count), BLOCK, x, y, cdf, x.count)
+    return y, cdf
+
+
+def gelu_backward(x, cdf, grad) -> DeviceArray:
+    return _map("gelu_backward", x, cdf, grad)
+
+
+def softmax_rows(x, width: int) -> DeviceArray:
+    return _rows("softmax_rows", x, width)
+
+
+def softmax_rows_backward(y, grad, width: int) -> DeviceArray:
+    return _rows("softmax_rows_backward", y, width, grad)
+
+
+def softmax_xent_rows(x, targets, factor: float, width: int) -> tuple[DeviceArray, DeviceArray]:
+    """In place: each row of logits x becomes factor * (softmax - one_hot(target)); also the rows' losses (float64)."""
+
+    if not isinstance(x, DeviceArray) or x.typecode == "l":
+        raise TypeError("softmax_xent_rows works in place on a DeviceArray")
+    targets = _indices(targets)
+    nll = DeviceArray.empty(targets.count, "d")
+    _launch_rows("softmax_xent_rows", x.typecode, targets.count, width,
+                 x, targets, float(factor), nll, targets.count, width)
+    x.changed()
+    return x, nll
+
+
+def add_rows(x, out, width: int) -> DeviceArray:
+    """In place: out[s] += every row's x[., s]."""
+
+    if not isinstance(out, DeviceArray) or out.typecode == "l" or out.count != width:
+        raise TypeError("add_rows adds into a DeviceArray one row wide")
+    x = _device(x, out.typecode)
+    _add_column_sums(out, x, x.count // width, width)
+    return out
+
+
+def layer_norm_rows(x, weight, bias, width: int, eps: float) -> tuple[DeviceArray, DeviceArray, DeviceArray]:
+    x = _device(x)
+    weight, bias = _device(weight, x.typecode), _device(bias, x.typecode)
+    rows = x.count // width
+    y, x_hat, inv_std = _like(x), _like(x), DeviceArray.empty(rows, x.typecode)
+    _launch_rows("layer_norm_rows", x.typecode, rows, width,
+                 x, weight, bias, y, x_hat, inv_std, rows, width, float(eps))
+    return y, x_hat, inv_std
+
+
+def layer_norm_rows_backward(grad, x_hat, inv_std, weight, width: int, need_dx: bool):
+    grad = _device(grad)
+    x_hat, inv_std, weight = (_device(a, grad.typecode) for a in (x_hat, inv_std, weight))
+    rows = inv_std.count
+    dx = None
+    if need_dx:
+        dx = _like(grad)
+        _launch_rows("layer_norm_rows_backward", grad.typecode, rows, width,
+                     grad, x_hat, inv_std, weight, dx, rows, width)
+    dweight, dbias = zeros(width, grad.typecode), zeros(width, grad.typecode)
+    _add_column_sums(dweight, grad, rows, width, b=x_hat)
+    _add_column_sums(dbias, grad, rows, width)
+    return dx, dweight, dbias
+
+
+def rms_norm_rows(x, weight, width: int, eps: float) -> tuple[DeviceArray, DeviceArray]:
+    x = _device(x)
+    weight = _device(weight, x.typecode)
+    rows = x.count // width
+    y, inv_rms = _like(x), DeviceArray.empty(rows, x.typecode)
+    _launch_rows("rms_norm_rows", x.typecode, rows, width, x, weight, y, inv_rms, rows, width, float(eps))
+    return y, inv_rms
+
+
+def rms_norm_rows_backward(grad, x, inv_rms, weight, width: int) -> tuple[DeviceArray, DeviceArray]:
+    grad = _device(grad)
+    x, inv_rms, weight = (_device(a, grad.typecode) for a in (x, inv_rms, weight))
+    rows = inv_rms.count
+    dx, dweight = _like(grad), zeros(width, grad.typecode)
+    _launch_rows("rms_norm_rows_backward", grad.typecode, rows, width, grad, x, inv_rms, weight, dx, rows, width)
+    _add_column_sums(dweight, grad, rows, width, b=x, scale=inv_rms)
+    return dx, dweight
+
+
+def batch_norm_channels(x, weight, bias, batch: int, channels: int, plane: int, eps: float):
+    x = _device(x)
+    weight, bias = _device(weight, x.typecode), _device(bias, x.typecode)
+    y, x_hat = _like(x), _like(x)
+    inv_std, mean, variance = (DeviceArray.empty(channels, x.typecode) for _ in range(3))
+    if channels and batch * plane:
+        launch("batch_norm_channels", x.typecode, channels, 2 * BLOCK, x, weight, bias,
+               y, x_hat, inv_std, mean, variance, batch, channels, plane, float(eps))
+    return y, x_hat, inv_std, mean, variance
+
+
+def batch_norm_channels_backward(grad, x_hat, inv_std, weight, batch: int, channels: int, plane: int):
+    grad = _device(grad)
+    x_hat, inv_std, weight = (_device(a, grad.typecode) for a in (x_hat, inv_std, weight))
+    dx, dweight, dbias = _like(grad), zeros(channels, grad.typecode), zeros(channels, grad.typecode)
+    if channels and batch * plane:
+        launch("batch_norm_channels_backward", grad.typecode, channels, 2 * BLOCK,
+               grad, x_hat, inv_std, weight, dx, dweight, dbias, batch, channels, plane)
+    return dx, dweight, dbias
+
+
+def sum_of_squares(x) -> float:
+    return _total("sum_of_squares", _device(x))
+
+
+def bce_with_logits_sum(x, t) -> float:
+    x = _device(x)
+    t = _device(t, x.typecode)
+    if x.count != t.count:
+        raise ValueError("bce_with_logits_sum needs equal lengths")
+    return _total("bce_with_logits_sum", x, t)
+
+
+def bce_with_logits_backward(x, t, g: float) -> DeviceArray:
+    return _map("bce_with_logits_backward", x, t, scalars=(float(g),))
+
+
+def dropout_mask(count: int, p: float, seed: int) -> DeviceArray:
+    mask = DeviceArray.empty(count, typecode)
+    seed &= (1 << 64) - 1
+    if count:                                      # the seed's 64 bits, passed as a (signed) long
+        launch("dropout_mask", typecode, blocks(count), BLOCK, mask, count, float(p),
+               seed - (1 << 64) if seed >= 1 << 63 else seed)
+    return mask
+
+
+def projected_sign_step(delta, grad, x, alpha: float, eps: float) -> DeviceArray:
+    return _map("projected_sign_step", delta, grad, x, scalars=(float(alpha), float(eps)))
+
+
+def adam_update(w, grad, m, v, *hyperparameters) -> tuple[DeviceArray, DeviceArray, DeviceArray]:
+    # As in kernels_c: m and v are the optimizer's own state, updated in place
+    # once they are DeviceArrays of w's precision (the first call uploads them).
+    w = _device(w)
+    grad, m, v = (_device(a, w.typecode) for a in (grad, m, v))
+    if not w.count == grad.count == m.count == v.count:
+        raise ValueError("adam_update needs weights, gradient and moments of equal length")
+    new_w = _like(w)
+    if w.count:
+        launch("adam_update", w.typecode, blocks(w.count), BLOCK, w, grad, m, v, new_w, w.count,
+               *(float(h) for h in hyperparameters))
+        m.changed()
+        v.changed()
+    return new_w, m, v
+
 # (end of rows)
 
 
