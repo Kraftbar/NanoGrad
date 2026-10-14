@@ -158,27 +158,34 @@ weight difference after those steps):
 the C kernels on the same ops.)
 
 The tables above are from the cloud Xeon. On the Ryzen 7 3700X
-(`benchmark_suite.py --steps 30`, 2026-10-14; families whose data is not
-on that machine are left out), NanoGrad is faster than PyTorch on every
-row but MAF:
+(`benchmark_suite.py --steps 30`, 2026-10-14), NanoGrad is as fast as
+PyTorch or faster on every row except MAF (1.2x) and SRCNN (1.7x; it tied
+on the Xeon, so PyTorch's large-kernel convolution is likely the faster
+one on AVX2):
 
 | comparison | NanoGrad ms/step | PyTorch ms/step | ratio | max weight difference |
 | --- | ---: | ---: | ---: | ---: |
-| lenet on mnist | 4.9 | 6.5 | 0.8x | 6.9e-17 |
-| resnet on mnist | 33.8 | 39.6 | 0.9x | 4.4e-13 |
-| vit on mnist | 9.7 | 11.4 | 0.9x | 5.2e-12 |
-| lenet on fashion | 5.5 | 6.4 | 0.9x | 1.1e-16 |
-| resnet on fashion | 32.4 | 40.1 | 0.8x | 9.7e-15 |
-| vit on fashion | 9.2 | 10.9 | 0.8x | 5.5e-12 |
-| lenet on cifar10 | 10.5 | 19.6 | 0.5x | 3.3e-14 |
-| resnet on cifar10 | 46.9 | 60.6 | 0.8x | 1.5e-15 |
-| vit on cifar10 | 12.8 | 16.7 | 0.8x | 2.6e-12 |
-| BERT masked characters | 40.3 | 39.1 | 1.0x | 5.2e-12 |
-| VAE on mnist | 15.2 | 18.4 | 0.8x | 2.8e-15 |
-| MAF on MNIST | 95.8 | 77.9 | 1.2x | 6.8e-10 |
-| FGSM training on MNIST | 64.5 | 84.0 | 0.8x | 4.3e-14 |
-| DS-CNN keyword spotting | 201.5 | 251.3 | 0.8x | 7.1e-13 |
-| BiLSTM-CRF tagger on UD EWT | 26.2 | 25.4 | 1.0x | 5.9e-13 |
+| lenet on mnist | 5.2 | 6.4 | 0.8x | 6.9e-17 |
+| resnet on mnist | 32.9 | 38.2 | 0.9x | 4.4e-13 |
+| vit on mnist | 9.2 | 11.2 | 0.8x | 4.4e-12 |
+| lenet on fashion | 4.7 | 6.5 | 0.7x | 1.1e-16 |
+| resnet on fashion | 33.3 | 38.8 | 0.9x | 9.7e-15 |
+| vit on fashion | 9.6 | 11.1 | 0.9x | 4.9e-12 |
+| lenet on cifar10 | 10.7 | 19.1 | 0.6x | 3.3e-14 |
+| resnet on cifar10 | 46.6 | 58.7 | 0.8x | 1.5e-15 |
+| vit on cifar10 | 13.1 | 16.8 | 0.8x | 4.8e-12 |
+| BERT masked characters | 40.6 | 39.2 | 1.0x | 4.3e-12 |
+| VAE on mnist | 15.1 | 18.2 | 0.8x | 2.6e-15 |
+| NeuMF on MovieLens-1M | 7.4 | 7.9 | 0.9x | 4.6e-15 |
+| VGAE on Cora | 242.1 | 235.6 | 1.0x | 6.1e-13 |
+| MAF on MNIST | 96.5 | 78.9 | 1.2x | 6.8e-10 |
+| SRCNN on 91-image | 106.5 | 62.6 | 1.7x | 2.8e-17 |
+| prototypical net on Omniglot | 332.8 | 330.1 | 1.0x | 1.3e-10 |
+| FGSM training on MNIST | 65.7 | 81.1 | 0.8x | 4.3e-14 |
+| CNN on spoken digits | 131.7 | 130.4 | 1.0x | 2.4e-13 |
+| DS-CNN keyword spotting | 221.8 | 269.0 | 0.8x | 7.1e-13 |
+| BiLSTM-CRF tagger on UD EWT | 28.4 | 28.1 | 1.0x | 5.9e-13 |
+| U-Net on CamVid | 1825.6 | 1907.4 | 1.0x | 1.1e-12 |
 
 The tagger's LSTM layers and its CRF now run as one op each
 (`rnn.lstm_sequence`, `tagger.crf_forward`). With the old per-step ops it
