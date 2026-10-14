@@ -30,6 +30,7 @@ import ctypes
 import glob
 import hashlib
 import os
+import struct
 import sys
 from array import array
 from collections.abc import Sequence
@@ -47,6 +48,7 @@ _modules: dict[str, ctypes.c_void_p] = {}       # compiled kernels.cu, one per p
 _functions: dict[tuple[str, str], ctypes.c_void_p] = {}
 _ITEM_SIZE = {"d": 8, "f": 4, "l": 8}
 BLOCK = 256                       # threads per block for the one-thread-per-value kernels
+_BUFFER_POINTER, _BUFFER_SIZE = 1, 2    # cuLaunchKernel "extra" keys (CU_LAUNCH_PARAM_BUFFER_*)
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +131,8 @@ def load() -> bool:
             driver.cuMemcpyDtoH_v2.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_size_t]
             driver.cuMemcpyDtoDAsync_v2.argtypes = [ctypes.c_uint64, ctypes.c_uint64, ctypes.c_size_t, ctypes.c_void_p]
             driver.cuMemsetD8Async.argtypes = [ctypes.c_uint64, ctypes.c_ubyte, ctypes.c_size_t, ctypes.c_void_p]
-            driver.cuLaunchKernel.argtypes = [ctypes.c_void_p] + [ctypes.c_uint] * 7 + [
-                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            # (cuLaunchKernel is left without argtypes: its arguments are all small
+            # ints and pointers, and the conversion would cost a third of a launch.)
         major, minor = ctypes.c_int(), ctypes.c_int()
         _check(_driver.cuDeviceGetAttribute(ctypes.byref(major), 75, 0), "compute capability")   # 75, 76: major, minor
         _check(_driver.cuDeviceGetAttribute(ctypes.byref(minor), 76, 0), "compute capability")
@@ -174,21 +176,28 @@ def launch(name: str, code: str, grid, block, *args, shared: int = 0) -> None:
     Python carries on: only copying values back to the host waits for them.
     """
 
-    holders = []
+    # Every argument is 8 bytes, so they are packed into one buffer (the driver's
+    # "extra" form) instead of one ctypes object per argument.
+    formats, values = [], []
     for arg in args:
-        if isinstance(arg, DeviceArray):
-            holders.append(ctypes.c_uint64(arg.pointer))
-        elif isinstance(arg, float):
-            holders.append(ctypes.c_double(arg))
-        elif isinstance(arg, int):
-            holders.append(ctypes.c_long(arg))
+        kind = type(arg)
+        if kind is DeviceArray:
+            formats.append("Q")
+            values.append(arg.pointer)
+        elif kind is float or kind is int:
+            formats.append("d" if kind is float else "q")
+            values.append(arg)
         else:
-            raise TypeError(f"cannot pass {type(arg).__name__} to a kernel")
-    pointers = (ctypes.c_void_p * len(holders))(*[ctypes.addressof(h) for h in holders])
-    grid = grid if isinstance(grid, tuple) else (grid,)
-    block = block if isinstance(block, tuple) else (block,)
-    grid, block = (grid + (1, 1))[:3], (block + (1, 1))[:3]
-    _check(_driver.cuLaunchKernel(_function(name, code), *grid, *block, shared, None, pointers, None), name)
+            raise TypeError(f"cannot pass {kind.__name__} to a kernel")
+    packed = struct.pack("".join(formats), *values)
+    buffer = ctypes.create_string_buffer(packed, len(packed))
+    size = ctypes.c_size_t(len(packed))
+    extra = (ctypes.c_void_p * 5)(_BUFFER_POINTER, ctypes.addressof(buffer), _BUFFER_SIZE, ctypes.addressof(size), 0)
+    gx, gy, gz = (grid, 1, 1) if type(grid) is int else (*grid, 1, 1)[:3]
+    bx, by, bz = (block, 1, 1) if type(block) is int else (*block, 1, 1)[:3]
+    result = _driver.cuLaunchKernel(_function(name, code), gx, gy, gz, bx, by, bz, shared, None, None, extra)
+    if result:
+        _check(result, name)
 
 
 def blocks(count: int, size: int = BLOCK) -> int:
