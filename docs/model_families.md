@@ -110,6 +110,29 @@ double it back, with skip connections and a sinusoidal time embedding.
 *Added*: nearest-neighbour upsampling (an index-table gather), concat
 through index tables.
 
+Sampling uses DDIM (Song et al., 2021): 100 of the 1,000 noise levels,
+with the x0 estimate clipped to [-1, 1] and the step re-noised with the
+noise that the clipped x0 implies (re-noising with the model's own
+estimate instead lets x drift and overflow). The weights sampled from are
+an EMA (decay 0.999). Sample quality is an FID on the features of a small
+MNIST CNN (`sample_quality.py`; 98.8% test accuracy), so it is comparable
+within this repo only, not with Inception FIDs. 1,000 real training
+images score 2.4 and uniform noise 438.
+
+```bash
+NANOGRAD_THREADS=8 .venv/bin/python diffusion_demo.py --dataset mnist --dtype float32 \
+    --width 32 --batch-size 128 --lr 5e-4 --epochs 20 --ema 0.999 --ddim-steps 100
+```
+
+| U-Net | parameters | FID, 1,000 samples (real images: 2.4) | time |
+| --- | ---: | ---: | --- |
+| width 32, 20 epochs | 404K | **24.8** | 2.8 h on 8 threads |
+
+![64 DDIM samples](images/diffusion_mnist.png)
+
+*Added*: DDIM sampling, the clipped DDPM posterior step, an EMA of the
+weights, and the FID.
+
 ## Graph networks: GCN (`gcn.py`)
 
 Kipf and Welling's graph convolutional network on the Cora citation graph:
