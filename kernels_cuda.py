@@ -508,6 +508,104 @@ def sigmoid_backward(y, grad) -> DeviceArray:
 # Matrix products (gemm) (kernels.cu, same section)
 # ---------------------------------------------------------------------------
 
+# Tile edges of kernels.cu's gemm kernels (gemm_128x128_nn, ...), biggest
+# first. Float64 uses only the smallest: its arithmetic runs at 1/64 of
+# float32's speed on this GPU (GeForce cards), so even 2 x 2 patches keep
+# it busy, and small tiles give more blocks; the big tiles would not save
+# anything (and an 8 x 8 patch of doubles does not fit in registers).
+_GEMM_TILES = {"f": (128, 64, 32), "d": (32,)}
+_GEMM_BK = {128: 8, 64: 16, 32: 16}           # each kernel's k step
+_GEMM_THREADS = 256                           # threads per block, for every tile size
+_GEMM_SLICE_STEPS = 8                         # split-k: at least this many k steps per slice
+_gemm_multiprocessors = 0
+
+
+def _multiprocessors() -> int:
+    global _gemm_multiprocessors
+    if not _gemm_multiprocessors:
+        count = ctypes.c_int()
+        _check(_driver.cuDeviceGetAttribute(ctypes.byref(count), 16, 0), "multiprocessor count")
+        _gemm_multiprocessors = count.value
+    return _gemm_multiprocessors
+
+
+def gemm(a, b, batches: int, m: int, k: int, n: int, a_step: int, b_step: int, c_step: int,
+         trans_a: bool, trans_b: bool, initial=None) -> DeviceArray:
+    """Batched C = op(A) @ op(B) (+ initial), as kernels_c.gemm.
+
+    ``initial`` is consumed: a DeviceArray of this precision is the result
+    itself, added to in place.
+    """
+
+    a = _device(a)
+    code = a.typecode
+    b = _device(b, code)
+    size = c_step * (batches - 1) + m * n if c_step else m * n
+    if a.count < a_step * (batches - 1) + m * k or b.count < b_step * (batches - 1) + k * n:
+        raise ValueError("gemm inputs are too short for these sizes")    # a GPU would read past them
+    summed = c_step == 0 or batches == 1          # one output (all batch entries add into it)
+    if not summed and c_step < m * n:
+        # Batch entries whose outputs overlap must add one after another;
+        # nothing uses this, so it runs on the C kernel.
+        return _fallback("gemm")(a, b, batches, m, k, n, a_step, b_step, c_step, trans_a, trans_b, initial)
+    if initial is None:
+        gaps = not summed and c_step > m * n      # numbers between the outputs stay 0
+        c = zeros(size, code) if gaps or k == 0 else DeviceArray.empty(size, code)
+    else:
+        c = _device(initial, code)
+        if c.count != size:
+            raise ValueError("gemm initial values have the wrong size")
+    if m == 0 or n == 0 or k == 0 or batches == 0:
+        return c
+    accumulate = int(initial is not None)
+
+    # A matrix-vector product with the matrix stored along k: a dot product
+    # per output, one warp each (a single row or column of A or B is
+    # stored the same way transposed or not).
+    a_along_k, b_along_k = not trans_a or m == 1, trans_b or n == 1
+    if (n == 1 and a_along_k) or (m == 1 and b_along_k):
+        outputs = m if n == 1 else n
+        a_row, b_row = (k, 0) if n == 1 else (0, k)
+        warps = outputs if summed else batches * outputs
+        launch("gemm_dots", code, blocks(32 * warps), BLOCK, a, b, c, batches, outputs, k,
+               a_step, b_step, c_step, a_row, b_row, int(summed), accumulate)
+        c.changed()
+        return c
+
+    # The biggest tile that still gives every multiprocessor a block, counting
+    # the slices a single output's long sum (k, times the batch entries)
+    # could be split into, and skipping tiles that would be mostly empty.
+    processors = _multiprocessors()
+    for edge in _GEMM_TILES[code]:
+        tiles = -(-m // edge) * -(-n // edge)
+        steps = batches * -(-k // _GEMM_BK[edge])
+        reach = max(1, steps // _GEMM_SLICE_STEPS) if summed else batches
+        if tiles * reach >= processors and 2 * m * n >= tiles * edge * edge:
+            break
+    grid = (-(-n // edge), -(-m // edge))
+    name = f"gemm_{edge}x{edge}_{'t' if trans_a else 'n'}{'t' if trans_b else 'n'}"
+    if not summed:
+        launch(name, code, (*grid, min(batches, 65535)), _GEMM_THREADS, a, b, c, batches, m, k, n,
+               a_step, b_step, c_step, accumulate, 0)
+        c.changed()
+        return c
+
+    # Fewer tiles than multiprocessors: split the long sum into slices,
+    # each written to its own partial result, added up afterwards (split-k).
+    slices = 1 if tiles >= processors else min(-(-processors // tiles), max(1, steps // _GEMM_SLICE_STEPS), 64)
+    if slices == 1:
+        launch(name, code, grid, _GEMM_THREADS, a, b, c, batches, m, k, n, a_step, b_step, 0, accumulate, 1)
+    else:
+        share = -(-steps // slices)
+        slices = -(-steps // share)                # no empty slices
+        partials = DeviceArray.empty(slices * m * n, code)
+        launch(name, code, (*grid, slices), _GEMM_THREADS, a, b, partials, batches, m, k, n,
+               a_step, b_step, 0, 0, slices)
+        launch("gemm_sum_slices", code, blocks(m * n), BLOCK, partials, c, m * n, slices, accumulate)
+    c.changed()
+    return c
+
+
 # (end of gemm)
 
 
