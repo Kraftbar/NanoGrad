@@ -187,6 +187,14 @@ one on AVX2):
 | BiLSTM-CRF tagger on UD EWT | 28.4 | 28.1 | 1.0x | 5.9e-13 |
 | U-Net on CamVid | 1825.6 | 1907.4 | 1.0x | 1.1e-12 |
 
+WikiText-2 LSTM (`wikitext_lm.py --compare --steps 30`, one core, with
+other programs running): float64 1,014 vs 1,374 ms per step (0.74x),
+float32 578-619 vs 588-619 ms (about 1.0x), so the large-vocabulary gap
+of the Xeon is gone here too. In float64 the weights agree to 5e-9 after
+30 steps; in float32 rounding grows at lr 20 to a largest difference of
+1.2 (the same with the old per-step LSTM ops), while the losses stay
+close (7.93 vs 7.90).
+
 The tagger's LSTM layers and its CRF now run as one op each
 (`rnn.lstm_sequence`, `tagger.crf_forward`). With the old per-step ops it
 took 41-46 ms against PyTorch's 26 ms on this machine (1.6-1.7x).
