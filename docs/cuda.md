@@ -156,9 +156,9 @@ sampling), once on each backend, float32:
 | C kernels, 8 threads | 268 min | 18.11 |
 | CUDA | 30 min | 18.12 |
 
-The losses agree to four digits for the first few hundred steps and then
-drift apart, as two float32 runs that sum in different orders do, and the
-samples come out just as good.
+The two runs print the same loss, to the four digits shown, at every
+report from step 100 to step 9,300: summing in a different order changes
+the last bits of float32 values, not the training.
 
 ## Limits
 
