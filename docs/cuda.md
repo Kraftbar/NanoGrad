@@ -47,8 +47,9 @@ once and kept until a kernel writes to it. Each such copy is a *sync*:
 Python waits for the GPU to finish everything queued before it.
 `kernels_cuda.syncs` counts them, which shows where code still touches
 values from Python. Making the backend fast was mostly about removing
-syncs: a training step now has two or three (the loss, which the training
-loop prints, and the gradient norm when clipping).
+syncs: a training step now has three (the loss value, its gradient's
+scale, and the loss that the training loop prints), four when clipping
+gradients.
 
 **Kernels are queued, not waited for.** A launch returns immediately, so
 Python builds the next op while the GPU runs the last one. Only a sync
@@ -143,6 +144,21 @@ Python: a launch costs about 6 microseconds (3 of them in the driver),
 and the baby GPT's step is about 1,000 launches plus the autograd
 bookkeeping around them, while the GPU itself would need a few
 milliseconds.
+
+## A Whole Training Run
+
+The MNIST diffusion model of [model_families.md](./model_families.md#diffusion-diffusionpy-diffusion_demopy)
+(455K-parameter U-Net with group norm and attention, 20 epochs, EMA, DDIM
+sampling), once on each backend, float32:
+
+| | time | FID (same judge) |
+| --- | ---: | ---: |
+| C kernels, 8 threads | 268 min | 18.11 |
+| CUDA | 30 min | 18.12 |
+
+The losses agree to four digits for the first few hundred steps and then
+drift apart, as two float32 runs that sum in different orders do, and the
+samples come out just as good.
 
 ## Limits
 
