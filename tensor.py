@@ -1461,10 +1461,13 @@ def tensor_sum(tensor: Tensor, axis: int | None = None) -> Tensor:
     """Sum all values or reduce a tensor along one axis."""
 
     if axis is None:
-        out = _op_result([sum(tensor.data)], (1,), (tensor,), "sum")
+        # One block of every value: the sum and its broadcast back are kernels,
+        # so on the GPU neither copies the values to the host.
+        count = len(tensor.data)
+        out = _op_result(kernels.sum_repeated(tensor.data, outer=1, size=1, inner=count), (1,), (tensor,), "sum")
 
         def _backward_all() -> None:
-            _add_grad(tensor, [_grad_data(out)[0]] * len(tensor.data))
+            _add_grad(tensor, kernels.expand_repeated(_grad_data(out), outer=1, size=1, inner=count))
 
         _set_backward(out, _backward_all)
         return out
