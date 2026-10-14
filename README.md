@@ -74,6 +74,7 @@ and each can be read on its own:
 +---------------------------------------------------------------------+
 | Kernels: the inner loops                                            |
 | kernels_reference.py (Python, to read) <-> kernels.c (C, to run)    |
+|                                        <-> kernels.cu (GPU, CUDA)   |
 +---------------------------------------------------------------------+
 ```
 
@@ -88,6 +89,10 @@ The bottom split keeps the code readable without giving up speed:
   one, and `test_kernels.py` checks that they agree.
 - With the C kernels on, tensors keep their values in C arrays, so data
   goes from one kernel to the next without being copied through Python.
+- The same kernels also exist for NVIDIA GPUs (`kernels.cu`, compiled at
+  run time; `use_backend("cuda")`): tensors then live in GPU memory, and
+  training runs 3x (LeNet) to 70x (a 6-layer GPT) faster than on the CPU.
+  See [docs/cuda.md](./docs/cuda.md).
 
 The model families share everything below them. A ResNet, a vision
 transformer, a BERT-style encoder and an LSTM needed only a few new pieces
@@ -159,6 +164,8 @@ are in [docs/benchmarks.md](./docs/benchmarks.md).
   to and from Python lists at every op
 - [x] A blocked, register-tiled matrix product and implicit-GEMM
   convolutions in C (40-47 GFLOP/s in float64 on one core)
+- [x] [A CUDA backend: the kernels on an NVIDIA GPU, compiled with NVRTC and
+  launched through the driver with ctypes](./docs/cuda.md)
 - [x] [More LLM gears: grouped-query and sliding-window attention, mixture
   of experts, LoRA, weight quantization, speculative decoding](./docs/llm_gears.md)
 - [x] [WikiText-2 word-level language modeling with PyTorch's
@@ -291,10 +298,13 @@ char_compare.py  # compare tiny character language-model configs
 char_sample_grid.py # sweep checkpoint sampling settings into CSVs
 nanogpt_compare.py # train NanoGrad and nanoGPT side by side (needs torch)
 gpt_train.py     # nanoGPT-style step-based character GPT training
-kernels.py       # compute kernels: picks the C or pure-Python backend
+kernels.py       # compute kernels: picks the C, CUDA or pure-Python backend
 kernels_reference.py # the pure-Python kernels, written to be read
 kernels.c        # the same kernels in C
 kernels_c.py     # builds kernels.c and calls it through ctypes
+kernels.cu       # the same kernels for an NVIDIA GPU
+kernels_cuda.py  # compiles kernels.cu (NVRTC), GPU memory, launches through the driver
+gpu_benchmark.py # training-step time per model, GPU against CPU
 language_benchmark.py # tiny transformer timing check
 linalg.py        # small list-of-lists linear algebra (solve, eigen, SVD)
 geometry.py      # pinhole camera, rotations, triangulation, PnP, essential matrix
