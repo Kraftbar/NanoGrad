@@ -151,16 +151,38 @@ weight difference after those steps):
 | FGSM training on MNIST | 99.8 | 106.1 | 0.9x | 1.1e-13 |
 | CNN on spoken digits | 193.9 | 176.0 | 1.1x | 2.4e-13 |
 | DS-CNN keyword spotting | 295.9 | 406.7 | 0.7x | 7.8e-13 |
-| BiLSTM-CRF tagger on UD EWT (fused LSTM and CRF; Ryzen, see below) | 25.5 | 26.3 | 1.0x | 5.9e-13 |
+| BiLSTM-CRF tagger on UD EWT | 65.1 | 47.3 | 1.4x | 6.5e-13 |
 | U-Net on CamVid | 2724.8 | 2541.0 | 1.1x | 1.2e-12 |
 
 (The pure-Python reference path, kept to be read, is 30-300x slower than
 the C kernels on the same ops.)
 
-The tagger row was re-measured on the Ryzen 7 3700X after its LSTM layers
-and CRF became one op each (`rnn.lstm_sequence`, `tagger.crf_forward`).
-On the same machine, the per-step ops took 41-46 ms against PyTorch's
-26 ms (1.6-1.7x); the other rows are from the cloud Xeon.
+The tables above are from the cloud Xeon. On the Ryzen 7 3700X
+(`benchmark_suite.py --steps 30`, 2026-10-14; families whose data is not
+on that machine are left out), NanoGrad is faster than PyTorch on every
+row but MAF:
+
+| comparison | NanoGrad ms/step | PyTorch ms/step | ratio | max weight difference |
+| --- | ---: | ---: | ---: | ---: |
+| lenet on mnist | 4.9 | 6.5 | 0.8x | 6.9e-17 |
+| resnet on mnist | 33.8 | 39.6 | 0.9x | 4.4e-13 |
+| vit on mnist | 9.7 | 11.4 | 0.9x | 5.2e-12 |
+| lenet on fashion | 5.5 | 6.4 | 0.9x | 1.1e-16 |
+| resnet on fashion | 32.4 | 40.1 | 0.8x | 9.7e-15 |
+| vit on fashion | 9.2 | 10.9 | 0.8x | 5.5e-12 |
+| lenet on cifar10 | 10.5 | 19.6 | 0.5x | 3.3e-14 |
+| resnet on cifar10 | 46.9 | 60.6 | 0.8x | 1.5e-15 |
+| vit on cifar10 | 12.8 | 16.7 | 0.8x | 2.6e-12 |
+| BERT masked characters | 40.3 | 39.1 | 1.0x | 5.2e-12 |
+| VAE on mnist | 15.2 | 18.4 | 0.8x | 2.8e-15 |
+| MAF on MNIST | 95.8 | 77.9 | 1.2x | 6.8e-10 |
+| FGSM training on MNIST | 64.5 | 84.0 | 0.8x | 4.3e-14 |
+| DS-CNN keyword spotting | 201.5 | 251.3 | 0.8x | 7.1e-13 |
+| BiLSTM-CRF tagger on UD EWT | 26.2 | 25.4 | 1.0x | 5.9e-13 |
+
+The tagger's LSTM layers and its CRF now run as one op each
+(`rnn.lstm_sequence`, `tagger.crf_forward`). With the old per-step ops it
+took 41-46 ms against PyTorch's 26 ms on this machine (1.6-1.7x).
 
 ### Threads
 
