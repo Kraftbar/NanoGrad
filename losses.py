@@ -131,7 +131,7 @@ def softmax_cross_entropy(
         # targets (one scatter-add of -(1 - smoothing) * factor at each row's target).
         factor = _grad_data(out)[0] / rows
         grad = kernels.scale(probabilities, factor)
-        targets = kernels.index_table([row * cols + target for row, target in enumerate(classes)])
+        targets = [row * cols + target for row, target in enumerate(classes)]    # distinct: one per row
         kernels.scatter_add_indexed(kernels.storage([-(1.0 - label_smoothing) * factor] * rows), targets,
                                     batches=1, image_size=rows * cols, into=grad)
         if label_smoothing:

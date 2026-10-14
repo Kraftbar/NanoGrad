@@ -657,31 +657,36 @@ def _conv_inverse(index, targets: int) -> tuple[DeviceArray, DeviceArray] | None
     """The index table inverted, for scatters done as gathers: entries
     sources[starts[t] : starts[t + 1]] (ascending) are those with index[e] == t.
 
-    Built on the host, so only for tables whose values are on the host
-    already (index_table keeps them: tables never change), and cached per
-    table; None for indices that live only on the GPU (max-pool winners).
+    Built on the host and cached per table, so only for the fixed tables of
+    index_table (which keeps their values on the host: tables never change and
+    are reused). None for anything else: indices that live only on the GPU
+    (max-pool winners), and lists passed once (inverting them would cost more
+    than the scatter), which then add with atomics.
     """
 
-    if isinstance(index, DeviceArray):
-        if index._host is None:
-            return None
-        host = index._host
-        cached = _conv_inverses.get(id(index))
-        if cached is None or cached[0]() is not index:
-            cached = (weakref.ref(index, lambda _, key=id(index): _conv_inverses.pop(key, None)), {})
-            _conv_inverses[id(index)] = cached
-        inverses = cached[1]
-    else:
-        host, inverses = index, {}
+    if not isinstance(index, DeviceArray) or index._host is None:
+        return None
+    host = index._host
+    cached = _conv_inverses.get(id(index))
+    if cached is None or cached[0]() is not index:
+        cached = (weakref.ref(index, lambda _, key=id(index): _conv_inverses.pop(key, None)), {})
+        _conv_inverses[id(index)] = cached
+    inverses = cached[1]
     if targets not in inverses:
-        counts = [0] * (targets + 1)
-        for t in host:
-            counts[t + 1] += 1
-        for t in range(targets):
-            counts[t + 1] += counts[t]
-        sources = sorted(range(len(host)), key=host.__getitem__)   # stable: ascending within a target
-        inverses[targets] = (index_table(counts), index_table(sources))
+        inverses[targets] = _conv_build_inverse(host, targets)
     return inverses[targets]
+
+
+def _conv_build_inverse(host, targets: int) -> tuple[DeviceArray, DeviceArray]:
+    """(starts, sources) of _conv_inverse for host indices, not cached."""
+
+    counts = [0] * (targets + 1)
+    for t in host:
+        counts[t + 1] += 1
+    for t in range(targets):
+        counts[t + 1] += counts[t]
+    sources = sorted(range(len(host)), key=host.__getitem__)       # stable: ascending within a target
+    return index_table(counts), index_table(sources)
 
 
 def _conv_product_grid(rows: int, cols: int, depth: int) -> tuple[int, int, int]:
@@ -810,7 +815,7 @@ def depthwise_forward(image, index, kernel, batches: int, channels: int, channel
 def depthwise_backward(image, index, kernel, grad, batches: int, channels: int, channel_size: int,
                        q_size: int) -> tuple[DeviceArray, DeviceArray]:
     image, kernel, grad = _conv_inputs(image, kernel, grad)
-    inverse = _conv_inverse(index, channel_size) or _conv_inverse(list(index), channel_size)
+    inverse = _conv_inverse(index, channel_size) or _conv_build_inverse(list(index), channel_size)
     index = _indices(index)
     code, positions = image.typecode, index.count // q_size
     dkernel = DeviceArray.empty(channels * q_size, code)
@@ -865,7 +870,7 @@ def window_mean(image, index, planes: int, plane_size: int, window_size: int) ->
 
 def window_mean_backward(grad, index, planes: int, plane_size: int, window_size: int) -> DeviceArray:
     grad = _device(grad)
-    inverse = _conv_inverse(index, plane_size) or _conv_inverse(list(index), plane_size)
+    inverse = _conv_inverse(index, plane_size) or _conv_build_inverse(list(index), plane_size)
     windows = len(index) // window_size
     image_grad = DeviceArray.empty(planes * plane_size, grad.typecode)
     if image_grad.count:
