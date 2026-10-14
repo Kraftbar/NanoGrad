@@ -72,5 +72,51 @@ class DiffusionTests(unittest.TestCase):
                 self.assertAlmostEqual(a, b, places=9)
 
 
+class SamplerTests(unittest.TestCase):
+    def test_ddim_with_a_perfect_noise_guess_returns_the_image(self) -> None:
+        # A model that knows the clean image x0 can predict the noise exactly:
+        # eps = (x_t - sqrt(alpha_bar) x0) / sqrt(1 - alpha_bar). DDIM then
+        # recovers x0 at every step, so the sample is x0 itself.
+        target = [0.5, -0.25, 0.75, 0.0]
+
+        class Oracle:
+            def __call__(self, images: Tensor, steps: list[int]) -> Tensor:
+                a = process.alpha_bars[steps[0]]
+                return Tensor([(x - a ** 0.5 * x0) / (1 - a) ** 0.5 for x, x0 in zip(images.data, target)],
+                              images.shape)
+
+        process = Diffusion(TinyUNet(width=4, time_width=8), steps=50)
+        process.model = Oracle()
+        samples = process.ddim_sample((1, 1, 2, 2), random.Random(0), steps=10)
+        for value, expected in zip(samples, target):
+            self.assertAlmostEqual(value, expected, places=9)
+
+    def test_ema_tracks_and_swaps(self) -> None:
+        from diffusion_demo import EMA
+
+        weight = Tensor([0.0, 2.0], (2,), requires_grad=True)
+        ema = EMA([weight], decay=0.5)
+        weight.data = type(weight.data)(weight.data.typecode, [4.0, 2.0]) if hasattr(weight.data, "typecode") \
+            else [4.0, 2.0]
+        ema.update()
+        self.assertEqual(list(ema.shadow[0]), [2.0, 2.0])
+        ema.swap()
+        self.assertEqual(list(weight.data), [2.0, 2.0])
+        ema.swap()
+        self.assertEqual(list(weight.data), [4.0, 2.0])
+
+
+class FrechetDistanceTests(unittest.TestCase):
+    def test_known_gaussians(self) -> None:
+        from sample_quality import frechet_distance
+
+        # Equal covariances: only the mean term remains.
+        same = [[2.0, 0.5], [0.5, 1.0]]
+        self.assertAlmostEqual(frechet_distance(([0.0, 0.0], same), ([3.0, 4.0], same)), 25.0, places=9)
+        # Diagonal covariances: sum over axes of (sqrt(a) - sqrt(b))^2.
+        first, second = [[4.0, 0.0], [0.0, 9.0]], [[1.0, 0.0], [0.0, 1.0]]
+        self.assertAlmostEqual(frechet_distance(([0.0, 0.0], first), ([0.0, 0.0], second)), 1.0 + 4.0, places=9)
+
+
 if __name__ == "__main__":
     unittest.main()

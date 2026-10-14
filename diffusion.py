@@ -158,3 +158,29 @@ class Diffusion:
                 if step > 0:
                     x = [value + math.sqrt(beta) * rng.gauss(0.0, 1.0) for value in x]
         return x
+
+    def ddim_sample(self, shape, rng: random.Random, steps: int = 100) -> list[float]:
+        """Generate with DDIM (Song et al., 2021, eta = 0): the same trained
+        model, but only ``steps`` of the T time steps, evenly spaced, and no
+        fresh noise. Each step predicts the clean image from the noise
+        estimate, x0 = (x_t - sqrt(1 - alpha_bar_t) eps) / sqrt(alpha_bar_t),
+        clipped to the data range [-1, 1] as DDPM's sampler does, then noises
+        it back to the earlier step with that same eps:
+
+            x_prev = sqrt(alpha_bar_prev) x0 + sqrt(1 - alpha_bar_prev) eps
+        """
+
+        from tensor import no_grad
+
+        times = sorted({round(i * (self.steps - 1) / (steps - 1)) for i in range(steps)}, reverse=True)
+        x = [rng.gauss(0.0, 1.0) for _ in range(math.prod(shape))]
+        with no_grad():
+            for index, step in enumerate(times):
+                alpha_bar = self.alpha_bars[step]
+                previous = self.alpha_bars[times[index + 1]] if index + 1 < len(times) else 1.0
+                predicted = self.model(Tensor(x, shape), [step] * shape[0]).data
+                a, b = math.sqrt(alpha_bar), math.sqrt(1.0 - alpha_bar)
+                a_prev, b_prev = math.sqrt(previous), math.sqrt(1.0 - previous)
+                x = [a_prev * min(1.0, max(-1.0, (value - b * eps) / a)) + b_prev * eps
+                     for value, eps in zip(x, predicted)]
+        return x
