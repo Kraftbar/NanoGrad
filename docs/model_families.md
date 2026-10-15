@@ -90,7 +90,9 @@ time).
 On the GPU, `--data data/ptb --preset zaremba-medium` trains Zaremba et
 al.'s "medium" LSTM (two layers of 650, dropout 0.5, 39 epochs) on the
 Penn Treebank in 70 minutes: test perplexity **84.0** (validation 87.6;
-paper 82.7 and 86.2).
+paper 82.7 and 86.2). Their "large" one (`--preset zaremba-large`, 1,500
+wide, dropout 0.65, 55 epochs) takes 5 hours: test perplexity **78.6**
+(validation 82.6; paper 78.4 and 82.2).
 
 *Added*: `split` (whose pieces share one gradient buffer, so splitting a
 sequence into T steps stays linear in T), sigmoid kernel, LSTM state in
@@ -149,6 +151,13 @@ accuracy), on whose features 1,000 real images score 0.6, so the number
 is not comparable with the MNIST one.
 
 ![64 DDIM samples from the same U-Net trained on Fashion-MNIST](images/diffusion_fashion.png)
+
+On CIFAR-10, on the GPU, a wider U-Net (width 64, 1.8M parameters,
+attention at 8 x 8; `--dataset cifar10 --width 64`, 60 epochs) reaches
+FID **22.7** (106 / 66 / 38 / 28 / 25 / 23 every 10 epochs; 4.6 h). Its
+judge is a CIFAR-10 CNN (72% test accuracy; real images score 6.0).
+
+![64 DDIM samples from the width-64 U-Net trained on CIFAR-10](images/diffusion_cifar10.png)
 
 *Added*: group norm, DDIM sampling, the clipped DDPM posterior step, an
 EMA of the weights, and the FID.

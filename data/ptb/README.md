@@ -21,3 +21,5 @@ Their "medium" LSTM, on the GPU (about 70 minutes; test perplexity 84.0):
 ```bash
 NANOGRAD_BACKEND=cuda python3 wikitext_lm.py --data data/ptb --preset zaremba-medium --dtype float32
 ```
+
+And the "large" one (about 5 hours; test perplexity 78.6): `--preset zaremba-large`.

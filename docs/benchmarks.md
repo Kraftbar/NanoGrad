@@ -23,6 +23,7 @@ and float64, and NanoGrad uses its C kernels.
 | Fashion-MNIST / CIFAR-10 | small ResNet, 2 epochs | 86.90% / 58.30% | [all models below](#model-families) |
 | Penn Treebank | Zaremba et al.'s small LSTM, 13 epochs | test perplexity **113.8** (PyTorch, same weights and batches: 115.0) | paper: test perplexity 114.5 |
 | Penn Treebank | Zaremba et al.'s medium LSTM (650 wide, dropout 0.5), 39 epochs, on the GPU | test perplexity **84.0** | paper: 82.7 |
+| Penn Treebank | Zaremba et al.'s large LSTM (1,500 wide, dropout 0.65), 55 epochs, on the GPU | test perplexity **78.6** | paper: 78.4 |
 | WikiText-2 | PyTorch's `word_language_model` LSTM, 6 epochs | test perplexity **135.4** (PyTorch, same weights and batches: 139.6; dropout masks differ) | |
 | WikiText-2 | 2-layer GPT, same recipe | test perplexity **244.2** (PyTorch, same weights and batches: 240.3; dropout masks differ) | |
 | Cora (citation graph) | GCN, pygcn's recipe, 10 seeds | **83.1% +- 0.6** test accuracy (PyTorch, own dropout masks: 82.9% +- 0.7) | GCN paper: 81.5% (on the Planetoid split) |
@@ -48,6 +49,7 @@ and float64, and NanoGrad uses its C kernels.
 | MNIST | VAE, 3 epochs | **117.3** nats per image (negative ELBO) | |
 | MNIST (generation) | DDPM, 455K-parameter U-Net with group norm and 7 x 7 attention, 20 epochs, EMA, DDIM 100 steps | FID **18.1** on a small MNIST CNN's features, 1,000 samples (real images: 2.4; without norm and attention: 24.8) | |
 | Fashion-MNIST (generation) | the same U-Net and recipe | FID **7.3** on a small Fashion-MNIST CNN's features, 1,000 samples (real images: 0.6) | |
+| CIFAR-10 (generation) | 1.8M-parameter U-Net (width 64), 60 epochs, on the GPU | FID **22.7** on a small CIFAR-10 CNN's features, 1,000 samples (real images: 6.0) | |
 
 The Tiny Shakespeare GPT is compared against nanoGPT itself (a separate
 implementation, so the curves agree statistically, not to rounding); see
