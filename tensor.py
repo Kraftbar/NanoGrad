@@ -73,7 +73,7 @@ class Tensor:
         if len(data) != _numel(shape):
             raise ValueError("data length does not match shape")
 
-        self.data = list(map(float, data))   # always a copy
+        self.data = kernels.copy(data)       # always a copy (on the GPU, made there)
         self.shape = tuple(shape)
         self.requires_grad = requires_grad
         self.grad = kernels.zeros(len(self.data)) if requires_grad else None
@@ -420,7 +420,9 @@ def _op_result(
         parent.requires_grad for parent in parents
     )
     out.grad = None
-    out._prev = set(parents) if out.requires_grad else set()
+    # The parents in their order (a dict's keys, not a set ordered by memory
+    # address), so every backward pass adds up gradients in the same order.
+    out._prev = dict.fromkeys(parents) if out.requires_grad else set()
     out._op = op
     out._backward = _no_backward
     if _profiler is not None:
@@ -1353,14 +1355,16 @@ def gather_rows(table: Tensor, indices: Sequence[int]) -> Tensor:
 
     if table.ndim != 2:
         raise ValueError("gather_rows expects a 2D table")
-    if not indices:
+    if not len(indices):
         raise ValueError("gather_rows needs at least one index")
 
     rows, width = table.shape
-    if min(indices) < 0 or max(indices) >= rows:
-        raise ValueError("embedding index out of range")
-
-    ids = kernels.index_table(indices)
+    if kernels.capturing() and not isinstance(indices, (list, tuple)):
+        ids = indices                               # ids on the GPU, for a CUDA graph (not checked)
+    else:
+        if min(indices) < 0 or max(indices) >= rows:
+            raise ValueError("embedding index out of range")
+        ids = kernels.index_table(indices)
     data = kernels.gather_rows(table.data, ids, width=width)
     out = _op_result(data, (len(indices), width), (table,), "gather_rows")
 

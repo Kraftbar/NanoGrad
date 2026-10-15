@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import kernels
+import kernels_cuda
 
 from tensor import (
     _set_backward,
@@ -346,8 +347,9 @@ class TensorBatchNorm2d(TensorModule):
     def _update_running_statistics(self, mean: Sequence[float], variance: Sequence[float], count: int) -> None:
         momentum = self.momentum
         unbiased = kernels.scale(variance, count / max(count - 1, 1))
-        self.running_mean = kernels.add_scaled(kernels.scale(self.running_mean, 1 - momentum), mean, momentum)
-        self.running_var = kernels.add_scaled(kernels.scale(self.running_var, 1 - momentum), unbiased, momentum)
+        # In place, so they keep their addresses (what a CUDA graph's replays update).
+        self.running_mean[:] = kernels.add_scaled(kernels.scale(self.running_mean, 1 - momentum), mean, momentum)
+        self.running_var[:] = kernels.add_scaled(kernels.scale(self.running_var, 1 - momentum), unbiased, momentum)
 
     def parameters(self) -> list[Tensor]:
         return [self.weight, self.bias]
@@ -880,6 +882,8 @@ class TensorRMSNorm(TensorModule):
 
 def _index_shape_and_flat(indices) -> tuple[tuple[int, ...], list[int]]:
     if isinstance(indices, Tensor):
+        if kernels.capturing():                    # a CUDA graph's input: the ids stay on the GPU
+            return indices.shape, kernels_cuda.indices_of(indices.data)
         return indices.shape, _integer_indices(indices.data)
     if _is_sequence(indices):
         shape = _index_shape(indices)

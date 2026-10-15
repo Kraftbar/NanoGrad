@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 import kernels
+import kernels_cuda
 from engine import Value
 from tensor import RowGrad, Tensor
 
@@ -161,6 +162,9 @@ class TensorAdam:
             parameter.zero_grad()
 
     def step(self) -> None:
+        if kernels.capturing():
+            self._graphed_step()
+            return
         self.step_count += 1
         grad_scale = _global_grad_scale(self.parameters, self.max_grad_norm)
         beta1_correction = 1.0 - self.beta1 ** self.step_count
@@ -200,6 +204,56 @@ class TensorAdam:
                 step_size=self.lr / beta1_correction,
                 sqrt_correction=math.sqrt(beta2_correction),
                 eps=self.eps,
+            )
+
+    def _graphed_step(self) -> None:
+        """``step`` as a CUDA graph records it (``kernels_cuda.capture``).
+
+        A graph replays its kernels with the arguments they were recorded
+        with, so the numbers that change from step to step go through GPU
+        memory instead: the step size and bias correction (they depend on
+        the step count, and on the learning rate, which a schedule may
+        change) are worked out on the host before every replay, by the same
+        formulas as in ``step``; the clipping factor is computed on the GPU;
+        and the weights are updated in place, so that they keep their
+        addresses. The arithmetic is ``step``'s, so the results are the same
+        bit for bit.
+        """
+
+        def scalars() -> list[float]:                     # called before every replay
+            self.step_count += 1
+            beta1_correction = 1.0 - self.beta1 ** self.step_count
+            beta2_correction = 1.0 - self.beta2 ** self.step_count
+            return [self.lr / beta1_correction, math.sqrt(beta2_correction), 1.0 - self.lr * self.weight_decay]
+
+        if self.l2 and self.max_grad_norm is not None:
+            raise NotImplementedError("a CUDA graph of Adam with both l2 and max_grad_norm")
+        settings = kernels_cuda.per_replay(scalars, 3)
+        clip = None
+        if self.max_grad_norm is not None:
+            grads = [parameter.grad for parameter in self.parameters if parameter.grad is not None]
+            clip = kernels_cuda.clip_factor(
+                [grad.coalesced().values if isinstance(grad, RowGrad) else grad for grad in grads],
+                self.max_grad_norm)
+        for parameter_index, parameter in enumerate(self.parameters):
+            if parameter.grad is None:
+                continue
+            grad = parameter.grad
+            if isinstance(grad, RowGrad):
+                grad = grad.to_dense()
+            if self.l2:                                   # (no clipping, so step's scale(grad, 1.0) is grad)
+                grad = kernels.add_scaled(grad, parameter.data, self.l2)
+            self._m[parameter_index], self._v[parameter_index] = kernels_cuda.adam_update_graphed(
+                parameter.data,
+                grad,
+                self._m[parameter_index],
+                self._v[parameter_index],
+                settings,
+                clip,
+                _uses_weight_decay(parameter, self.weight_decay, self.weight_decay_min_ndim),
+                self.beta1,
+                self.beta2,
+                self.eps,
             )
 
 

@@ -1314,18 +1314,24 @@ KERNEL projected_sign_step(const real *delta, const real *grad, const real *x, d
 /* One Adam step, one thread per weight, m and v updated in place (see kernels.c):
  *     g = grad * grad_scale,  m = beta1 m + (1 - beta1) g,  v = beta2 v + (1 - beta2) g^2
  *     new_w = w * decay - step_size * m / (sqrt(v) / sqrt_correction + eps) */
-KERNEL adam_update(const real *w, const real *grad, real *m, real *v, real *new_w,
-                   long count, double grad_scale, double beta1, double beta2, double decay,
-                   double step_size, double sqrt_correction, double eps)
+__device__ __forceinline__ real adam_step(long i, const real *w, const real *grad, real *m, real *v,
+                                          double grad_scale, double beta1, double beta2, double decay,
+                                          double step_size, double sqrt_correction, double eps)
 {
-    long i = thread_index();
-    if (i >= count) return;
     real g = grad[i] * (real)grad_scale;
     real m_i = (real)beta1 * m[i] + (real)(1.0 - beta1) * g;
     real v_i = (real)beta2 * v[i] + (real)(1.0 - beta2) * g * g;
     m[i] = m_i;
     v[i] = v_i;
-    new_w[i] = w[i] * (real)decay - (real)step_size * m_i / (sqrt(v_i) / (real)sqrt_correction + (real)eps);
+    return w[i] * (real)decay - (real)step_size * m_i / (sqrt(v_i) / (real)sqrt_correction + (real)eps);
+}
+
+KERNEL adam_update(const real *w, const real *grad, real *m, real *v, real *new_w,
+                   long count, double grad_scale, double beta1, double beta2, double decay,
+                   double step_size, double sqrt_correction, double eps)
+{
+    long i = thread_index();
+    if (i < count) new_w[i] = adam_step(i, w, grad, m, v, grad_scale, beta1, beta2, decay, step_size, sqrt_correction, eps);
 }
 
 /* (end of rows) */
@@ -1676,3 +1682,59 @@ KERNEL crf_start_grad(const real *de, real *dstart, long batch, long steps, long
 }
 
 /* (end of recurrent) */
+
+
+/* ------------------------------------------------------------------------
+ * For CUDA graphs (kernels_cuda.capture). These have no twin in kernels.c:
+ * they keep in GPU memory numbers that the CPU code simply computes on the
+ * host. A graph replays its kernels with the arguments they were recorded
+ * with, so a number that changes every step (the loss, the clipping
+ * factor, Adam's bias corrections) cannot be an argument: these kernels
+ * read it from, or write it to, a GPU array instead.
+ * --------------------------------------------------------------------- */
+
+/* out[0] = the mean of count float64 values (one block, in a fixed order: a mean loss) */
+KERNEL mean_of(const double *x, real *out, long count)
+{
+    double sum = 0.0;
+    for (long i = threadIdx.x; i < count; i += blockDim.x) sum += x[i];
+    sum = rows_sum(sum);
+    if (threadIdx.x == 0) out[0] = (real)(sum / count);
+}
+
+/* out = x * s[0], with the factor in GPU memory (a loss's incoming gradient) */
+KERNEL scale_by_first(const real *x, const real *s, real *out, long count)
+{
+    long i = thread_index();
+    if (i < count) out[i] = x[i] * s[0];
+}
+
+/* Token ids stored as numbers (a Tensor's values) as indices: out[i] = (long)x[i] */
+KERNEL indices_of(const real *x, long *out, long count)
+{
+    long i = thread_index();
+    if (i < count) out[i] = (long)x[i];
+}
+
+/* The clipping factor of optim._global_grad_scale, from the gradients' sum of squares:
+ *     factor = min(1, max_norm / (sqrt(total) + 1e-6))     (in double, as Python computes it) */
+KERNEL clip_factor(const double *total, double *factor, double max_norm)
+{
+    double scale = max_norm / (sqrt(total[0]) + 1e-6);
+    factor[0] = scale < 1.0 ? scale : 1.0;
+}
+
+/* adam_update in place, with the numbers that change every step read from GPU memory:
+ * settings = {step_size, sqrt_correction, decay} (the host writes them before each replay)
+ * and the clipping factor (none: 1). The arithmetic is adam_update's, bit for bit. */
+KERNEL adam_update_graphed(real *w, const real *grad, real *m, real *v, long count,
+                           const double *settings, const double *grad_scale, long use_decay,
+                           double beta1, double beta2, double eps)
+{
+    long i = thread_index();
+    if (i >= count) return;
+    w[i] = adam_step(i, w, grad, m, v, grad_scale ? grad_scale[0] : 1.0, beta1, beta2,
+                     use_decay ? settings[2] : 1.0, settings[0], settings[1], eps);
+}
+
+/* (end of graphs) */

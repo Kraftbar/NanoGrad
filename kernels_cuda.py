@@ -20,6 +20,10 @@ The functions below have the same names and arguments as their twins in
 host copies (see ``missing()``): slow, but correct, so whole models run
 while kernels are added one by one.
 
+``capture()`` records a whole training step as a CUDA graph, which then
+replays with one call instead of a thousand launches (see "CUDA graphs"
+at the end).
+
 This file is plumbing: the math is in ``kernels.cu`` and, readably, in
 ``kernels_reference.py``.
 """
@@ -33,8 +37,9 @@ import hashlib
 import os
 import struct
 import sys
+import weakref
 from array import array
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import kernels_c
@@ -50,6 +55,8 @@ _functions: dict[tuple[str, str], ctypes.c_void_p] = {}
 _ITEM_SIZE = {"d": 8, "f": 4, "l": 8}
 BLOCK = 256                       # threads per block for the one-thread-per-value kernels
 _BUFFER_POINTER, _BUFFER_SIZE = 1, 2    # cuLaunchKernel "extra" keys (CU_LAUNCH_PARAM_BUFFER_*)
+_stream = None                    # where kernels go: the default stream (None), or a graph's while it is recorded
+_recording = None                 # the Graph being recorded, if any (see capture)
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +139,9 @@ def load() -> bool:
             driver.cuMemcpyDtoH_v2.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_size_t]
             driver.cuMemcpyDtoDAsync_v2.argtypes = [ctypes.c_uint64, ctypes.c_uint64, ctypes.c_size_t, ctypes.c_void_p]
             driver.cuMemsetD8Async.argtypes = [ctypes.c_uint64, ctypes.c_ubyte, ctypes.c_size_t, ctypes.c_void_p]
+            driver.cuGraphInstantiateWithFlags.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulonglong]
+            driver.cuMemcpyHtoDAsync_v2.argtypes = [ctypes.c_uint64, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p]
+            driver.cuMemHostAlloc.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_size_t, ctypes.c_uint]
             # (cuLaunchKernel is left without argtypes: its arguments are all small
             # ints and pointers, and the conversion would cost a third of a launch.)
         major, minor = ctypes.c_int(), ctypes.c_int()
@@ -179,6 +189,8 @@ def launch(name: str, code: str, grid, block, *args, shared: int = 0) -> None:
 
     # Every argument is 8 bytes, so they are packed into one buffer (the driver's
     # "extra" form) instead of one ctypes object per argument.
+    if _recording is not None:
+        _recording.saw(args)
     formats, values = [], []
     for arg in args:
         kind = type(arg)
@@ -196,7 +208,7 @@ def launch(name: str, code: str, grid, block, *args, shared: int = 0) -> None:
     extra = (ctypes.c_void_p * 5)(_BUFFER_POINTER, ctypes.addressof(buffer), _BUFFER_SIZE, ctypes.addressof(size), 0)
     gx, gy, gz = (grid, 1, 1) if type(grid) is int else (*grid, 1, 1)[:3]
     bx, by, bz = (block, 1, 1) if type(block) is int else (*block, 1, 1)[:3]
-    result = _driver.cuLaunchKernel(_function(name, code), gx, gy, gz, bx, by, bz, shared, None, None, extra)
+    result = _driver.cuLaunchKernel(_function(name, code), gx, gy, gz, bx, by, bz, shared, _stream, None, extra)
     if result:
         _check(result, name)
 
@@ -217,7 +229,9 @@ def blocks(count: int, size: int = BLOCK) -> int:
 # so a block fits many requests. Reuse is safe without waiting: every kernel
 # runs in order on one stream, so the next kernel to write the block runs
 # after the last one that read it. (PyTorch's caching allocator, in small.)
+# A CUDA graph keeps its blocks apart, for itself (see Graph).
 _free_blocks: dict[int, list[int]] = {}
+_graph_blocks: dict[int, "Graph"] = {}    # pointer -> the graph that owns the block
 pool_bytes = 0                    # bytes allocated from the driver
 
 
@@ -229,14 +243,20 @@ def _rounded(size: int) -> int:
 
 
 def _allocate(size: int) -> int:
-    global pool_bytes
     size = _rounded(size)
+    return _take(size) if _recording is None else _recording.allocate(size)
+
+
+def _take(size: int) -> int:
+    """A block of a rounded size: a kept one, else a new one from the driver."""
+
+    global pool_bytes
     kept = _free_blocks.get(size)
     if kept:
         return kept.pop()
     pointer = ctypes.c_uint64()
     result = _driver.cuMemAlloc_v2(ctypes.byref(pointer), size)
-    if result == 2:                                   # out of memory: free what is garbage, retry
+    if result == 2 and _recording is None:            # out of memory: free what is garbage, retry
         gc.collect()                                  # (autograd graphs are cycles: dead tensors wait for this)
         release_memory()
         result = _driver.cuMemAlloc_v2(ctypes.byref(pointer), size)
@@ -246,13 +266,18 @@ def _allocate(size: int) -> int:
 
 
 def _release(pointer: int, size: int) -> None:
-    _free_blocks.setdefault(_rounded(size), []).append(pointer)
+    owner = _graph_blocks.get(pointer) if _graph_blocks else None
+    if owner is not None:
+        owner.release(pointer)
+    else:
+        _free_blocks.setdefault(_rounded(size), []).append(pointer)
 
 
 def release_memory() -> None:
-    """Hand every kept (unused) block back to the driver."""
+    """Hand every kept (unused) block back to the driver (graphs keep theirs)."""
 
     global pool_bytes
+    _not_recording("release_memory()")
     _check(_driver.cuCtxSynchronize(), "cuCtxSynchronize")
     for size, pointers in _free_blocks.items():
         for pointer in pointers:
@@ -306,6 +331,7 @@ class DeviceArray:
 
         global syncs
         if self._host is None:
+            _not_recording("reading a GPU value (as loss.item() does)")
             values = array(self.typecode, bytes(self.nbytes))
             if self.count:
                 address = values.buffer_info()[0]
@@ -336,6 +362,12 @@ class DeviceArray:
                 _copy(_device(value, self.typecode), 0, self, start, value.count)
                 return
             value = value.host()
+        if isinstance(key, slice) and key.indices(self.count) == (0, self.count, 1):   # x[:] = all new values
+            values = value if type(value) is array and value.typecode == self.typecode else array(self.typecode, value)
+            if len(values) != self.count:
+                raise ValueError("cannot change a DeviceArray's length")
+            self._upload(values)
+            return
         values = array(self.typecode, self.host())
         values[key] = value
         if len(values) != self.count:
@@ -375,6 +407,8 @@ class DeviceArray:
         return out
 
     def _upload(self, values: array) -> None:
+        if _recording is not None:
+            _recording.uploaded(self)
         if self.count:
             _check(_driver.cuMemcpyHtoD_v2(self.pointer, values.buffer_info()[0], self.nbytes), "cuMemcpyHtoD")
         self._host = None
@@ -382,9 +416,11 @@ class DeviceArray:
 
 def _copy(source: DeviceArray, start: int, target: DeviceArray, offset: int, count: int) -> None:
     if count:
+        if _recording is not None:
+            _recording.saw((source, target))
         size = _ITEM_SIZE[source.typecode]
         _check(_driver.cuMemcpyDtoDAsync_v2(target.pointer + offset * size, source.pointer + start * size,
-                                            count * size, None), "cuMemcpyDtoD")
+                                            count * size, _stream), "cuMemcpyDtoD")
         target.changed()
 
 
@@ -413,7 +449,9 @@ def storage(values: Sequence[float]) -> DeviceArray:
 def zeros(count: int, code: str | None = None) -> DeviceArray:
     out = DeviceArray.empty(count, code or typecode)
     if count:
-        _check(_driver.cuMemsetD8Async(out.pointer, 0, out.nbytes, None), "cuMemsetD8")
+        if _recording is not None:
+            _recording.saw((out,))
+        _check(_driver.cuMemsetD8Async(out.pointer, 0, out.nbytes, _stream), "cuMemsetD8")
     return out
 
 
@@ -441,6 +479,7 @@ def _like(x: DeviceArray) -> DeviceArray:
 def synchronize() -> None:
     """Wait for every launched kernel to finish (for timing)."""
 
+    _not_recording("synchronize()")
     _check(_driver.cuCtxSynchronize(), "cuCtxSynchronize")
 
 
@@ -974,9 +1013,15 @@ def total_sum_of_squares(arrays) -> float:
     all of them: each array's sum goes into its own slot of one buffer, on the
     GPU, and the slots are added up there too."""
 
+    return _total_sum_of_squares(arrays).host()[0]
+
+
+def _total_sum_of_squares(arrays) -> DeviceArray:
+    """total_sum_of_squares, left on the GPU (one float64)."""
+
     arrays = [_device(x) for x in arrays if len(x)]
     if not arrays:
-        return 0.0
+        return zeros(1, "d")
     totals = DeviceArray.empty(len(arrays), "d")
     for slot, x in enumerate(arrays):
         count = min(_REDUCE_BLOCKS, blocks(x.count))
@@ -985,7 +1030,7 @@ def total_sum_of_squares(arrays) -> float:
         launch("rows_sum_partials", x.typecode, 1, BLOCK, partial, totals, slot, count)
     total = DeviceArray.empty(1, "d")
     launch("rows_sum_partials", arrays[0].typecode, 1, BLOCK, totals, total, 0, len(arrays))
-    return total.host()[0]
+    return total
 
 
 def gelu(x) -> tuple[DeviceArray, DeviceArray]:
@@ -1268,6 +1313,335 @@ def crf_forward_backward(weights, saved: tuple, grad, batch: int, steps: int, ta
     return de, dstart, dweights
 
 # (end of recurrent)
+
+
+# ---------------------------------------------------------------------------
+# CUDA graphs: a whole training step recorded once, replayed with one call
+# ---------------------------------------------------------------------------
+
+# A small model's training step is about a thousand short kernels, and
+# Python takes about 6 µs to launch each, longer than most of them take to
+# run: the GPU waits for Python. A CUDA graph records the launches once
+# (the driver's *stream capture*: kernels sent to a capturing stream are
+# noted down instead of run) and then replays them all with one
+# cuGraphLaunch, with no Python in between (PyTorch's torch.cuda.graphs).
+#
+# A replay runs the same kernels, on the same addresses, with the same
+# arguments. Everything else follows from that:
+#
+# - The step reads its batch from fixed arrays (*static inputs*); each
+#   replay first copies the new batch into them.
+# - Every block of memory the recorded step uses is kept for the graph
+#   (its private pool), so the addresses stay valid. While recording, the
+#   blocks the step frees are reused for the step's later arrays, as they
+#   would be when it runs.
+# - Nothing has run while recording, so nothing can be read back (it
+#   raises), and values uploaded then (index tables, constants) are copied
+#   right away: the graph sees them as constants. They get blocks of their
+#   own, never shared with the step's temporary arrays, which every replay
+#   writes again.
+# - Recording happens on a stream of its own (the driver captures one
+#   stream); replays run on the default stream, in order with everything
+#   else.
+# - Numbers that change from step to step must be in GPU memory, not
+#   kernel arguments: the loss (losses.py), the clipping factor and Adam's
+#   bias corrections (optim.py, with per_replay), and state is updated in
+#   place, not replaced by a new array (the graph would keep reading the
+#   old one: capture checks for this).
+
+_CAPTURE_RELAXED = 2              # CU_STREAM_CAPTURE_MODE_RELAXED: the default stream stays usable
+_NON_BLOCKING = 1                 # CU_STREAM_NON_BLOCKING: a stream that never waits for the default one
+_EVENT_NO_TIMING = 2              # CU_EVENT_DISABLE_TIMING
+_capture_stream = None
+
+
+def capturing() -> bool:
+    """Whether a graph is being recorded (see capture)."""
+
+    return _recording is not None
+
+
+def _not_recording(what: str) -> None:
+    if _recording is not None:
+        raise RuntimeError(f"{what} while a CUDA graph is recorded: nothing has run yet. "
+                           "Keep host reads (loss.item()) out of the recorded step.")
+
+
+class Graph:
+    """A recorded training step (see ``capture``).
+
+    ``graph(*values)`` copies each value (a list, an ``array`` or a
+    DeviceArray) into the matching static input, replays the step, and
+    returns what the step returned when it was recorded: the same tensors,
+    whose values are now this replay's. Replays queue up like kernels;
+    reading a result waits for it.
+    """
+
+    def __init__(self, inputs: Sequence[DeviceArray]) -> None:
+        self.inputs = list(inputs)
+        self.output = None
+        self.nodes = 0                                   # kernels and copies recorded
+        self.blocks: dict[int, int] = {}                 # pointer -> size of every block it owns
+        self.unheld: set[int] = set()                    # those no DeviceArray holds now
+        self.free: dict[int, list[int]] = {}             # those the recording may reuse, by size
+        self.constants: set[int] = set()                 # blocks filled from the host while recording
+        self.used: set[int] = set()                      # blocks the recorded kernels use
+        self.seen: dict[int, weakref.ref] = {}           # id -> each DeviceArray the kernels used
+        self.outside: dict[int, weakref.ref] = {}        # pointer -> those made before recording
+        self.kept: list[DeviceArray] = []                # (kept alive: the graph reads them)
+        self.stale: list[weakref.ref] = []               # arrays whose host copies a replay outdates
+        self.refresh: list[tuple[DeviceArray, Callable]] = []   # per_replay's (array, compute)
+        self._staging: dict[int, ctypes.c_void_p] = {}   # input pointer -> its pinned host buffer
+        self._copied = None                              # an event: the last replay's input copies are done
+        self._graph = self._exec = None
+
+    # -- while recording --------------------------------------------------
+
+    def allocate(self, size: int) -> int:
+        kept = self.free.get(size)
+        pointer = kept.pop() if kept else _take(size)
+        self.blocks[pointer] = size
+        self.unheld.discard(pointer)
+        _graph_blocks[pointer] = self
+        return pointer
+
+    def release(self, pointer: int) -> None:
+        """A DeviceArray let go of one of the graph's blocks. The graph keeps
+        it; while recording, the step's later arrays may reuse it (unless it
+        holds constants, which every replay reads again)."""
+
+        self.unheld.add(pointer)
+        if self is _recording and pointer not in self.constants:
+            self.free.setdefault(self.blocks[pointer], []).append(pointer)
+
+    def saw(self, arrays) -> None:
+        """Note the arrays a recorded kernel or copy uses."""
+
+        for x in arrays:
+            if type(x) is DeviceArray:
+                self.used.add(x.pointer)
+                ref = self.seen.get(id(x))
+                if ref is None or ref() is not x:
+                    self.seen[id(x)] = weakref.ref(x)
+                    if x.pointer not in self.blocks:
+                        self.outside[x.pointer] = weakref.ref(x)
+
+    def uploaded(self, x: DeviceArray) -> None:
+        """x is about to be filled from the host, now: its values become constants of the graph."""
+
+        ref = self.seen.get(id(x))
+        if x.pointer not in self.blocks or (ref is not None and ref() is x):
+            raise RuntimeError("changing an existing array from the host while a CUDA graph is recorded "
+                               "(it would happen once, now, and not at every replay)")
+        if x.pointer in self.used:
+            # The block held earlier arrays of the step, which every replay
+            # writes again: the constants need a block of their own.
+            size = self.blocks[x.pointer]
+            self.release(x.pointer)
+            x.pointer = _take(size)
+            self.blocks[x.pointer] = size
+            _graph_blocks[x.pointer] = self
+        self.constants.add(x.pointer)
+
+    def _finish(self) -> None:
+        dropped = [pointer for pointer, ref in self.outside.items() if ref() is None]
+        if dropped:
+            raise RuntimeError(f"the recorded step let go of {len(dropped)} array(s) it reads, made before "
+                               "recording (state replaced by a new array instead of updated in place?): "
+                               "the replays would keep reading the old values")
+        self.kept = [ref() for ref in self.outside.values()]
+        # A replay changes every array it writes, so their host copies go
+        # stale; index tables (int64, from outside, or constants) never change.
+        for ref in self.seen.values():
+            x = ref()
+            if x is not None and x.pointer not in self.constants and (x.typecode != "l" or x.pointer in self.blocks):
+                self.stale.append(ref)
+        self.seen, self.outside, self.free, self.used = {}, {}, {}, set()
+        count = ctypes.c_size_t()
+        _check(_driver.cuGraphGetNodes(self._graph, None, ctypes.byref(count)), "cuGraphGetNodes")
+        self.nodes = count.value
+        self._exec = ctypes.c_void_p()
+        _check(_driver.cuGraphInstantiateWithFlags(ctypes.byref(self._exec), self._graph, 0), "cuGraphInstantiate")
+
+    # -- replaying --------------------------------------------------------
+
+    def __call__(self, *values):
+        if len(values) != len(self.inputs):
+            raise TypeError(f"this graph takes {len(self.inputs)} inputs, got {len(values)}")
+        if self._copied is None:
+            self._copied = ctypes.c_void_p()
+            _check(_driver.cuEventCreate(ctypes.byref(self._copied), _EVENT_NO_TIMING), "cuEventCreate")
+        else:                                            # the last replay's copies are done: the staging buffers are free
+            _check(_driver.cuEventSynchronize(self._copied), "cuEventSynchronize")
+        for static, new in zip(self.inputs, values):
+            if new is not static:
+                self._stage(static, new)
+        for target, compute in self.refresh:
+            self._stage(target, compute())
+        _check(_driver.cuEventRecord(self._copied, None), "cuEventRecord")
+        for ref in self.stale:
+            x = ref()
+            if x is not None:
+                x._host = None
+        _check(_driver.cuGraphLaunch(self._exec, None), "cuGraphLaunch")   # on the default stream, after the copies
+        return self.output
+
+    def _stage(self, target: DeviceArray, values) -> None:
+        """target[:] = values, without waiting: host values go through a
+        pinned (page-locked) buffer, which the GPU copies from in the
+        background. (A plain upload waits for the GPU: up to milliseconds
+        when another program shares it.)"""
+
+        if isinstance(values, DeviceArray):
+            target[:] = values                           # a copy on the GPU, in order
+            return
+        host = values if type(values) is array and values.typecode == target.typecode else array(target.typecode, values)
+        if len(host) != target.count:
+            raise ValueError(f"a graph input of {target.count} values got {len(host)}")
+        staging = self._staging.get(target.pointer)
+        if staging is None:
+            staging = ctypes.c_void_p()
+            _check(_driver.cuMemHostAlloc(ctypes.byref(staging), max(1, target.nbytes), 0), "cuMemHostAlloc")
+            self._staging[target.pointer] = staging
+        ctypes.memmove(staging, host.buffer_info()[0], target.nbytes)
+        _check(_driver.cuMemcpyHtoDAsync_v2(target.pointer, staging, target.nbytes, None), "cuMemcpyHtoDAsync")
+        target._host = None
+
+    def close(self) -> None:
+        """Free the graph and hand its memory back to the pool (arrays still
+        in use give theirs back when they go)."""
+
+        if self._exec:
+            _driver.cuGraphExecDestroy(self._exec)
+        if self._graph:
+            _driver.cuGraphDestroy(self._graph)
+        self._exec = self._graph = None
+        if self._staging:
+            _check(_driver.cuEventSynchronize(self._copied), "cuEventSynchronize")   # copies may still read them
+            for staging in self._staging.values():
+                _driver.cuMemFreeHost(staging)
+        if self._copied:
+            _driver.cuEventDestroy_v2(self._copied)
+        self._staging, self._copied = {}, None
+        for pointer, size in self.blocks.items():
+            if _graph_blocks.get(pointer) is self:
+                del _graph_blocks[pointer]
+            if pointer in self.unheld:
+                _free_blocks.setdefault(size, []).append(pointer)
+        self.blocks, self.unheld, self.free = {}, set(), {}
+        self.output, self.kept, self.refresh, self.stale = None, [], [], []
+
+    def __del__(self) -> None:
+        if _free_blocks is not None and self.blocks:        # (not at shutdown)
+            self.close()
+
+
+def capture(step: Callable[[], object], *inputs: DeviceArray) -> Graph:
+    """Record ``step()`` (one training step: forward, backward, optimizer)
+    as a CUDA graph, reading its batch from the DeviceArrays ``inputs``.
+
+    Run the step eagerly at least once first, so the optimizer's state and
+    the index tables exist and the memory pool is warm. Recording runs
+    nothing: the model is unchanged until the first replay. The Python code
+    in ``step`` runs once, now, so anything it decides on the host (a
+    dropout seed, a random target, a batch size) is fixed for every replay;
+    only the inputs, the learning rate and the step count (``optim.TensorAdam``)
+    change. Reading a GPU value inside ``step`` raises.
+    """
+
+    global _recording, _stream, _capture_stream
+    if _recording is not None:
+        raise RuntimeError("a CUDA graph is already being recorded")
+    if any(not isinstance(x, DeviceArray) for x in inputs):
+        raise TypeError("a graph's inputs are DeviceArrays")
+    graph = Graph(inputs)
+    gc.collect()                                  # the warm-up's garbage goes back to the pool first
+    synchronize()
+    if _capture_stream is None:
+        _capture_stream = ctypes.c_void_p()
+        _check(_driver.cuStreamCreate(ctypes.byref(_capture_stream), _NON_BLOCKING), "cuStreamCreate")
+    _check(_driver.cuStreamBeginCapture_v2(_capture_stream, _CAPTURE_RELAXED), "cuStreamBeginCapture")
+    _recording, _stream = graph, _capture_stream
+    try:
+        try:
+            graph.output = step()
+        finally:
+            _recording, _stream = None, None
+            graph._graph = ctypes.c_void_p()
+            ended = _driver.cuStreamEndCapture(_capture_stream, ctypes.byref(graph._graph))
+        _check(ended, "cuStreamEndCapture")
+        graph._finish()
+    except BaseException:
+        graph.close()
+        raise
+    return graph
+
+
+def per_replay(compute: Callable[[], Sequence[float]], count: int) -> DeviceArray:
+    """``count`` float64 numbers that change from step to step, from
+    ``compute()`` on the host (Adam's step size: see optim.TensorAdam).
+    While a graph is recorded, the graph calls ``compute`` before every
+    replay and uploads what it returns; otherwise it is called right away."""
+
+    if _recording is None:
+        return DeviceArray("d", compute())
+    out = DeviceArray("d", [0.0] * count)           # uploaded: a block of its own, as constants get
+    _recording.refresh.append((out, compute))
+    return out
+
+
+def mean_of(values: DeviceArray) -> DeviceArray:
+    """The mean of float64 values (rows' losses), as one number of the current precision, on the GPU."""
+
+    out = DeviceArray.empty(1, typecode)
+    launch("mean_of", typecode, 1, BLOCK, values, out, values.count)
+    return out
+
+
+def scale_by_first(x, factor: DeviceArray) -> DeviceArray:
+    """x * factor[0], with the factor on the GPU (a loss's incoming gradient)."""
+
+    x = _device(x)
+    out = _like(x)
+    if x.count:
+        launch("scale_by_first", x.typecode, blocks(x.count), BLOCK, x, _device(factor, x.typecode), out, x.count)
+    return out
+
+
+def indices_of(x) -> DeviceArray:
+    """Whole numbers stored as floats (token ids in a Tensor) as int64 indices, on the GPU (not checked)."""
+
+    x = _device(x)
+    out = DeviceArray.empty(x.count, "l")
+    if x.count:
+        launch("indices_of", x.typecode, blocks(x.count), BLOCK, x, out, x.count)
+    return out
+
+
+def clip_factor(grads, max_norm: float) -> DeviceArray:
+    """optim's gradient clipping factor, min(1, max_norm / norm), left on the GPU (one float64)."""
+
+    factor = DeviceArray.empty(1, "d")
+    launch("clip_factor", typecode, 1, 1, _total_sum_of_squares(grads), factor, float(max_norm))
+    return factor
+
+
+def adam_update_graphed(w: DeviceArray, grad, m, v, settings: DeviceArray, grad_scale: DeviceArray | None,
+                        use_decay: bool, beta1: float, beta2: float, eps: float) -> tuple[DeviceArray, DeviceArray]:
+    """adam_update in place on w, with the step's numbers on the GPU: settings holds
+    (step_size, sqrt_correction, decay); grad_scale is clip_factor's (None: 1). Returns (m, v)."""
+
+    grad, m, v = (_device(a, w.typecode) for a in (grad, m, v))
+    if not w.count == grad.count == m.count == v.count:
+        raise ValueError("adam_update needs weights, gradient and moments of equal length")
+    if w.count:
+        launch("adam_update_graphed", w.typecode, blocks(w.count), BLOCK, w, grad, m, v, w.count, settings,
+               0 if grad_scale is None else grad_scale, int(use_decay), float(beta1), float(beta2), float(eps))
+        for x in (w, m, v):
+            x.changed()
+    return m, v
+
+# (end of graphs)
 
 
 # ---------------------------------------------------------------------------

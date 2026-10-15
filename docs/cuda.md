@@ -28,8 +28,9 @@ the NVIDIA driver and that pip package; the first run compiles
   through ctypes load and launch it.
 - **Tensors stay on the GPU.** `Tensor.data` is a `DeviceArray`. Reading
   one from Python copies it to the host once; that copy is a *sync*,
-  because Python waits for the GPU. A training step has three syncs
-  (`kernels_cuda.syncs` counts them).
+  because Python waits for the GPU. An image model's training step has
+  one sync, the loss it prints; the GPT's has three, with its token ids
+  and gradient clipping (`kernels_cuda.syncs` counts them).
 - **Launches don't wait.** Python builds the next op while the GPU runs
   the last one.
 - **Memory.** Freed blocks go back to a pool instead of the driver, like
@@ -78,6 +79,58 @@ Small models are limited by Python, at about 6 µs per launch.
 A whole diffusion run (MNIST, 20 epochs) takes 268 min on the CPU and
 30 min on the GPU. The FIDs are 18.11 and 18.12, and the two runs print
 the same losses.
+
+## CUDA Graphs
+
+A small model's step is about a thousand short kernels, and Python takes
+longer to launch them than the GPU takes to run them. A CUDA graph
+records one whole step (forward, backward, Adam) once; afterwards each
+step copies the batch into fixed input arrays and replays every kernel
+with one launch, as PyTorch's `torch.cuda.graphs` does:
+
+```python
+x = kernels.storage(pixels)                  # the graph's inputs
+y = kernels_cuda.DeviceArray("l", labels)
+step(x, y)                                   # one eager step first
+graph = kernels_cuda.capture(lambda: step(x, y), x, y)
+loss = graph(new_pixels, new_labels)         # step's loss tensor
+```
+
+`step` returns the loss tensor without reading it. `gpu_benchmark.py
+--graph` does this for each model. A replay runs the same kernels on the
+same addresses with the same arguments, so:
+
+- **Memory.** The graph keeps every block its step uses.
+- **No reads while recording** (nothing has run yet): `capture` raises.
+  The loss is averaged on the GPU, and so is Adam's clipping factor.
+- **Numbers that change every step** live in GPU memory. Adam's step
+  size is worked out on the host before each replay, so learning-rate
+  schedules still work.
+- **State is updated in place** (weights, batch-norm statistics);
+  `capture` raises if the step replaces an array it reads.
+- **Python runs once**, while recording: a dropout seed or noise drawn
+  there is fixed. The diffusion step draws its noise that way, so it
+  cannot be recorded as it is.
+
+Replays give the same bits as eager steps (`test_kernels_cuda.py`), where
+the eager step itself repeats bit for bit; atomic adds (the conv image
+gradient, repeated embedding ids) add in any order.
+
+Measured while two other training runs kept the GPU busy (so both
+columns are slower than the idle table above; medians of rounds that
+alternate the two, and the gains vary by about 1.5x from run to run):
+
+| model | eager ms | graph ms | gain |
+| --- | ---: | ---: | ---: |
+| LeNet-5 | 9.7 | 2.5 | 3.9x |
+| ResNet, MNIST | 13.6 | 3.9 | 3.5x |
+| ResNet-8, b32 | 19.1 | 14.8 | 1.3x |
+| ViT | 13.3 | 4.5 | 2.9x |
+| baby GPT | 29.4 | 11.8 | 2.5x |
+
+Replays copy their inputs from pinned host memory without waiting: a
+plain upload waits for the GPU, which takes milliseconds when another
+program shares it.
 
 ## Limits
 

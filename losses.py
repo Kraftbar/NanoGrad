@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 import kernels
+import kernels_cuda
 from tensor import Tensor, _add_grad, _grad_data, _op_result, _set_backward, is_grad_enabled
 
 
@@ -89,6 +90,8 @@ def softmax_cross_entropy(
     if not 0.0 <= label_smoothing < 1.0:
         raise ValueError("label_smoothing must be in [0, 1)")
 
+    if kernels.BACKEND == "cuda" and not label_smoothing and class_weights is None:
+        return _softmax_cross_entropy_on_gpu(logits, targets)
     rows, cols = logits.shape
     classes = _class_indices(targets, rows, cols)
     probabilities = kernels.softmax_rows(logits.data, cols)
@@ -137,6 +140,29 @@ def softmax_cross_entropy(
         if label_smoothing:
             grad = kernels.add(grad, kernels.storage([-label_smoothing * factor / cols] * len(grad)))
         _add_grad(logits, grad)
+
+    _set_backward(out, _backward)
+    return out
+
+
+def _softmax_cross_entropy_on_gpu(logits: Tensor, targets) -> Tensor:
+    """softmax_cross_entropy without reading anything back from the GPU, so
+    that a CUDA graph can record it: the loss is averaged there, and the
+    gradient is scaled by the output's gradient there. ``targets`` may also
+    be an int64 DeviceArray already on the GPU (a graph's static input;
+    not checked). One kernel does the softmax, the row losses and the
+    gradient (softmax - one_hot(target)) / rows, as linear_cross_entropy."""
+
+    rows, cols = logits.shape
+    on_gpu = isinstance(targets, kernels_cuda.DeviceArray) and targets.typecode == "l"
+    if on_gpu and len(targets) != rows:
+        raise ValueError("class targets length must match logits batch size")
+    classes = targets if on_gpu else _class_indices(targets, rows, cols)
+    grad, nll = kernels.softmax_xent_rows(kernels.copy(logits.data), classes, 1.0 / rows, cols)
+    out = _op_result(kernels_cuda.mean_of(nll), (1,), (logits,), "softmax_cross_entropy")
+
+    def _backward() -> None:
+        _add_grad(logits, kernels_cuda.scale_by_first(grad, _grad_data(out)))     # times d(loss), usually 1
 
     _set_backward(out, _backward)
     return out
