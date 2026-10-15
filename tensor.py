@@ -420,7 +420,9 @@ def _op_result(
         parent.requires_grad for parent in parents
     )
     out.grad = None
-    out._prev = set(parents) if out.requires_grad else set()
+    # The parents in their order (a dict's keys, not a set ordered by memory
+    # address), so every backward pass adds up gradients in the same order.
+    out._prev = dict.fromkeys(parents) if out.requires_grad else set()
     out._op = op
     out._backward = _no_backward
     if _profiler is not None:
