@@ -579,6 +579,39 @@ left 93.4, right 93.7, on 91.7, off 92.5, stop 92.5, go 89.8.
 10 x 4 stem), and MFCCs: the log-mel spectrogram followed by a DCT, both
 matrix products.
 
+### Listening live (`kws_live.py`)
+
+The same model, on the microphone. `kws.py --save` writes a checkpoint
+(the weights plus the training set's MFCC statistics); `kws_live.py`
+streams 16 kHz samples from ALSA's `arecord`, classifies the last
+second every 125 ms, and prints a word when its probability, averaged
+over 3 windows, reaches 0.7. Then it waits 1 s, and until that word has
+faded, so one utterance prints once. Windows that are not 6 dB above the
+noise floor (the quietest hop of the last 4 s) skip the model. One
+window takes about 4 ms, so it runs 30 times faster than real time.
+
+```text
+python3 kws.py --epochs 36 --dropout --l2 1e-4 --save runs/kws/model.json
+python3 kws_live.py --device plughw:1,0          # arecord -l lists the cards
+python3 kws_live.py --device plughw:1,0 --verbose # every window's level and class
+```
+
+Without a microphone, `--wav` runs the same detector over a file, and
+`--make-test-wav` builds one from test-set clips with a second of
+silence between them. On a stream of 145 clips (100 keywords, 45 unknown
+words and silence), words printed right out of 100, and false alarms:
+
+| model | clean | + a webcam's room noise |
+| --- | ---: | ---: |
+| dropout + L2 (92.09%) | 90, 4 | 71, 4 |
+| `--augment`, 24 epochs (87.59%) | 88, 4 | 79, 1 |
+
+The room noise (2 s recorded through the webcam, RMS 0.011, looped under
+the clips) costs the best clip classifier 19 words; the one trained with
+background noise mixed into its clips loses 9. So for the microphone,
+`kws.py --epochs 24 --augment --save runs/kws-augment/model.json` and
+`kws_live.py --model runs/kws-augment/model.json` may be the better pair.
+
 ## Mobile networks: MobileNet (`mobilenet.py`)
 
 Depthwise-separable convolutions: a 3 x 3 filter per channel, then a

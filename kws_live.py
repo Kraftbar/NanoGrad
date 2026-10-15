@@ -5,7 +5,7 @@ detector slides a one-second window over it, one hop (125 ms) at a
 time, and classifies each window with the same MFCCs, statistics and
 DS-CNN as training. A word is about half a second long, so it sits
 inside several windows in a row; turning those into one printed word
-takes three rules:
+takes four rules:
 
     gate        a window whose loudest hop is not clearly above the noise floor
                 (the quietest hop of the last few seconds) is silence, without
