@@ -36,6 +36,8 @@ training clip is shifted and mixed with noise afresh every epoch (see
 computed once and cached.
 
     python3 kws.py --epochs 24 [--augment] [--all-unknown] [--dropout]
+    python3 kws.py --epochs 36 --dropout --l2 1e-4 --save runs/kws/model.json
+    python3 kws.py --load runs/kws/model.json          # test a saved model (kws_live.py uses it)
     .venv/bin/python kws.py --frameworks nanograd torch --epochs 1 --train-limit 2000 --test-limit 500
 
 Data: data/speech_commands/ (see data/speech_commands/DOWNLOAD.md).
@@ -44,6 +46,7 @@ Data: data/speech_commands/ (see data/speech_commands/DOWNLOAD.md).
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import pickle
 import random
@@ -222,6 +225,42 @@ def standardize(train, test) -> list[tuple[float, float]]:
     return statistics
 
 
+def normalize(features: list[float], statistics: list[tuple[float, float]]) -> list[float]:
+    """One clip's (or a batch's) MFCCs standardized with saved per-coefficient statistics."""
+
+    return [(v - statistics[k % COEFFICIENTS][0]) / statistics[k % COEFFICIENTS][1] for k, v in enumerate(features)]
+
+
+def save_checkpoint(path: str | Path, model: MobileNet, statistics: list[tuple[float, float]]) -> None:
+    """The weights plus what is needed to feed the model new audio: the class names and the
+    training set's MFCC statistics."""
+
+    payload = {"format": "nanograd.kws.v1", "classes": list(CLASSES), "statistics": statistics,
+               "state": model.state_dict()}
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def load_checkpoint(path: str | Path) -> tuple[MobileNet, list[tuple[float, float]]]:
+    """(model in eval mode, MFCC statistics) from ``save_checkpoint``'s file."""
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if payload.get("format") != "nanograd.kws.v1" or tuple(payload["classes"]) != CLASSES:
+        raise ValueError(f"{path}: not a kws.py checkpoint for these classes")
+    model = ds_cnn()                         # dropout has no parameters, and eval mode turns it off anyway
+    model.load_state_dict(payload["state"])
+    model.eval()
+    return model, [tuple(pair) for pair in payload["statistics"]]
+
+
+def probabilities(model: MobileNet, features: list[float], count: int) -> list[float]:
+    """(count x classes) softmax probabilities for ``count`` standardized clips, row after row."""
+
+    model.eval()
+    with no_grad():
+        return list(model(Tensor(features, (count, 1, FRAMES, COEFFICIENTS))).softmax(axis=-1).data)
+
+
 def conv_kernels(model: MobileNet) -> list[Tensor]:
     """The convolution kernels, which the reference's L2 penalty covers (not the batch norm or
     the classifier)."""
@@ -248,10 +287,7 @@ class NanoGradRunner:
         return loss.item()
 
     def predict(self, features: list[float], count: int) -> list[int]:
-        self.model.eval()
-        with no_grad():
-            scores = self.model(Tensor(features, (count, 1, FRAMES, COEFFICIENTS))).data
-        classes = len(CLASSES)
+        scores, classes = probabilities(self.model, features, count), len(CLASSES)
         return [max(range(classes), key=lambda c: scores[row * classes + c]) for row in range(count)]
 
     def weights(self):
@@ -327,7 +363,11 @@ def main(argv: list[str] | None = None) -> dict:
                         help="L2 penalty on the convolution kernels (the reference: 1e-4)")
     parser.add_argument("--dropout", action="store_true",
                         help="the reference's dropout: 0.2 after the first convolution, 0.4 before the pooling")
+    parser.add_argument("--save", type=Path, help="write a checkpoint (weights + MFCC statistics) after each epoch")
+    parser.add_argument("--load", type=Path, help="test a saved checkpoint instead of training")
     args = parser.parse_args(argv)
+    if args.load:
+        return test_checkpoint(args)
 
     start = perf_counter()
     splits = load_speech_commands(args.data, args.seed, args.all_unknown)
@@ -349,8 +389,7 @@ def main(argv: list[str] | None = None) -> dict:
         if not args.augment:
             return [v for i in indices for v in train_set[i][0]]
         features = mfcc([augmented(*clips[i], noise, rng) for i in indices])
-        return [(v - statistics[k % COEFFICIENTS][0]) / statistics[k % COEFFICIENTS][1]
-                for f in features for k, v in enumerate(f)]
+        return normalize([v for f in features for v in f], statistics)
     print(f"{len(train_set)} training and {len(test_set)} test clips ({perf_counter() - start:.0f} s)", flush=True)
     results, runners = {}, {}
     for framework in args.frameworks:
@@ -375,6 +414,8 @@ def main(argv: list[str] | None = None) -> dict:
                 steps += 1
             print(f"  epoch {epoch:2d}: lr {lr:.0e}, train loss {total / math.ceil(len(order) / args.batch_size):.4f}, "
                   f"{perf_counter() - start:.0f} s", flush=True)
+            if args.save and framework == "nanograd":
+                save_checkpoint(args.save, model, statistics)
         seconds = perf_counter() - start
         overall, per_class = accuracy(runner, test_set)
         results[framework] = {"accuracy": overall, "per_class": dict(zip(CLASSES, per_class)),
@@ -390,6 +431,20 @@ def main(argv: list[str] | None = None) -> dict:
               + (" (different dropout masks)" if args.dropout else ""))
         results["max_weight_difference"] = difference
     return results
+
+
+def test_checkpoint(args) -> dict:
+    """Test accuracy of a saved model, its test clips standardized with its own statistics."""
+
+    model, statistics = load_checkpoint(args.load)
+    test_set = [(normalize(f, statistics), label) for f, label in
+                load_speech_commands(args.data, args.seed, args.all_unknown)["test"]]
+    random.Random(args.seed).shuffle(test_set)
+    test_set = test_set[: args.test_limit]
+    overall, per_class = accuracy(NanoGradRunner(model, args.lr), test_set)
+    print(f"{args.load}: test accuracy {100 * overall:.2f}% on {len(test_set)} clips", flush=True)
+    print("  per class: " + ", ".join(f"{name} {100 * value:.1f}%" for name, value in zip(CLASSES, per_class)))
+    return {"accuracy": overall, "per_class": dict(zip(CLASSES, per_class))}
 
 
 if __name__ == "__main__":
