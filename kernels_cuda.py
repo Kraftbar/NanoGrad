@@ -951,6 +951,10 @@ def sum_repeated(x, outer: int, size: int, inner: int) -> DeviceArray:
     if len(x) != outer * size * inner:
         raise ValueError("sum_repeated needs outer * size * inner values")
     x = _device(x)
+    if inner == 1 and outer >= 64:                # a bias over many rows: column sums in two passes
+        out = zeros(size, x.typecode)
+        _add_column_sums(out, x, outer, size)
+        return out
     out = DeviceArray.empty(size, x.typecode)
     if inner == 1 and size >= BLOCK:              # many sums: one thread each
         launch("sum_repeated_rows", x.typecode, blocks(size), BLOCK, x, out, outer, size)
