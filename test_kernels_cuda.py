@@ -101,6 +101,20 @@ class DeviceArrayTests(CudaTestCase):
         self.assertEqual(list(kernels.gather_indexed(kernels.storage([10.0, 20.0, 30.0]), table,
                                                      batches=1, image_size=3)), [30.0, 10.0, 20.0])
 
+    def test_memory_limit_hands_kept_blocks_back(self) -> None:
+        previous = kernels_cuda.memory_limit
+        try:
+            kept = kernels_cuda.DeviceArray.empty(1 << 18, "d")                # 2 MB, then kept by the pool
+            del kept
+            kernels_cuda.memory_limit = kernels_cuda.pool_bytes + (5 << 20)
+            other = kernels_cuda.DeviceArray.empty(3 << 18, "d")              # 6 MB: fits only without the kept block
+            self.assertLessEqual(kernels_cuda.pool_bytes, kernels_cuda.memory_limit)
+            with self.assertRaises(MemoryError):
+                kernels_cuda.DeviceArray.empty(1 << 22, "d")                  # 32 MB
+            del other
+        finally:
+            kernels_cuda.memory_limit = previous
+
     def test_float32(self) -> None:
         kernels.set_default_dtype("float32")
         try:

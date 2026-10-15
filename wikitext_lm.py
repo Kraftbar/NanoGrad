@@ -460,6 +460,10 @@ PRESETS = {
     # summed over 35 steps are 35 and 5 / 35 on the mean loss used here.
     "zaremba-medium": dict(emsize=650, nhid=650, bptt=35, dropout=0.5, epochs=39, lr=35.0, clip=5 / 35,
                            decay_after=6, decay=1.2, init_range=0.05, eval_batch_size=1),
+    # And their "large" one (test perplexity 78.4): 1500 wide, dropout 0.65,
+    # 55 epochs, the rate divided by 1.15 from the 15th, clip norm 10.
+    "zaremba-large": dict(emsize=1500, nhid=1500, bptt=35, dropout=0.65, epochs=55, lr=35.0, clip=10 / 35,
+                          decay_after=14, decay=1.15, init_range=0.04, eval_batch_size=1),
 }
 
 

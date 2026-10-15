@@ -135,5 +135,7 @@ program shares it.
 ## Limits
 
 - 8 GB: the 6x384 GPT fits batch 32, but not batch 64.
+- Two processes on one GPU: each pool keeps what it has freed, so cap
+  them with `NANOGRAD_CUDA_MEMORY_MB`.
 - float64 runs 64x slower than float32 on a gaming GPU.
 - CUDA does not survive `fork()`, so `parallel.py` stays on the CPU.

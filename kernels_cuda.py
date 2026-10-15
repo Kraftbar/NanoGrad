@@ -230,9 +230,16 @@ def blocks(count: int, size: int = BLOCK) -> int:
 # runs in order on one stream, so the next kernel to write the block runs
 # after the last one that read it. (PyTorch's caching allocator, in small.)
 # A CUDA graph keeps its blocks apart, for itself (see Graph).
+#
+# A process that shares the GPU with another can cap its pool
+# (NANOGRAD_CUDA_MEMORY_MB, like PyTorch's set_per_process_memory_fraction):
+# past the cap the kept blocks go back to the driver first, so a pool that
+# grew with one set of sizes (training) does not crowd out the other
+# process when another set (evaluation) comes along.
 _free_blocks: dict[int, list[int]] = {}
 _graph_blocks: dict[int, "Graph"] = {}    # pointer -> the graph that owns the block
 pool_bytes = 0                    # bytes allocated from the driver
+memory_limit = int(os.environ.get("NANOGRAD_CUDA_MEMORY_MB", "0")) << 20     # 0: no cap
 
 
 def _rounded(size: int) -> int:
@@ -254,6 +261,12 @@ def _take(size: int) -> int:
     kept = _free_blocks.get(size)
     if kept:
         return kept.pop()
+    if memory_limit and pool_bytes + size > memory_limit and _recording is None:
+        gc.collect()
+        release_memory()
+        if pool_bytes + size > memory_limit:
+            raise MemoryError(f"{pool_bytes + size} bytes of GPU memory needed, over "
+                              f"NANOGRAD_CUDA_MEMORY_MB={memory_limit >> 20}")
     pointer = ctypes.c_uint64()
     result = _driver.cuMemAlloc_v2(ctypes.byref(pointer), size)
     if result == 2 and _recording is None:            # out of memory: free what is garbage, retry
