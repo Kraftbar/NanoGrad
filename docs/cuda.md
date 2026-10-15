@@ -125,19 +125,18 @@ fork).
 ## Speed
 
 `gpu_benchmark.py`: one training step on random data, float32, RTX 3060 Ti
-against the C kernels on 8 threads of a Ryzen 7 3700X (the CPU was also
-running a training job, so its times are high by up to 2x):
+against the C kernels on 8 threads of an otherwise idle Ryzen 7 3700X:
 
 | model | GPU ms | CPU ms | speedup |
 | --- | ---: | ---: | ---: |
-| LeNet-5, MNIST, batch 32 | 1.7 | 5.6 | 3.3x |
-| small ResNet, MNIST, batch 32 | 5.0 | 34.4 | 6.9x |
-| ResNet-8, CIFAR-10, batch 32 | 11.0 | 121.5 | 11x |
-| ResNet-8, CIFAR-10, batch 256 | 67.9 | 559.8 | 8.2x |
-| ViT, MNIST, batch 32 | 7.5 | 39.5 | 5.3x |
-| baby GPT (4 x 128, context 64), batch 12 | 17.1 | 377.9 | 22x |
-| GPT (6 x 384, context 256), batch 16 | 109.8 | 7,899 | 72x |
-| diffusion U-Net (width 32, norm + attention), batch 128 | 144.5 | 2,566 | 18x |
+| LeNet-5, MNIST, batch 32 | 1.9 | 5.4 | 2.9x |
+| small ResNet, MNIST, batch 32 | 5.4 | 29.9 | 5.5x |
+| ResNet-8, CIFAR-10, batch 32 | 9.5 | 82.6 | 8.7x |
+| ResNet-8, CIFAR-10, batch 256 | 60.5 | 394.8 | 6.5x |
+| ViT, MNIST, batch 32 | 6.2 | 25.0 | 4.1x |
+| baby GPT (4 x 128, context 64), batch 12 | 15.8 | 274.9 | 17x |
+| GPT (6 x 384, context 256), batch 32 | 221.9 | 12,176 | 55x |
+| diffusion U-Net (width 32, norm + attention), batch 128 | 136.9 | 1,820 | 13x |
 
 The bigger the model, the bigger the gain. Small models are limited by
 Python: a launch costs about 6 microseconds (3 of them in the driver),
@@ -162,10 +161,9 @@ the last bits of float32 values, not the training.
 
 ## Limits
 
-- **Memory.** Every op's output stays alive until the backward pass, as on
-  the CPU, but the GPU has only 8 GB: the 6 x 384 GPT needs about 220 MB
-  per sequence of 256 tokens, so nanoGPT's batch of 64 does not fit
-  (batch 16 does).
+- **Memory.** Every op's output stays alive until the backward pass
+  reaches it, as on the CPU, but the GPU has only 8 GB: the 6 x 384 GPT
+  fits batch 32, not nanoGPT's 64.
 - **float64** runs at 1/64 of the float32 rate on a gaming GPU (about
   250 GFLOP/s here, still above the CPU), fine for checking, not for
   training.
