@@ -116,17 +116,19 @@ Replays give the same bits as eager steps (`test_kernels_cuda.py`), where
 the eager step itself repeats bit for bit; atomic adds (the conv image
 gradient, repeated embedding ids) add in any order.
 
-Measured while two other training runs kept the GPU busy (so both
-columns are slower than the idle table above; medians of rounds that
-alternate the two, and the gains vary by about 1.5x from run to run):
+With the GPU otherwise idle (`gpu_benchmark.py --backends cuda --graph`):
 
 | model | eager ms | graph ms | gain |
 | --- | ---: | ---: | ---: |
-| LeNet-5 | 9.7 | 2.5 | 3.9x |
-| ResNet, MNIST | 13.6 | 3.9 | 3.5x |
-| ResNet-8, b32 | 19.1 | 14.8 | 1.3x |
-| ViT | 13.3 | 4.5 | 2.9x |
-| baby GPT | 29.4 | 11.8 | 2.5x |
+| LeNet-5 | 1.5 | 0.7 | 2.1x |
+| ResNet, MNIST | 4.6 | 2.8 | 1.6x |
+| ResNet-8, b32 | 8.7 | 6.0 | 1.5x |
+| ViT | 6.0 | 1.2 | 4.8x |
+| baby GPT | 15.3 | 4.9 | 3.1x |
+
+The gain is largest where Python's launches, not the GPU, set the pace.
+While another program shares the GPU it grows (LeNet 3.9x), since each
+eager launch then also waits its turn.
 
 Replays copy their inputs from pinned host memory without waiting: a
 plain upload waits for the GPU, which takes milliseconds when another
