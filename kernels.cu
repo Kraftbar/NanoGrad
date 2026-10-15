@@ -1764,6 +1764,13 @@ KERNEL projected_sign_step(const real *delta, const real *grad, const real *x, d
     out[i] = d > high ? high : d;
 }
 
+/* a * b rounded on its own: the compiler may not contract it with the
+ * subtraction after it into one fused multiply-add. Left to itself it does
+ * that in some kernels and not in others, and fusion.py's copy of
+ * adam_step must give the same bits as these. */
+__device__ __forceinline__ float rounded_product(float a, float b) { return __fmul_rn(a, b); }
+__device__ __forceinline__ double rounded_product(double a, double b) { return __dmul_rn(a, b); }
+
 /* One Adam step, one thread per weight, m and v updated in place (see kernels.c):
  *     g = grad * grad_scale,  m = beta1 m + (1 - beta1) g,  v = beta2 v + (1 - beta2) g^2
  *     new_w = w * decay - step_size * m / (sqrt(v) / sqrt_correction + eps) */
@@ -1776,7 +1783,7 @@ __device__ __forceinline__ real adam_step(long i, const real *w, const real *gra
     real v_i = (real)beta2 * v[i] + (real)(1.0 - beta2) * g * g;
     m[i] = m_i;
     v[i] = v_i;
-    return w[i] * (real)decay - (real)step_size * m_i / (sqrt(v_i) / (real)sqrt_correction + (real)eps);
+    return rounded_product(w[i], (real)decay) - (real)step_size * m_i / (sqrt(v_i) / (real)sqrt_correction + (real)eps);
 }
 
 KERNEL adam_update(const real *w, const real *grad, real *m, real *v, real *new_w,

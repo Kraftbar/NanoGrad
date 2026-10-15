@@ -22,7 +22,9 @@ while kernels are added one by one.
 
 ``capture()`` records a whole training step as a CUDA graph, which then
 replays with one call instead of a thousand launches (see "CUDA graphs"
-at the end).
+at the end). ``fusion.capture()`` records it with its chains of
+elementwise kernels fused into generated ones; the graph's ``tracer``
+and ``load_kernels`` are its hooks here.
 
 This file is plumbing: the math is in ``kernels.cu`` and, readably, in
 ``kernels_reference.py``.
@@ -191,6 +193,9 @@ def launch(name: str, code: str, grid, block, *args, shared: int = 0) -> None:
     # "extra" form) instead of one ctypes object per argument.
     if _recording is not None:
         _recording.saw(args)
+        if _recording.tracer is not None:           # fusion.py is tracing the step: noted, sent later
+            _recording.tracer.launch(name, code, grid, block, args, shared)
+            return
     formats, values = [], []
     for arg in args:
         kind = type(arg)
@@ -431,6 +436,10 @@ def _copy(source: DeviceArray, start: int, target: DeviceArray, offset: int, cou
     if count:
         if _recording is not None:
             _recording.saw((source, target))
+            if _recording.tracer is not None:       # (see launch)
+                _recording.tracer.copy(source, start, target, offset, count)
+                target.changed()
+                return
         size = _ITEM_SIZE[source.typecode]
         _check(_driver.cuMemcpyDtoDAsync_v2(target.pointer + offset * size, source.pointer + start * size,
                                             count * size, _stream), "cuMemcpyDtoD")
@@ -464,6 +473,9 @@ def zeros(count: int, code: str | None = None) -> DeviceArray:
     if count:
         if _recording is not None:
             _recording.saw((out,))
+            if _recording.tracer is not None:       # (see launch)
+                _recording.tracer.clear(out)
+                return out
         _check(_driver.cuMemsetD8Async(out.pointer, 0, out.nbytes, _stream), "cuMemsetD8")
     return out
 
@@ -1474,6 +1486,8 @@ class Graph:
         self._staging: dict[int, ctypes.c_void_p] = {}   # input pointer -> its pinned host buffer
         self._copied = None                              # an event: the last replay's input copies are done
         self._graph = self._exec = None
+        self.tracer = None                               # fusion.py's, while it traces the step
+        self.program = None                              # fusion.py's fused program, if it made one
 
     # -- while recording --------------------------------------------------
 
@@ -1722,6 +1736,25 @@ def adam_update_graphed(w: DeviceArray, grad, m, v, settings: DeviceArray, grad_
     return m, v
 
 # (end of graphs)
+
+
+# ---------------------------------------------------------------------------
+# Generated kernels (fusion.py compiles them; launch() runs them by name)
+# ---------------------------------------------------------------------------
+
+
+def load_kernels(cubin: bytes, names: Sequence[str], code: str) -> None:
+    """Load a compiled module of extra kernels, so ``launch(name, code, ...)`` finds them."""
+
+    module = ctypes.c_void_p()
+    _check(_driver.cuModuleLoadData(ctypes.byref(module), cubin), "cuModuleLoadData")
+    for name in names:
+        function = ctypes.c_void_p()
+        _check(_driver.cuModuleGetFunction(ctypes.byref(function), module, name.encode()),
+               f"cuModuleGetFunction({name})")
+        _functions[(name, code)] = function
+
+# (end of generated kernels)
 
 
 # ---------------------------------------------------------------------------

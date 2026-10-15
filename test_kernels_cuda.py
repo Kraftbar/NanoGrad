@@ -6,6 +6,7 @@ import random
 import unittest
 from array import array
 
+import fusion
 import kernels
 import kernels_cuda
 from tensor import Tensor
@@ -832,6 +833,8 @@ class ModelTests(CudaTestCase):
 
 
 class GraphTests(CudaTestCase):
+    capture = staticmethod(kernels_cuda.capture)
+
     def setUp(self) -> None:
         super().setUp()
         kernels.use_backend("cuda")
@@ -865,7 +868,7 @@ class GraphTests(CudaTestCase):
                 loss = step(x, y)
             results.append((loss.item(), [list(p.data) for p in parameters + state()]))
             if graphed and graph is None:
-                graph = kernels_cuda.capture(lambda: step(x, y), x, y)
+                graph = self.capture(lambda: step(x, y), x, y)
         if graph is not None:
             graph.close()
         return results
@@ -958,7 +961,7 @@ class GraphTests(CudaTestCase):
         x, y = kernels.storage(values(24, 5)), kernels_cuda.DeviceArray("l", [0, 1])
         step(x, y)
         with self.assertRaisesRegex(RuntimeError, "recorded"):
-            kernels_cuda.capture(lambda: step(x, y).item(), x, y)
+            self.capture(lambda: step(x, y).item(), x, y)
         self.assertFalse(kernels_cuda.capturing())
         self.assertGreater(step(x, y).item(), 0.0)          # eager steps still work
 
@@ -973,13 +976,13 @@ class GraphTests(CudaTestCase):
             return loss
 
         with self.assertRaisesRegex(RuntimeError, "in place"):
-            kernels_cuda.capture(replacing, x, y)
+            self.capture(replacing, x, y)
 
     def test_closing_hands_the_memory_back(self) -> None:
         parameters, optimizer, step, _ = self.mlp()
         x, y = kernels.storage(values(24, 7)), kernels_cuda.DeviceArray("l", [0, 1])
         step(x, y)
-        graph = kernels_cuda.capture(lambda: step(x, y), x, y)
+        graph = self.capture(lambda: step(x, y), x, y)
         self.assertGreater(graph.nodes, 10)
         self.assertIn(graph, kernels_cuda._graph_blocks.values())
         graph.close()
@@ -989,6 +992,223 @@ class GraphTests(CudaTestCase):
         from tensor_nn import TensorLinear
 
         return self.classifier(TensorLinear(12, 3, seed=0), (2, 12))
+
+
+# Fused elementwise kernels (fusion.py): the same training steps, now with
+# the graph's elementwise kernels fused, must still give the same bits.
+
+
+class FusedGraphTests(GraphTests):
+    capture = staticmethod(fusion.capture)
+
+    def test_a_diffusion_unet_computes_the_same_gradients(self) -> None:
+        # Group norm, SiLU, time embeddings, attention: the U-Net fuses the most.
+        # Its convolutions' image gradients add with atomics, in any order, so
+        # even two eager runs differ in the last bits: compared to a tolerance,
+        # without an optimizer (Adam would blow up the noise of gradients near 0).
+        from diffusion import TinyUNet
+
+        model = TinyUNet(size=8, width=4, time_width=4, groups=2, attention=True, seed=0)
+        rng = random.Random(5)
+        batches = [[[rng.gauss(0.0, 1.0) for _ in range(2 * 64)] for _ in range(2)]
+                   + [[rng.uniform(-1.0, 1.0) for _ in range(2 * 4)]] for _ in range(3)]
+        inputs = [kernels.storage(x) for x in batches[0]]
+
+        def step(noisy, noise, embedding):
+            for parameter in model.parameters():
+                parameter.zero_grad()
+            error = model(Tensor(noisy, (2, 1, 8, 8)), [], embedding=Tensor(embedding, (2, 4))) - Tensor(noise, (2, 1, 8, 8))
+            loss = (error * error).mean()
+            loss.backward()
+            return loss
+
+        step(*inputs)
+        graph = fusion.capture(lambda: step(*inputs), *inputs)
+        self.assertLess(graph.program.nodes_after, 0.7 * graph.program.nodes_before)
+        replays = []                                  # (the replays write the gradients the recording made)
+        for batch in batches[1:]:
+            replays.append((graph(*batch).item(), [list(p.grad) for p in model.parameters()]))
+        for batch, (fused_loss, fused_grads) in zip(batches[1:], replays):
+            loss = step(*(kernels.storage(x) for x in batch)).item()
+            self.assertAlmostEqual(loss, fused_loss, delta=1e-6 * loss)
+            largest = max(abs(g) for parameter in model.parameters() for g in parameter.grad)
+            for parameter, fused in zip(model.parameters(), fused_grads):     # (some are 0 but for noise)
+                for eager, value in zip(parameter.grad, fused):
+                    self.assertAlmostEqual(eager, value, delta=1e-5 * largest)
+        graph.close()
+
+    def test_a_gpt_step_launches_fewer_kernels(self) -> None:
+        from language import CharTransformerModel
+        from losses import softmax_cross_entropy
+        from optim import TensorAdam
+
+        model = CharTransformerModel(11, context_size=8, embedding_dim=16, num_heads=2, num_layers=2, seed=0)
+        optimizer = TensorAdam(model.parameters(), lr=1e-2, max_grad_norm=1.0)
+        tokens, targets = kernels.storage([float(t) for t in range(8)]), kernels_cuda.DeviceArray("l", [1] * 8)
+
+        def step():
+            loss = softmax_cross_entropy(model.sequence_logits(Tensor(tokens, (1, 8))).reshape((8, 11)), targets)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            return loss
+
+        step()
+        graph = fusion.capture(step, tokens, targets)
+        program = graph.program
+        self.assertLess(program.nodes_after, 0.7 * program.nodes_before)       # kernels, copies, clears
+        self.assertIn("adam_update_graphed  (x", str(program))      # every parameter's update in one launch
+        self.assertEqual(graph.nodes, len(program.steps))
+        graph.close()
+
+
+class FusionTests(CudaTestCase):
+    """Each fusible kernel inside a fused one, against the kernel itself."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        kernels.use_backend("cuda")
+
+    def tearDown(self) -> None:
+        kernels.set_default_dtype("float64")
+        super().tearDown()
+
+    def kernel_cases(self):
+        """name -> (inputs(seed): the arrays, run(*arrays): the kernel on them, as kernels_cuda calls it)."""
+
+        k, n = kernels_cuda, 600
+        real = lambda seed, low=-1.0, high=1.0: k.storage(values(n, seed, low, high))
+        index = k.index_table([(7 * j) % 100 for j in range(60)])           # 10 images of 100 values, 60 read
+        return {
+            "add_vectors": (lambda s: (real(s), real(s + 1)), k.add),
+            "multiply_vectors": (lambda s: (real(s), real(s + 1)), k.multiply),
+            "scale_vector": (lambda s: (real(s),), lambda x: k.scale(x, 0.37)),
+            "add_scaled": (lambda s: (real(s), real(s + 1)), lambda x, y: k.add_scaled(x, y, -1.3)),
+            "reciprocal_vector": (lambda s: (real(s, 0.5, 2.0),), k.reciprocal),
+            "exp_vector": (lambda s: (real(s),), k.exp),
+            "log_vector": (lambda s: (real(s, 0.1, 3.0),), k.log),
+            "sqrt_vector": (lambda s: (real(s, 0.0, 3.0),), k.sqrt),
+            "relu_forward": (lambda s: (real(s),), k.relu),
+            "relu_backward": (lambda s: (real(s), real(s + 1)), k.relu_backward),
+            "tanh_forward": (lambda s: (real(s),), k.tanh),
+            "tanh_backward": (lambda s: (real(s), real(s + 1)), k.tanh_backward),
+            "sigmoid_forward": (lambda s: (real(s, -5.0, 5.0),), k.sigmoid),
+            "sigmoid_backward": (lambda s: (real(s), real(s + 1)), k.sigmoid_backward),
+            "gelu_forward": (lambda s: (real(s, -3.0, 3.0),), k.gelu),
+            "gelu_backward": (lambda s: (real(s), real(s + 1, 0.0, 1.0), real(s + 2)), k.gelu_backward),
+            "bce_with_logits_backward": (lambda s: (real(s, -4.0, 4.0), real(s + 1, 0.0, 1.0)),
+                                         lambda x, t: k.bce_with_logits_backward(x, t, 0.25)),
+            "projected_sign_step": (lambda s: (real(s, -0.5, 0.5), real(s + 1), real(s + 2, 0.0, 1.0)),
+                                    lambda d, g, x: k.projected_sign_step(d, g, x, 0.1, 0.3)),
+            "dropout_mask": (lambda s: (), lambda: k.dropout_mask(n, 0.3, 12345)),
+            "adam_update": (lambda s: (real(s), real(s + 1), real(s + 2), real(s + 3, 0.0, 1.0)),
+                            lambda w, g, m, v: k.adam_update(w, g, m, v, 0.5, 0.9, 0.99, 0.999, 0.01, 0.3, 1e-8)),
+            "adam_update_graphed": (lambda s: (real(s), real(s + 1), real(s + 2), real(s + 3, 0.0, 1.0)),
+                                    lambda w, g, m, v: (w,) + k.adam_update_graphed(
+                                        w, g, m, v, k.DeviceArray("d", [0.01, 0.3, 0.999]), k.DeviceArray("d", [0.5]),
+                                        True, 0.9, 0.99, 1e-8)),
+            "scale_by_first": (lambda s: (real(s),), lambda x: k.scale_by_first(x, k.storage([-0.75]))),
+            "repeat_values": (lambda s: (k.storage(values(20, s)),), lambda x: x * 30),
+            "expand_repeated": (lambda s: (k.storage(values(5, s)),), lambda x: k.expand_repeated(x, 6, 5, 20)),
+            "gather_indexed": (lambda s: (k.storage(values(1000, s)),), lambda x: k.gather_indexed(x, index, 10, 100)),
+            "scatter_add_indexed": (lambda s: (k.storage(values(600, s)),),
+                                    lambda g: k.scatter_add_indexed(g, index, 10, 100)),
+            "pad_planes": (lambda s: (k.storage(values(4 * 5 * 6, s)),), lambda x: k.pad_planes(x, 4, 5, 6, 1, 2)),
+            "crop_planes": (lambda s: (k.storage(values(4 * 7 * 10, s)),), lambda x: k.crop_planes(x, 4, 5, 6, 1, 2)),
+            "zeros": (lambda s: (), lambda: k.zeros(n)),
+            "copy": (lambda s: (real(s),), lambda x: x[:]),
+        }
+
+    def check(self, step, inputs, nodes=None):
+        """step() (returning arrays, which may also change inputs in place), fused and
+        replayed, against step() run eagerly on a copy of the inputs: the same bits."""
+
+        copies = [kernels_cuda.DeviceArray(x.typecode, list(x)) for x in inputs]
+        graph = fusion.capture(lambda: step(*inputs))
+        outputs = graph()
+        expected = step(*copies)
+        for index, (left, right) in enumerate(zip(list(expected) + copies, list(outputs) + list(inputs))):
+            self.assertEqual(list(left), list(right), f"array {index}")
+        if nodes is not None:
+            self.assertEqual(graph.nodes, nodes, str(graph.program))           # kernels, copies and clears
+        graph.close()
+
+    def test_every_fusible_kernel_fuses_bit_for_bit(self) -> None:
+        for dtype in ("float32", "float64"):
+            kernels.set_default_dtype(dtype)
+            cases = self.kernel_cases()
+            self.assertEqual(set(cases), set(fusion.FUSIBLE))
+            for name, (inputs, run) in cases.items():
+                with self.subTest(name=name, dtype=dtype):
+                    def step(*arrays):
+                        # The kernel on two sets of arrays, then a sum of their first
+                        # results: all three in one launch.
+                        half = len(arrays) // 2
+                        first, second = run(*arrays[:half]), run(*arrays[half:])
+                        first, second = (first if isinstance(first, tuple) else (first,),
+                                         second if isinstance(second, tuple) else (second,))
+                        return first + second + (kernels_cuda.add(first[0], second[0]),)
+
+                    self.check(step, inputs(1) + inputs(11), nodes=1)
+
+    def test_a_chain_is_one_launch_and_stores_only_what_is_kept(self) -> None:
+        kernels.set_default_dtype("float32")
+        k = kernels_cuda
+        x, w, b = k.storage(values(512, 1)), k.storage(values(512, 2)), k.storage(values(64, 3))
+
+        def step(x, w, b):
+            return (k.relu(k.add(k.multiply(x, w), b * 8)),)      # relu(x * w + b): b broadcast
+
+        self.check(step, [x, w, b], nodes=1)
+        graph = fusion.capture(lambda: step(x, w, b))
+        source = graph.program.source("f")
+        self.assertEqual(source.count("[i] = "), 1)                # one store: the temporaries stay in registers
+        self.assertIn("settle(", source)
+        graph.close()
+
+    def test_an_index_map_of_a_value_the_group_writes_splits_the_group(self) -> None:
+        kernels.set_default_dtype("float32")
+        k = kernels_cuda
+        x, y = k.storage(values(64, 4)), k.storage(values(512, 5))
+
+        def step(x, y):
+            doubled = k.scale(x, 2.0)                              # 64 values
+            spread = doubled * 8                                  # repeat_values reads doubled at i % 64: not fusible
+            return doubled, k.add(spread, y), k.relu(k.add(spread, y))
+
+        self.check(step, [x, y], nodes=2)
+
+    def test_a_piece_in_the_way_runs_first_only_if_it_shares_no_array(self) -> None:
+        kernels.set_default_dtype("float32")
+        k = kernels_cuda
+        x, w, z, b = k.storage(values(512, 10)), k.storage(values(512, 11)), k.storage(values(512, 12)), \
+            k.storage(values(64, 13))
+
+        def apart(x, w, z, b):
+            product = k.multiply(x, w)
+            bias = b[:]                                            # a copy of 64 values: not the group's size
+            return product, k.add(product, bias * 8)               # [copy] [multiply, repeat_values, add]
+
+        def touching(x, w, z, b):
+            product = k.multiply(x, w)
+            x[:256] = z[:256]                                      # overwrites what the product read
+            return product, k.add(product, x)                      # [multiply] [copies of 256] [add]
+
+        self.check(apart, [x, w, z, b], nodes=2)
+        self.check(touching, [x, w, z, b], nodes=3)
+
+    def test_in_place_updates_and_repeated_writes(self) -> None:
+        kernels.set_default_dtype("float32")
+        k = kernels_cuda
+
+        def step(w, g, m, v):
+            settings, scale = k.DeviceArray("d", [0.01, 0.3, 0.999]), k.DeviceArray("d", [0.5])
+            k.adam_update_graphed(w, g, m, v, settings, scale, True, 0.9, 0.99, 1e-8)
+            k.adam_update_graphed(w, k.scale(g, -1.0), m, v, settings, None, False, 0.9, 0.99, 1e-8)
+            return (k.add(w, m),)
+
+        self.check(step, [k.storage(values(300, s)) for s in (6, 7, 8)] + [k.storage(values(300, 9, 0.0, 1.0))],
+                   nodes=1)
 
 
 if __name__ == "__main__":

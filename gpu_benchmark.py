@@ -2,6 +2,7 @@
 
     .venv/bin/python gpu_benchmark.py                          # CUDA and C, float32
     .venv/bin/python gpu_benchmark.py --backends cuda --graph  # CUDA, and CUDA with CUDA graphs
+    .venv/bin/python gpu_benchmark.py --backends cuda --fuse   # ... and graphs with fused kernels
     .venv/bin/python gpu_benchmark.py --backends cuda --mixed bf16   # float32 against mixed precision
     NANOGRAD_THREADS=8 .venv/bin/python gpu_benchmark.py --dtype float64
 
@@ -20,32 +21,47 @@ graph's static inputs, replays it with one launch and reads the loss.
 precision (``kernels.set_matmul_precision``: the products on the tensor
 cores), right after its float32 twin. Its float16 steps leave out the loss
 scaling a real run needs (``optim.GradScaler``), which costs a sync.
+
+``--fuse`` also times the graph with its chains of elementwise kernels
+fused into generated ones (``fusion.capture``), and prints how many
+kernels a step launches before and after. ``--rounds`` times the columns
+one after another several times and keeps each one's best, for when
+another program shares the GPU.
+
+The diffusion step's random draws (noise, time steps) are made once, for
+every column: Python takes longer to draw them than the GPU takes for the
+step, and a graph takes them as inputs.
 """
 
 from __future__ import annotations
 
 import argparse
+import gc
 import random
 from time import perf_counter
 
+import fusion
 import kernels
 import kernels_cuda
 from losses import softmax_cross_entropy
 from tensor import Tensor
 
 
-def graphed(step, *inputs: kernels_cuda.DeviceArray):
+def graphed(step, *inputs: kernels_cuda.DeviceArray, fuse: bool = False):
     """``step(*inputs)`` (one training step, returning the loss tensor) as a
     CUDA graph: a function of a new batch (one value per input) that copies
-    it into ``inputs``, replays the step and returns the loss."""
+    it into ``inputs``, replays the step and returns the loss. With ``fuse``
+    the graph's elementwise kernels are fused (``fusion.capture``)."""
 
     step(*inputs)                    # one eager step first: Adam's moments, the index tables, a warm pool
-    graph = kernels_cuda.capture(lambda: step(*inputs), *inputs)
-    return lambda *batch: graph(*batch).item()
+    graph = (fusion.capture if fuse else kernels_cuda.capture)(lambda: step(*inputs), *inputs)
+    replay = lambda *batch: graph(*batch).item()
+    replay.graph = graph
+    return replay
 
 
 def image_case(model_name: str, image_shape: tuple[int, int, int], batch: int):
-    def make(graph: bool):
+    def make(graph: bool, fuse: bool = False):
         import mnist_compare
 
         model = mnist_compare.build_nanograd(0, model_name, image_shape)
@@ -63,14 +79,14 @@ def image_case(model_name: str, image_shape: tuple[int, int, int], batch: int):
             runner.optimizer.step()
             return loss
 
-        replay = graphed(step, kernels.storage(pixels), kernels_cuda.DeviceArray("l", labels))
-        return lambda: replay(pixels, labels)
+        replay = graphed(step, kernels.storage(pixels), kernels_cuda.DeviceArray("l", labels), fuse=fuse)
+        return _timed(lambda: replay(pixels, labels), replay)
 
     return make
 
 
 def gpt_case(context: int, width: int, layers: int, heads: int, batch: int):
-    def make(graph: bool):
+    def make(graph: bool, fuse: bool = False):
         from nanogpt_compare import CompareConfig, NanoGradRunner
 
         config = CompareConfig(context_size=context, embedding_dim=width, hidden_dim=4 * width, heads=heads,
@@ -93,35 +109,54 @@ def gpt_case(context: int, width: int, layers: int, heads: int, batch: int):
             return loss
 
         tokens, targets = [t for row in xs for t in row], [t for row in ys for t in row]
-        replay = graphed(step, kernels.storage(tokens), kernels_cuda.DeviceArray("l", targets))
-        return lambda: replay(tokens, targets)
+        replay = graphed(step, kernels.storage(tokens), kernels_cuda.DeviceArray("l", targets), fuse=fuse)
+        return _timed(lambda: replay(tokens, targets), replay)
 
     return make
 
 
 def diffusion_case(width: int, batch: int, groups: int, attention: bool):
-    def make(graph: bool):
-        from diffusion import Diffusion, TinyUNet
+    def make(graph: bool, fuse: bool = False):
+        from diffusion import Diffusion, TinyUNet, timestep_embedding
         from optim import TensorAdam
 
-        if graph:
-            return None              # its noise and time steps are drawn on the host, by Python, every step
         model = TinyUNet(width=width, groups=groups, attention=attention, seed=0)
         process = Diffusion(model, steps=1000)
         optimizer = TensorAdam(model.parameters(), lr=5e-4)
         rng = random.Random(0)
         images = [rng.uniform(-1.0, 1.0) for _ in range(batch * 784)]
+        shape = (batch, 1, 28, 28)
+        # process.loss's random draws (time steps, noise), made once: drawing
+        # them in Python takes longer than the GPU's step, and a graph replays
+        # the same kernels, so they come in as inputs: the noisy images, the
+        # noise, and the time steps' embedding.
+        steps = [rng.randrange(process.steps) for _ in range(batch)]
+        noise = [rng.gauss(0.0, 1.0) for _ in images]
+        batch_values = (process.noisy(images, noise, steps, shape).data, noise,
+                        timestep_embedding(steps, model.time_width).data)
 
-        def step():
+        def step(noisy, noise, embedding):
             optimizer.zero_grad()
-            loss = process.loss(images, (batch, 1, 28, 28), rng)
+            predicted = model(Tensor(noisy, shape), steps, embedding=Tensor(embedding, (batch, model.time_width)))
+            error = predicted - Tensor(noise, shape)
+            loss = (error * error).mean()               # process.loss
             loss.backward()
             optimizer.step()
-            return loss.item()
+            return loss
 
-        return step
+        if not graph:
+            return lambda: step(*batch_values).item()
+        replay = graphed(step, *(kernels.storage(values) for values in batch_values), fuse=fuse)
+        return _timed(lambda: replay(*batch_values), replay)
 
     return make
+
+
+def _timed(step, replay):
+    """The step to time, carrying its replay's graph (for the kernel counts)."""
+
+    step.graph = replay.graph
+    return step
 
 
 CASES = {
@@ -149,36 +184,51 @@ def main(argv: list[str] | None = None) -> dict:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--backends", nargs="+", default=["cuda", "c"], choices=("cuda", "c", "python"))
     parser.add_argument("--graph", action="store_true", help="also time CUDA with each step replayed as a CUDA graph")
+    parser.add_argument("--fuse", action="store_true", help="also time CUDA graphs with fused elementwise kernels")
     parser.add_argument("--dtype", choices=("float32", "float64"), default="float32")
     parser.add_argument("--mixed", choices=("bf16", "fp16"),
                         help="also time CUDA with the products' inputs in 16 bits (tensor cores)")
     parser.add_argument("--steps", type=int, default=5)
+    parser.add_argument("--rounds", type=int, default=1,
+                        help="time the columns one after another this many times, keeping each one's best")
     parser.add_argument("--only", nargs="*", help="run only the cases whose name contains one of these")
     args = parser.parse_args(argv)
 
-    # Columns: the backends, with "graph" (CUDA, replaying a CUDA graph) after "cuda".
+    # Columns: the backends, with "graph" (CUDA, replaying a CUDA graph) and
+    # "fused" (the graph with fused kernels) after "cuda".
     columns = list(args.backends)
-    if args.graph:
-        columns.insert(columns.index("cuda") + 1 if "cuda" in columns else 0, "graph")
-    if args.mixed:                              # "cuda+bf16" after "cuda", "graph+bf16" after "graph"
-        for column in ("graph", "cuda"):
+    graphs = (["graph"] if args.graph or args.fuse else []) + (["fused"] if args.fuse else [])
+    at = columns.index("cuda") + 1 if "cuda" in columns else 0
+    columns[at:at] = graphs
+    if args.mixed:                              # "cuda+bf16" after "cuda", and so on
+        for column in ("fused", "graph", "cuda"):
             if column in columns:
                 columns.insert(columns.index(column) + 1, f"{column}+{args.mixed}")
     results: dict[str, dict[str, float]] = {}
+    counts: dict[str, tuple] = {}               # kernels (and copies and clears) per step, before and after fusing
     for name, make in CASES.items():            # model by model, so each model's columns are timed together
         if args.only and not any(part.lower() in name.lower() for part in args.only):
             continue
-        for column in columns:
-            backend, _, precision = column.partition("+")
-            kernels.use_backend("cuda" if backend == "graph" else backend)
-            kernels.set_default_dtype(args.dtype)
-            kernels.set_matmul_precision(precision or "fp32")
-            step = make(graph=backend == "graph")
-            if step is None:
-                print(f"{column:5s} {name}: cannot be recorded as a graph", flush=True)
-                continue
-            results.setdefault(name, {})[column] = time_step(step, args.steps)
-            print(f"{column:5s} {name}: {results[name][column]:.1f} ms", flush=True)
+        for _ in range(args.rounds):            # (alternating, when another program shares the GPU)
+            for column in columns:
+                kind, _, precision = column.partition("+")
+                kernels.use_backend("cuda" if kind in ("graph", "fused") else kind)
+                kernels.set_default_dtype(args.dtype)
+                kernels.set_matmul_precision(precision or "fp32")
+                step = make(graph=kind in ("graph", "fused"), fuse=kind == "fused")
+                time = time_step(step, args.steps)
+                times = results.setdefault(name, {})
+                times[column] = min(time, times.get(column, time))
+                print(f"{column:5s} {name}: {time:.1f} ms", flush=True)
+                graph = getattr(step, "graph", None)
+                if graph is not None:
+                    if graph.program is not None:
+                        program = graph.program
+                        counts[name] = (program.launches_before, program.launches_after,
+                                        program.nodes_before, program.nodes_after)
+                    graph.close()
+                del step, graph
+                gc.collect()
 
     kernels.set_matmul_precision("fp32")
     # The gain: cuda over cuda+bf16 with --mixed, cuda over graph with --graph,
@@ -190,7 +240,7 @@ def main(argv: list[str] | None = None) -> dict:
     else:
         slow, fast = columns[-1], columns[0]
     gain = len(columns) == 2 or bool(args.mixed or args.graph) and "cuda" in columns
-    print(f"\n{args.dtype}, ms per training step")
+    print(f"\n{args.dtype}, ms per training step" + (f" (best of {args.rounds} rounds)" if args.rounds > 1 else ""))
     print("| model | " + " | ".join(columns) + (" | gain |" if gain else " |"))
     print("| --- |" + " ---: |" * (len(columns) + gain))
     for name, times in results.items():
@@ -198,6 +248,11 @@ def main(argv: list[str] | None = None) -> dict:
         if gain:
             cells.append(f"{times[slow] / times[fast]:.1f}x" if slow in times and fast in times else "")
         print(f"| {name} | " + " | ".join(cells) + " |")
+    if counts:
+        print("\nper step: kernels, and all graph nodes (kernels, copies, clears)")
+        print("| model | kernels | fused | nodes | fused |\n| --- | ---: | ---: | ---: | ---: |")
+        for name, numbers in counts.items():
+            print(f"| {name} | " + " | ".join(map(str, numbers)) + " |")
     return results
 
 

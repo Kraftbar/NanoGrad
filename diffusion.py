@@ -106,10 +106,13 @@ class TinyUNet(TensorModule):
         self.attend = (TransformerBlock(wide, self.middle_size ** 2, num_heads=1, feed_forward_activation="gelu", causal=False,
                                         seed=seed + 90) if attention else None)
 
-    def __call__(self, images: Tensor, steps: list[int]) -> Tensor:
-        """Predicted noise for noisy images (B, C, size, size) at time steps (B,)."""
+    def __call__(self, images: Tensor, steps: list[int], embedding: Tensor | None = None) -> Tensor:
+        """Predicted noise for noisy images (B, C, size, size) at time steps (B,).
+        ``embedding``: the steps' timestep_embedding, if already made (a CUDA graph's input)."""
 
-        time = self.time_out(silu(self.time_in(timestep_embedding(steps, self.time_width))))
+        if embedding is None:
+            embedding = timestep_embedding(steps, self.time_width)
+        time = self.time_out(silu(self.time_in(embedding)))
         skip1 = self.down1(self.stem(images), time)                      # 28 x 28
         skip2 = self.down2(self.shrink1(skip1), time)                    # 14 x 14
         hidden = self.middle(self.shrink2(skip2), time)                  # 7 x 7
