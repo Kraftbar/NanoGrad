@@ -40,7 +40,7 @@ from bpe import BPETokenizer
 from char_checkpoint import load_checkpoint, save_checkpoint
 from char_demo import generate_text
 from language import CharTransformerModel
-from optim import TensorAdam
+from optim import GradScaler, TensorAdam
 from parallel import DataParallel, sequence_loss
 from rnn import CharLSTMModel
 from sampling import select_next_index
@@ -234,6 +234,11 @@ def generate_tokens(model, prompt: list[int], *, length: int, context_size: int,
 def train(args: argparse.Namespace) -> dict:
     if args.dtype is not None:
         kernels.set_default_dtype(args.dtype)
+    if args.precision is not None:
+        kernels.set_matmul_precision(args.precision)
+    if kernels.matmul_precision() == "fp16" and args.workers > 1:
+        raise ValueError("float16 needs loss scaling, which --workers does not do: use bf16, or one worker")
+    scaler = GradScaler(enabled=kernels.matmul_precision() == "fp16")
     text = Path(args.text_file).read_text(encoding="utf-8")
     if args.max_chars is not None:
         text = text[: args.max_chars]
@@ -319,8 +324,9 @@ def train(args: argparse.Namespace) -> dict:
                 for _ in range(args.grad_accum):
                     xs, ys = random_batch(splits["train"], batch_size=args.batch_size,
                                           context_size=args.context_size, rng=data_rng)
-                    (sequence_loss(model, xs, ys) * (1.0 / args.grad_accum)).backward(accumulate=True)
-            optimizer.step()
+                    scaler.scale(sequence_loss(model, xs, ys) * (1.0 / args.grad_accum)).backward(accumulate=True)
+            scaler.step(optimizer)
+            scaler.update()
 
     if _char_checkpoint(args):
         samples = [_char_sample(model, vocab, args, index) for index in range(args.num_samples)]
@@ -378,6 +384,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tokenizer", choices=("char", "bpe"), default="char")
     parser.add_argument("--dtype", choices=("float64", "float32"),
                         help="default: float64, or NANOGRAD_DTYPE")
+    parser.add_argument("--precision", choices=kernels.MATMUL_PRECISIONS,
+                        help="the matrix products' inputs: bf16 or fp16 for mixed precision (default: fp32, "
+                             "or NANOGRAD_AUTOCAST); fp16 adds loss scaling")
     parser.add_argument("--bpe-vocab-size", type=int, default=512)
     parser.add_argument("--validation-fraction", type=float, default=0.1)
     for name in ("layers", "heads", "embedding_dim", "context_size", "batch_size", "steps", "warmup_steps"):

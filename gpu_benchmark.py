@@ -2,6 +2,7 @@
 
     .venv/bin/python gpu_benchmark.py                          # CUDA and C, float32
     .venv/bin/python gpu_benchmark.py --backends cuda --graph  # CUDA, and CUDA with CUDA graphs
+    .venv/bin/python gpu_benchmark.py --backends cuda --mixed bf16   # float32 against mixed precision
     NANOGRAD_THREADS=8 .venv/bin/python gpu_benchmark.py --dtype float64
 
 Each model trains on random data (the step time does not depend on the
@@ -14,6 +15,11 @@ the times are real.
 replayed (``kernels_cuda.capture``): every step copies the batch into the
 graph's static inputs, replays it with one launch and reads the loss.
 ``graphed`` below is the whole recipe.
+
+``--mixed bf16`` (or ``fp16``) also times each CUDA column with mixed
+precision (``kernels.set_matmul_precision``: the products on the tensor
+cores), right after its float32 twin. Its float16 steps leave out the loss
+scaling a real run needs (``optim.GradScaler``), which costs a sync.
 """
 
 from __future__ import annotations
@@ -144,6 +150,8 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--backends", nargs="+", default=["cuda", "c"], choices=("cuda", "c", "python"))
     parser.add_argument("--graph", action="store_true", help="also time CUDA with each step replayed as a CUDA graph")
     parser.add_argument("--dtype", choices=("float32", "float64"), default="float32")
+    parser.add_argument("--mixed", choices=("bf16", "fp16"),
+                        help="also time CUDA with the products' inputs in 16 bits (tensor cores)")
     parser.add_argument("--steps", type=int, default=5)
     parser.add_argument("--only", nargs="*", help="run only the cases whose name contains one of these")
     args = parser.parse_args(argv)
@@ -152,23 +160,36 @@ def main(argv: list[str] | None = None) -> dict:
     columns = list(args.backends)
     if args.graph:
         columns.insert(columns.index("cuda") + 1 if "cuda" in columns else 0, "graph")
+    if args.mixed:                              # "cuda+bf16" after "cuda", "graph+bf16" after "graph"
+        for column in ("graph", "cuda"):
+            if column in columns:
+                columns.insert(columns.index(column) + 1, f"{column}+{args.mixed}")
     results: dict[str, dict[str, float]] = {}
     for name, make in CASES.items():            # model by model, so each model's columns are timed together
         if args.only and not any(part.lower() in name.lower() for part in args.only):
             continue
         for column in columns:
-            kernels.use_backend("cuda" if column == "graph" else column)
+            backend, _, precision = column.partition("+")
+            kernels.use_backend("cuda" if backend == "graph" else backend)
             kernels.set_default_dtype(args.dtype)
-            step = make(graph=column == "graph")
+            kernels.set_matmul_precision(precision or "fp32")
+            step = make(graph=backend == "graph")
             if step is None:
                 print(f"{column:5s} {name}: cannot be recorded as a graph", flush=True)
                 continue
             results.setdefault(name, {})[column] = time_step(step, args.steps)
             print(f"{column:5s} {name}: {results[name][column]:.1f} ms", flush=True)
 
-    # The gain: cuda over graph with --graph, else the second column over the first.
-    slow, fast = ("cuda", "graph") if args.graph and "cuda" in columns else (columns[-1], columns[0])
-    gain = len(columns) == 2 or (slow, fast) == ("cuda", "graph")
+    kernels.set_matmul_precision("fp32")
+    # The gain: cuda over cuda+bf16 with --mixed, cuda over graph with --graph,
+    # else the second column over the first.
+    if args.mixed and "cuda" in columns:
+        slow, fast = "cuda", f"cuda+{args.mixed}"
+    elif args.graph and "cuda" in columns:
+        slow, fast = "cuda", "graph"
+    else:
+        slow, fast = columns[-1], columns[0]
+    gain = len(columns) == 2 or bool(args.mixed or args.graph) and "cuda" in columns
     print(f"\n{args.dtype}, ms per training step")
     print("| model | " + " | ".join(columns) + (" | gain |" if gain else " |"))
     print("| --- |" + " ---: |" * (len(columns) + gain))
