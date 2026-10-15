@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 from array import array
 from collections.abc import Sequence
+from contextlib import contextmanager
 
 import kernels_c
 import kernels_cuda
@@ -164,6 +165,78 @@ def capturing() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Mixed precision
+# ---------------------------------------------------------------------------
+
+MATMUL_PRECISIONS = ("fp32", "bf16", "fp16")
+
+
+def set_matmul_precision(name: str) -> None:
+    """Run the matrix products (matmul, linear layers, attention, the
+    convolutions) with 16-bit inputs: "bf16" (bfloat16) or "fp16" (float16),
+    or "fp32" to switch back (the default). Also set by NANOGRAD_AUTOCAST.
+
+    On the GPU the products then run on the tensor cores (kernels.cu, "Mixed
+    precision"): each input is rounded to 16 bits as it is loaded, the
+    products are summed in float32, and the results are float32. Tensors
+    are stored as before, so weights, gradients and the optimizer's state
+    stay float32 ("master weights"), and so do the other ops: sums, softmax,
+    the norms, the losses. Like PyTorch's autocast, but at the level of the
+    kernels, so models and scripts need no changes.
+
+    The CPU has no tensor cores, so there the products' inputs are rounded
+    the same way (``round_to_16bit``) and the usual kernels run: the CPU
+    emulates the GPU's numbers (up to the order of the float32 sums), which
+    keeps the switch testable without a GPU.
+
+    bfloat16 has float32's range, so training needs nothing else. float16
+    has more mantissa bits but overflows past 65504 and loses gradients
+    below about 6e-8: train with ``optim.GradScaler``.
+    """
+
+    if name not in MATMUL_PRECISIONS:
+        raise ValueError(f"matmul precision must be one of {MATMUL_PRECISIONS}")
+    kernels_cuda.matmul_precision = name
+
+
+def matmul_precision() -> str:
+    return kernels_cuda.matmul_precision
+
+
+@contextmanager
+def autocast(name: str = "bf16"):
+    """``with kernels.autocast("bf16"):`` runs the products inside with 16-bit
+    inputs (``set_matmul_precision``), and switches back afterwards."""
+
+    previous = matmul_precision()
+    set_matmul_precision(name)
+    try:
+        yield
+    finally:
+        set_matmul_precision(previous)
+
+
+def round_to_16bit(x: Sequence[float], kind: str) -> array | list[float]:
+    """Every value rounded to the nearest bfloat16 ("bf16") or float16 ("fp16")
+    number, ties to even, and stored back in the current precision."""
+
+    return _kernels().round_to_16bit(x, kind)
+
+
+def _product_inputs(*inputs):
+    """A product's inputs as the CPU backends see them: rounded to 16 bits
+    when mixed precision is on (emulating the tensor cores), else as they are."""
+
+    precision = kernels_cuda.matmul_precision
+    if precision == "fp32" or BACKEND == "cuda":
+        return inputs
+    return tuple(_kernels().round_to_16bit(x, precision) for x in inputs)
+
+
+# (end of mixed precision)
+
+
+# ---------------------------------------------------------------------------
 # The kernels
 # ---------------------------------------------------------------------------
 
@@ -193,6 +266,7 @@ def gemm(
     """
 
     kernel = _kernels().gemm
+    a, b = _product_inputs(a, b)
     return kernel(a, b, batches, m, k, n, a_step, b_step, c_step, trans_a, trans_b, initial)
 
 
@@ -295,6 +369,7 @@ def conv_forward(
     (see conv2d_valid) without building the patch matrix."""
 
     kernel_fn = _kernels().conv_forward
+    image, kernel = _product_inputs(image, kernel)
     return kernel_fn(image, index, kernel, batches, image_size, filters, patch_size, positions)
 
 
@@ -306,6 +381,7 @@ def conv_kernel_grad(
     ``index`` without building the patch matrix."""
 
     kernel_fn = _kernels().conv_kernel_grad
+    image, grad = _product_inputs(image, grad)
     return kernel_fn(image, index, grad, batches, image_size, filters, patch_size, positions)
 
 
@@ -342,6 +418,7 @@ def conv_input_grad(
     their pixels (col2im), without a patch-gradient matrix."""
 
     kernel_fn = _kernels().conv_input_grad
+    grad, kernel = _product_inputs(grad, kernel)
     return kernel_fn(grad, kernel, index, batches, image_size, filters, patch_size, positions)
 
 
@@ -646,3 +723,7 @@ if os.environ.get("NANOGRAD_BACKEND"):
 # NANOGRAD_DTYPE=float32 starts in float32 (see set_default_dtype).
 if BACKEND != "python" and os.environ.get("NANOGRAD_DTYPE"):
     set_default_dtype(os.environ["NANOGRAD_DTYPE"])
+
+# NANOGRAD_AUTOCAST=bf16 (or fp16) starts with mixed precision on (see set_matmul_precision).
+if os.environ.get("NANOGRAD_AUTOCAST"):
+    set_matmul_precision(os.environ["NANOGRAD_AUTOCAST"])

@@ -260,6 +260,7 @@ def _build_library(code: str) -> ctypes.CDLL | None:
     library.softmax_xent_rows.argtypes = [pointer, index_pointer, ctypes.c_double, ctypes.POINTER(ctypes.c_double),
                                           count, count]
     library.add_rows.argtypes = [pointer, pointer, count, count]
+    library.round_to_16bit.argtypes = [pointer, count, pointer, count]          # (mixed precision)
     library.set_threads.argtypes = [ctypes.c_int]
     library.set_threads.restype = None
     library.get_threads.restype = ctypes.c_int
@@ -800,3 +801,11 @@ def window_max(
         planes, plane_size, windows, window_size,
     )
     return out, argmax
+
+
+def round_to_16bit(x: Sequence[float], kind: str) -> array:
+    """Every value rounded to bfloat16 ("bf16") or float16 ("fp16") and back (kernels.c, "Mixed precision")."""
+
+    x_buffer, out = _reals(x), zeros(len(x))
+    library.round_to_16bit(_buffer(x_buffer), int(kind == "bf16"), _buffer(out), len(x))
+    return out

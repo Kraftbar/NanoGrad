@@ -891,6 +891,459 @@ KERNEL sum_repeated_rows(const real *x, real *out, long outer, long size)
 /* (end of conv) */
 
 /* ------------------------------------------------------------------------
+ * Mixed precision: matrix products on the tensor cores.
+ *
+ * Since Volta, NVIDIA GPUs have *tensor cores*: units that multiply small
+ * matrices of 16-bit numbers in one instruction and add the products into
+ * 32-bit sums. On this GPU (Ampere, sm_86) one warp-wide instruction,
+ *
+ *     mma.sync.aligned.m16n8k16:  D (16 x 8) = A (16 x 16) @ B (16 x 8) + C,
+ *
+ * does 2048 multiply-adds, and the tensor cores run several times faster
+ * than the ordinary float32 units the gemm kernels above use.
+ *
+ * The 16-bit inputs are one of two formats, both a sign bit, an exponent
+ * and a mantissa:
+ *
+ *     bfloat16: 8 exponent bits, 7 mantissa bits    float32's range, ~3 digits
+ *     float16:  5 exponent bits, 10 mantissa bits   up to 65504, ~3.3 digits
+ *
+ * bfloat16 is float32 with the low 16 bits rounded off, so anything a
+ * float32 can hold it can hold, only less precisely. float16 is a little
+ * more precise but overflows above 65504 and loses values below about
+ * 6e-8, which is why float16 training scales its loss (optim.GradScaler).
+ * Either way the products are summed in float32 (D and C), which keeps the
+ * results good: each input is rounded once, but the k-term sum gathers no
+ * more error than float32's.
+ *
+ * Nothing is stored in 16 bits. The kernels read float32 (or float64)
+ * operands like the gemm above and round them to 16 bits as they copy a
+ * slab into shared memory; their outputs are float32. So mixed precision
+ * is a switch on the products alone (kernels_cuda.matmul_precision): the
+ * weights, sums, norms and the optimizer all stay float32.
+ *
+ * NVRTC brings no CUDA headers, so the 16-bit numbers are plain `unsigned
+ * short`s (two packed in an `unsigned`), and the conversion and the matrix
+ * instruction are written in PTX, the GPU's assembly language, with asm().
+ *
+ * The fragment layout. mma.sync is a warp instruction: its 16 x 16 A,
+ * 16 x 8 B and 16 x 8 C are spread over the 32 threads' registers in a
+ * fixed pattern. With g = lane / 4 and t = lane % 4, a thread holds
+ *
+ *     A: 4 registers of 2 values: rows g and g + 8, columns 2t, 2t + 1
+ *        and 2t + 8, 2t + 9
+ *     B: 2 registers: column g, rows 2t, 2t + 1 and 2t + 8, 2t + 9
+ *     C: 4 floats: rows g and g + 8, columns 2t and 2t + 1
+ *
+ * Each register pairs two neighbours along k, so both slabs live in shared
+ * memory k-contiguous: a_slab[row][k] for op(A), b_slab[col][k] for op(B)
+ * seen as n x k (as gemm's slabs, but the other way round). A fragment is
+ * then four (or two) 32-bit loads. Slab rows are padded from 32 to 40
+ * values (20 words): the 8 row groups of a load then start 20 banks apart
+ * (0, 20, 8, 28, ...), and a warp's 32 loads hit 32 different banks.
+ * --------------------------------------------------------------------- */
+
+#define MMA_BK 32            /* k per slab: two mma steps of 16 */
+#define MMA_ROW (MMA_BK + 8) /* a slab row, in 16-bit values, padded */
+
+/* Two numbers as one register of two 16-bit values, `lo` in the low half
+ * (the element with the smaller k), rounded to nearest (ties to even).
+ * BF16 picks bfloat16, else float16. */
+template <bool BF16>
+__device__ __forceinline__ unsigned pack_16bit(real lo, real hi)
+{
+    unsigned packed;
+    if (BF16) asm("cvt.rn.bf16x2.f32 %0, %1, %2;" : "=r"(packed) : "f"((float)hi), "f"((float)lo));
+    else      asm("cvt.rn.f16x2.f32 %0, %1, %2;" : "=r"(packed) : "f"((float)hi), "f"((float)lo));
+    return packed;
+}
+
+/* d += a @ b for one 16 x 8 piece, k = 16 (fragments as above). */
+template <bool BF16>
+__device__ __forceinline__ void mma_16x8x16(float d[4], const unsigned a[4], const unsigned b[2])
+{
+    if (BF16)
+        asm("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 "
+            "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};"
+            : "+f"(d[0]), "+f"(d[1]), "+f"(d[2]), "+f"(d[3])
+            : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b[0]), "r"(b[1]));
+    else
+        asm("mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 "
+            "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};"
+            : "+f"(d[0]), "+f"(d[1]), "+f"(d[2]), "+f"(d[3])
+            : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b[0]), "r"(b[1]));
+}
+
+/* The 16-bit values (row, k) and (row, k + 1) of a slab, as one word. */
+__device__ __forceinline__ unsigned slab_pair(const unsigned short *slab, int row, int k)
+{
+    return *(const unsigned *)(slab + row * MMA_ROW + k);
+}
+
+/* One warp's share of one slab: its corner of the block's tile, MT x NT
+ * pieces of 16 x 8 starting at (row0, col0), gets the slab's products. */
+template <int MT, int NT, bool BF16>
+__device__ __forceinline__ void mma_slab(const unsigned short *a_slab, const unsigned short *b_slab,
+                                         int row0, int col0, float acc[MT][NT][4])
+{
+    const int lane = threadIdx.x % 32, g = lane / 4, t = lane % 4;
+    #pragma unroll
+    for (int kk = 0; kk < MMA_BK; kk += 16) {
+        unsigned a[MT][4], b[NT][2];
+        #pragma unroll
+        for (int i = 0; i < MT; i++) {
+            int row = row0 + 16 * i + g, k = kk + 2 * t;
+            a[i][0] = slab_pair(a_slab, row, k);
+            a[i][1] = slab_pair(a_slab, row + 8, k);
+            a[i][2] = slab_pair(a_slab, row, k + 8);
+            a[i][3] = slab_pair(a_slab, row + 8, k + 8);
+        }
+        #pragma unroll
+        for (int j = 0; j < NT; j++) {
+            int col = col0 + 8 * j + g, k = kk + 2 * t;
+            b[j][0] = slab_pair(b_slab, col, k);
+            b[j][1] = slab_pair(b_slab, col, k + 8);
+        }
+        #pragma unroll
+        for (int i = 0; i < MT; i++)
+            #pragma unroll
+            for (int j = 0; j < NT; j++) mma_16x8x16<BF16>(acc[i][j], a[i], b[j]);
+    }
+}
+
+/* Where accumulator acc[i][j][e] of this thread sits in its warp's corner. */
+__device__ __forceinline__ void mma_cell(int i, int j, int e, int &row, int &col)
+{
+    const int lane = threadIdx.x % 32;
+    row = 16 * i + lane / 4 + (e >= 2 ? 8 : 0);
+    col = 8 * j + 2 * (lane % 4) + (e & 1);
+}
+
+/*
+ * The gemm: gemm_block above on tensor cores. A block of 256 threads
+ * (8 warps, 2 down by 4 across) computes a BM x BN tile of C, walking k
+ * in slabs of 32 that it copies into shared memory as 16-bit values,
+ * double buffered (the next slab's loads are in flight while the warps
+ * multiply this one). Each warp owns a (BM / 2) x (BN / 4) corner.
+ *
+ * Copying a slab: each thread takes pairs of neighbours along k, (row, 2q)
+ * and (row, 2q + 1), and stores each pair as one word. Which pairs follows
+ * the matrix's contiguous direction, so that neighbouring threads read
+ * neighbouring numbers: along k (q fastest) when the matrix is stored
+ * along k, else along the rows (row fastest).
+ */
+template <int ROWS, bool ALONG_ROWS>
+struct MmaPairs {
+    static const int count = ROWS * MMA_BK / 2 / GEMM_THREADS;            /* pairs per thread */
+    static const int row_step = ALONG_ROWS ? 0 : GEMM_THREADS / (MMA_BK / 2);
+    static const int q_step = ALONG_ROWS ? GEMM_THREADS / ROWS : 0;
+    int row, q;                                   /* pair r is (row + r * row_step, q + r * q_step) */
+    __device__ __forceinline__ MmaPairs()
+    {
+        if (ALONG_ROWS) { row = threadIdx.x % ROWS; q = threadIdx.x / ROWS; }
+        else            { row = threadIdx.x / (MMA_BK / 2); q = threadIdx.x % (MMA_BK / 2); }
+    }
+};
+
+/* This thread's pairs of the slab at (row0, p0) of X (rows x depth), rounded
+ * to 16 bits, into registers: one word per pair, half the registers the
+ * numbers themselves would take. */
+template <int ROWS, bool ALONG_ROWS, bool BF16>
+__device__ __forceinline__ void mma_fetch(const real *X, int rows, int depth, int row0, int p0, unsigned *out)
+{
+    typedef MmaPairs<ROWS, ALONG_ROWS> Pairs;
+    const Pairs pairs;
+    const int row = row0 + pairs.row, p = p0 + 2 * pairs.q;
+    const real *x = X + (ALONG_ROWS ? (long)p * rows + row : (long)row * depth + p);
+    const long next = ALONG_ROWS ? rows : 1;      /* from a pair's first number to its second */
+    const long step = ALONG_ROWS ? 2L * Pairs::q_step * rows : (long)Pairs::row_step * depth;
+    #pragma unroll
+    for (int r = 0; r < Pairs::count; r++, x += step) {
+        bool inside = row + r * Pairs::row_step < rows;
+        int pr = p + 2 * r * Pairs::q_step;
+        real lo = inside && pr < depth ? x[0] : (real)0;
+        real hi = inside && pr + 1 < depth ? x[next] : (real)0;
+        out[r] = pack_16bit<BF16>(lo, hi);
+    }
+}
+
+/* ...and from registers into the slab. */
+template <int ROWS, bool ALONG_ROWS>
+__device__ __forceinline__ void mma_store(unsigned short *slab, const unsigned *in)
+{
+    typedef MmaPairs<ROWS, ALONG_ROWS> Pairs;
+    const Pairs pairs;
+    #pragma unroll
+    for (int r = 0; r < Pairs::count; r++)
+        *(unsigned *)(slab + (pairs.row + r * Pairs::row_step) * MMA_ROW + 2 * (pairs.q + r * Pairs::q_step)) = in[r];
+}
+
+template <int BM, int BN>
+struct MmaSlabs {
+    unsigned short a[2][BM * MMA_ROW];
+    unsigned short b[2][BN * MMA_ROW];
+};
+
+/* One block's tile of C: the products of steps first..last-1, as in gemm_block. */
+template <int BM, int BN, bool TRANS_A, bool TRANS_B, bool BF16>
+__device__ __forceinline__ void mma_gemm_block(MmaSlabs<BM, BN> &slabs, const real *a, const real *b, real *C,
+                                               int m, int k, int n, long a_step, long b_step,
+                                               long first, long last, bool accumulate)
+{
+    const int MT = BM / 2 / 16, NT = BN / 4 / 8;
+    const int warp = threadIdx.x / 32, row0 = warp / 4 * (BM / 2), col0 = warp % 4 * (BN / 4);
+    const int i0 = blockIdx.y * BM, j0 = blockIdx.x * BN;
+    const int ktiles = (k + MMA_BK - 1) / MMA_BK;
+
+    float acc[MT][NT][4];
+    #pragma unroll
+    for (int i = 0; i < MT; i++)
+        #pragma unroll
+        for (int j = 0; j < NT; j++)
+            #pragma unroll
+            for (int e = 0; e < 4; e++) acc[i][j][e] = 0.0f;
+
+    if (first < last) {
+        const real *A = a + first / ktiles * a_step, *B = b + first / ktiles * b_step;
+        int p0 = first % ktiles * MMA_BK;
+        unsigned a_next[BM * MMA_BK / 2 / GEMM_THREADS], b_next[BN * MMA_BK / 2 / GEMM_THREADS];
+        mma_fetch<BM, TRANS_A, BF16>(A, m, k, i0, p0, a_next);
+        mma_fetch<BN, !TRANS_B, BF16>(B, n, k, j0, p0, b_next);
+        mma_store<BM, TRANS_A>(slabs.a[0], a_next);
+        mma_store<BN, !TRANS_B>(slabs.b[0], b_next);
+        __syncthreads();
+
+        for (long step = first; step < last; step++) {
+            const int now = (step - first) & 1;
+            const bool more = step + 1 < last;
+            if (more) {                                   /* start loading the next slab */
+                p0 += MMA_BK;
+                if (p0 >= k) { p0 = 0; A += a_step; B += b_step; }
+                mma_fetch<BM, TRANS_A, BF16>(A, m, k, i0, p0, a_next);
+                mma_fetch<BN, !TRANS_B, BF16>(B, n, k, j0, p0, b_next);
+            }
+            mma_slab<MT, NT, BF16>(slabs.a[now], slabs.b[now], row0, col0, acc);
+            if (more) {
+                mma_store<BM, TRANS_A>(slabs.a[now ^ 1], a_next);
+                mma_store<BN, !TRANS_B>(slabs.b[now ^ 1], b_next);
+            }
+            __syncthreads();
+        }
+    }
+
+    #pragma unroll
+    for (int i = 0; i < MT; i++)
+        #pragma unroll
+        for (int j = 0; j < NT; j++)
+            #pragma unroll
+            for (int e = 0; e < 4; e++) {
+                int row, col;
+                mma_cell(i, j, e, row, col);
+                row += i0 + row0;
+                col += j0 + col0;
+                if (row < m && col < n) {
+                    real *out = C + (long)row * n + col;
+                    *out = accumulate ? *out + acc[i][j][e] : acc[i][j][e];
+                }
+            }
+}
+
+/* The kernels take gemm's arguments and grid (see gemm_tiles):
+ * mma_gemm_128x128_bf16_nt is the 128 x 128 tile, bfloat16, B transposed.
+ * Two blocks share a multiprocessor (BLOCKS, as in GEMM_KERNEL), so one
+ * block's loads overlap the other's arithmetic; that leaves 128 registers
+ * per thread, which the 64 accumulators of the big tile just fit in once
+ * the next slab waits in registers as 16-bit pairs. */
+#define MMA_GEMM_KERNEL(name, TRANS_A, TRANS_B, BM, BN, BF16, BLOCKS)                               \
+    KERNEL __launch_bounds__(GEMM_THREADS, BLOCKS)                                                  \
+    name(const real *a, const real *b, real *c, long batches, long m, long k, long n,               \
+         long a_step, long b_step, long c_step, long accumulate, long slices)                       \
+    {                                                                                               \
+        __shared__ __align__(16) MmaSlabs<BM, BN> slabs;                                            \
+        const long ktiles = (k + MMA_BK - 1) / MMA_BK, steps = batches * ktiles;                    \
+        const long share = slices ? (steps + slices - 1) / slices : ktiles;                         \
+        for (long z = blockIdx.z; z < (slices ? slices : batches); z += gridDim.z) {                \
+            long first = z * share, last = first + share < steps ? first + share : steps;           \
+            real *C = c + (slices ? z * m * n : z * c_step);                                        \
+            mma_gemm_block<BM, BN, TRANS_A, TRANS_B, BF16>(slabs, a, b, C, m, k, n, a_step, b_step, \
+                                                           first, last, accumulate);                \
+        }                                                                                           \
+    }
+#define MMA_GEMM_LAYOUTS(tile, type, BM, BN, BF16, BLOCKS)                                         \
+    MMA_GEMM_KERNEL(mma_gemm_##tile##_##type##_nn, false, false, BM, BN, BF16, BLOCKS)             \
+    MMA_GEMM_KERNEL(mma_gemm_##tile##_##type##_nt, false, true, BM, BN, BF16, BLOCKS)              \
+    MMA_GEMM_KERNEL(mma_gemm_##tile##_##type##_tn, true, false, BM, BN, BF16, BLOCKS)              \
+    MMA_GEMM_KERNEL(mma_gemm_##tile##_##type##_tt, true, true, BM, BN, BF16, BLOCKS)
+
+MMA_GEMM_LAYOUTS(128x128, bf16, 128, 128, true, 2)
+MMA_GEMM_LAYOUTS(128x128, fp16, 128, 128, false, 2)
+MMA_GEMM_LAYOUTS(64x64, bf16, 64, 64, true, 2)
+MMA_GEMM_LAYOUTS(64x64, fp16, 64, 64, false, 2)
+
+/*
+ * The three convolution products (conv_forward, conv_kernel_grad and
+ * conv_input_grad above) on tensor cores. conv_tile_product's job, with
+ * the same loaders, tile (64 x 64, 256 threads) and grid, so kernels_cuda.py
+ * launches them as it does their twins: the 8 warps each own a 32 x 16
+ * corner (2 down by 4 across), and the inner dimension goes 32 at a time.
+ * The patch loads are gathers through the index table, so there is no
+ * double buffering: load a slab, wait, multiply, wait.
+ */
+template <bool a_along_k, bool b_along_k, bool BF16, class LoadA, class LoadB>
+__device__ __forceinline__ void mma_conv_tile_product(LoadA load_a, LoadB load_b, long m, long n,
+                                                      long k_lo, long k_hi, long i0, long j0, float acc[2][2][4])
+{
+    __shared__ __align__(16) unsigned short a_slab[CONV_TILE * MMA_ROW];   /* [i][p] = A(i0 + i, p0 + p) */
+    __shared__ __align__(16) unsigned short b_slab[CONV_TILE * MMA_ROW];   /* [j][p] = B(p0 + p, j0 + j) */
+    const int warp = threadIdx.x / 32;
+    for (long p0 = k_lo; p0 < k_hi; p0 += MMA_BK) {
+        for (int e = threadIdx.x; e < CONV_TILE * MMA_BK / 2; e += CONV_THREADS) {   /* pairs (2q, 2q + 1) */
+            int q = a_along_k ? e % (MMA_BK / 2) : e / CONV_TILE;
+            int i = a_along_k ? e / (MMA_BK / 2) : e % CONV_TILE;
+            long p = p0 + 2 * q;
+            bool inside = i0 + i < m;
+            real lo = inside && p < k_hi ? load_a(i0 + i, p) : (real)0;
+            real hi = inside && p + 1 < k_hi ? load_a(i0 + i, p + 1) : (real)0;
+            *(unsigned *)(a_slab + i * MMA_ROW + 2 * q) = pack_16bit<BF16>(lo, hi);
+            q = b_along_k ? e % (MMA_BK / 2) : e / CONV_TILE;
+            int j = b_along_k ? e / (MMA_BK / 2) : e % CONV_TILE;
+            p = p0 + 2 * q;
+            inside = j0 + j < n;
+            lo = inside && p < k_hi ? load_b(p, j0 + j) : (real)0;
+            hi = inside && p + 1 < k_hi ? load_b(p + 1, j0 + j) : (real)0;
+            *(unsigned *)(b_slab + j * MMA_ROW + 2 * q) = pack_16bit<BF16>(lo, hi);
+        }
+        __syncthreads();                             /* the slabs are complete */
+        mma_slab<2, 2, BF16>(a_slab, b_slab, warp / 4 * 32, warp % 4 * 16, acc);
+        __syncthreads();                             /* everyone is done before they are overwritten */
+    }
+}
+
+/* out(row, col, value) for each of this thread's outputs of the tile at (i0, j0). */
+template <class Out>
+__device__ __forceinline__ void mma_conv_outputs(const float acc[2][2][4], long i0, long j0, Out out)
+{
+    const int warp = threadIdx.x / 32;
+    #pragma unroll
+    for (int i = 0; i < 2; i++)
+        #pragma unroll
+        for (int j = 0; j < 2; j++)
+            #pragma unroll
+            for (int e = 0; e < 4; e++) {
+                int row, col;
+                mma_cell(i, j, e, row, col);
+                out(i0 + warp / 4 * 32 + row, j0 + warp % 4 * 16 + col, acc[i][j][e]);
+            }
+}
+
+/* The kernels: the bodies of conv_forward, conv_kernel_grad and
+ * conv_input_grad, with the products on tensor cores (see those for the math). */
+template <bool BF16>
+__device__ __forceinline__ void mma_conv_forward(const real *image, const long *index, const real *kernel, real *out,
+                                                 long batches, long image_size, long filters, long patch_size,
+                                                 long positions)
+{
+    const long K = patch_size, P = positions;
+    const real *img = image + blockIdx.z * image_size;
+    long i0 = (long)blockIdx.y * CONV_TILE, j0 = (long)blockIdx.x * CONV_TILE;
+    float acc[2][2][4] = {};
+    mma_conv_tile_product<true, false, BF16>(
+        [&](long i, long p) { return kernel[i * K + p]; },
+        [&](long p, long j) { return img[index[j * K] + index[p]]; },
+        filters, P, 0, K, i0, j0, acc);
+    real *o = out + blockIdx.z * filters * P;
+    mma_conv_outputs(acc, i0, j0, [&](long i, long j, float value) {
+        if (i < filters && j < P) o[i * P + j] = value;
+    });
+}
+
+template <bool BF16>
+__device__ __forceinline__ void mma_conv_kernel_grad(const real *image, const long *index, const real *grad,
+                                                     real *partial, long batches, long image_size, long filters,
+                                                     long patch_size, long positions, long images_per_slice,
+                                                     long slices_per_image, long chunk)
+{
+    const long K = patch_size, P = positions, F = filters;
+    long i0 = (long)blockIdx.y * CONV_TILE, j0 = (long)blockIdx.x * CONV_TILE, slice = blockIdx.z;
+    long b_lo = slice / slices_per_image * images_per_slice;
+    long b_hi = b_lo + images_per_slice < batches ? b_lo + images_per_slice : batches;
+    long p_lo = slice % slices_per_image * chunk, p_hi = p_lo + chunk < P ? p_lo + chunk : P;
+    float acc[2][2][4] = {};
+    for (long b = b_lo; b < b_hi; b++) {
+        const real *img = image + b * image_size, *g = grad + b * F * P;
+        mma_conv_tile_product<true, true, BF16>(
+            [&](long i, long p) { return g[i * P + p]; },
+            [&](long p, long q) { return img[index[p * K] + index[q]]; },
+            F, K, p_lo, p_hi, i0, j0, acc);
+    }
+    real *out = partial + slice * F * K;
+    mma_conv_outputs(acc, i0, j0, [&](long i, long q, float value) {
+        if (i < F && q < K) out[i * K + q] = value;
+    });
+}
+
+template <bool BF16>
+__device__ __forceinline__ void mma_conv_input_grad(const real *grad, const real *kernel, const long *index,
+                                                    real *image_grad, long batches, long image_size, long filters,
+                                                    long patch_size, long positions)
+{
+    const long K = patch_size, P = positions, F = filters;
+    const real *g = grad + blockIdx.z * F * P;
+    long i0 = (long)blockIdx.y * CONV_TILE, j0 = (long)blockIdx.x * CONV_TILE;
+    float acc[2][2][4] = {};
+    mma_conv_tile_product<false, false, BF16>(
+        [&](long j, long f) { return g[f * P + j]; },
+        [&](long f, long q) { return kernel[f * K + q]; },
+        P, K, 0, F, i0, j0, acc);
+    real *dst = image_grad + blockIdx.z * image_size;
+    mma_conv_outputs(acc, i0, j0, [&](long j, long q, float value) {
+        if (j < P && q < K) atomicAdd(dst + index[j * K] + index[q], (real)value);
+    });
+}
+
+#define MMA_CONV_KERNELS(type, BF16)                                                                 \
+    KERNEL mma_conv_forward_##type(const real *image, const long *index, const real *kernel, real *out, \
+                                   long batches, long image_size, long filters, long patch_size,     \
+                                   long positions)                                                   \
+    {                                                                                                \
+        mma_conv_forward<BF16>(image, index, kernel, out, batches, image_size, filters, patch_size,  \
+                               positions);                                                           \
+    }                                                                                                \
+    KERNEL mma_conv_kernel_grad_##type(const real *image, const long *index, const real *grad,       \
+                                       real *partial, long batches, long image_size, long filters,   \
+                                       long patch_size, long positions, long images_per_slice,       \
+                                       long slices_per_image, long chunk)                            \
+    {                                                                                                \
+        mma_conv_kernel_grad<BF16>(image, index, grad, partial, batches, image_size, filters,        \
+                                   patch_size, positions, images_per_slice, slices_per_image, chunk); \
+    }                                                                                                \
+    KERNEL mma_conv_input_grad_##type(const real *grad, const real *kernel, const long *index,       \
+                                      real *image_grad, long batches, long image_size, long filters, \
+                                      long patch_size, long positions)                               \
+    {                                                                                                \
+        mma_conv_input_grad<BF16>(grad, kernel, index, image_grad, batches, image_size, filters,     \
+                                  patch_size, positions);                                            \
+    }
+
+MMA_CONV_KERNELS(bf16, true)
+MMA_CONV_KERNELS(fp16, false)
+
+/* Every value rounded to 16 bits and back (kernels.c's twin emulates mixed
+ * precision on the CPU with it; here it is for tests). */
+KERNEL round_to_16bit(const real *x, long bf16, real *out, long count)
+{
+    long i = thread_index();
+    if (i >= count) return;
+    unsigned packed = bf16 ? pack_16bit<true>(x[i], 0) : pack_16bit<false>(x[i], 0);
+    float value;
+    if (bf16) value = __uint_as_float(packed << 16);
+    else asm("{ .reg .f16 lo, hi; mov.b32 {lo, hi}, %1; cvt.f32.f16 %0, lo; }" : "=f"(value) : "r"(packed));
+    out[i] = value;
+}
+
+/* (end of mixed precision) */
+
+/* ------------------------------------------------------------------------
  * Rows and channels: softmax, norms, losses, GELU, the optimizer.
  * --------------------------------------------------------------------- */
 

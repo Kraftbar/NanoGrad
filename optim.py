@@ -386,3 +386,95 @@ class TensorLBFGS:
 
 def _dot(a, b) -> float:
     return math.fsum(kernels.multiply(a, b))
+
+
+# ---------------------------------------------------------------------------
+# Mixed precision: loss scaling for float16
+# ---------------------------------------------------------------------------
+
+
+class GradScaler:
+    """Dynamic loss scaling, for training with ``kernels.set_matmul_precision("fp16")``
+    (the rules of PyTorch's ``torch.amp.GradScaler``).
+
+    With float16 inputs the backward pass's products round every gradient
+    they read to float16, whose smallest steps are about 6e-8: the
+    gradients of a mean loss over thousands of values are often smaller
+    than that, and would come out as zeros. So the loss is multiplied by a
+    big ``scale`` (65536 to start) before ``backward()``, which scales every
+    gradient by as much, out of the danger zone; ``step`` divides it out
+    again before the optimizer sees the gradients. Too big a scale
+    overflows instead (past 65504 a float16 is infinite): then the step is
+    skipped and the scale halved. After ``growth_interval`` good steps in a
+    row it doubles again, so it stays near the largest scale that works.
+
+        scaler = GradScaler()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)              # skipped if a gradient overflowed
+        scaler.update()
+
+    bfloat16 needs none of this: it has float32's exponent, so a gradient
+    small enough to vanish in bfloat16 would vanish in float32 too.
+
+    ``step`` reads one number back from the GPU (whether the gradients are
+    all finite), so a scaled step cannot be recorded as a CUDA graph.
+    """
+
+    def __init__(self, init_scale: float = 2.0 ** 16, *, growth_factor: float = 2.0,
+                 backoff_factor: float = 0.5, growth_interval: int = 2000, enabled: bool = True) -> None:
+        if init_scale <= 0.0 or growth_factor <= 1.0 or not 0.0 < backoff_factor < 1.0 or growth_interval < 1:
+            raise ValueError("GradScaler needs init_scale > 0, growth_factor > 1, "
+                             "0 < backoff_factor < 1 and growth_interval >= 1")
+        self.scale_factor = init_scale if enabled else 1.0
+        self.growth_factor, self.backoff_factor, self.growth_interval = growth_factor, backoff_factor, growth_interval
+        self.enabled = enabled
+        self.skipped_steps = 0
+        self._good_steps = 0
+        self._found_inf: bool | None = None       # set by step, used by update
+
+    def scale(self, loss: Tensor) -> Tensor:
+        """The loss times the current scale, to call backward() on."""
+
+        return loss * self.scale_factor if self.enabled else loss
+
+    def step(self, optimizer) -> bool:
+        """Unscale the gradients and take the optimizer's step, unless one of
+        them overflowed (is infinite or NaN). Returns whether it stepped."""
+
+        if not self.enabled:
+            optimizer.step()
+            return True
+        grads = [parameter.grad for parameter in optimizer.parameters if parameter.grad is not None]
+        total = kernels.total_sum_of_squares(
+            [grad.values if isinstance(grad, RowGrad) else grad for grad in grads])
+        self._found_inf = not math.isfinite(total)
+        if self._found_inf:
+            self.skipped_steps += 1
+            return False
+        unscale = 1.0 / self.scale_factor
+        for parameter in optimizer.parameters:
+            if isinstance(parameter.grad, RowGrad):
+                parameter.grad.values = kernels.scale(parameter.grad.values, unscale)
+            elif parameter.grad is not None:
+                parameter.grad = kernels.scale(parameter.grad, unscale)
+        optimizer.step()
+        return True
+
+    def update(self) -> None:
+        """Adjust the scale after a step: halve it after an overflow, double it
+        after ``growth_interval`` good steps in a row."""
+
+        if not self.enabled or self._found_inf is None:
+            return
+        if self._found_inf:
+            self.scale_factor *= self.backoff_factor
+            self._good_steps = 0
+        else:
+            self._good_steps += 1
+            if self._good_steps == self.growth_interval:
+                self.scale_factor *= self.growth_factor
+                self._good_steps = 0
+        self._found_inf = None
+
+
+# (end of mixed precision)

@@ -2056,3 +2056,38 @@ void bce_with_logits_backward(const real *x, const real *t, double g, real *dx, 
         for (long i = 0; i < size; i++) dx[start + i] = (real) (g * (buffer[i] - t[start + i]));
     }
 }
+
+/* ------------------------------------------------------------------------
+ * Mixed precision, emulated. On the GPU, kernels.set_matmul_precision puts
+ * the matrix products on the tensor cores, which round their inputs to 16
+ * bits (kernels.cu, "Mixed precision"). The CPU has no such units, so
+ * kernels.py rounds the products' inputs with this instead and runs the
+ * usual kernels: the same numbers go in, and only the order of the sums
+ * differs.
+ * --------------------------------------------------------------------- */
+
+/* x rounded to the nearest bfloat16 (bf16) or float16 value, ties to even. */
+static float round_float_to_16bit(float x, int bf16)
+{
+    unsigned int bits;
+    if (x != x) return x;                            /* NaN stays NaN */
+    memcpy(&bits, &x, sizeof bits);
+    if (bf16) {                                      /* float32 with 16 of its 23 mantissa bits rounded off */
+        bits = (bits + 0x7FFFu + ((bits >> 16) & 1u)) & 0xFFFF0000u;
+    } else {
+        float size = fabsf(x);
+        if (size >= 65520.0f) return copysignf(INFINITY, x);    /* rounds past float16's largest, 65504 */
+        if (size < 6.103515625e-05f)                 /* below 2^-14: float16 has steps of 2^-24 there */
+            return copysignf(nearbyintf(size * 16777216.0f) / 16777216.0f, x);
+        bits = (bits + 0xFFFu + ((bits >> 13) & 1u)) & ~0x1FFFu;    /* keep 10 mantissa bits */
+    }
+    memcpy(&x, &bits, sizeof bits);
+    return x;
+}
+
+void round_to_16bit(const real *x, long bf16, real *out, long count)
+{
+    for (long i = 0; i < count; i++) out[i] = round_float_to_16bit((float) x[i], (int) bf16);
+}
+
+/* (end of mixed precision) */

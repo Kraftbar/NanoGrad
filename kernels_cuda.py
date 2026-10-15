@@ -634,6 +634,8 @@ def gemm(a, b, batches: int, m: int, k: int, n: int, a_step: int, b_step: int, c
     if m == 0 or n == 0 or k == 0 or batches == 0:
         return c
     accumulate = int(initial is not None)
+    if matmul_precision != "fp32":                # on the tensor cores ("Mixed precision"), even matrix-vector
+        return _mma_gemm(a, b, c, batches, m, k, n, a_step, b_step, c_step, trans_a, trans_b, summed, accumulate)
 
     # A matrix-vector product with the matrix stored along k: a dot product
     # per output, one warp each (a single row or column of A or B is
@@ -753,8 +755,8 @@ def conv_forward(image, index, kernel, batches: int, image_size: int,
     index = _indices(index)
     out = DeviceArray.empty(batches * filters * positions, image.typecode)
     if out.count:
-        launch("conv_forward", image.typecode, _conv_product_grid(filters, positions, batches), CONV_THREADS,
-               image, index, kernel, out, batches, image_size, filters, patch_size, positions)
+        launch(_conv_kernel("conv_forward"), image.typecode, _conv_product_grid(filters, positions, batches),
+               CONV_THREADS, image, index, kernel, out, batches, image_size, filters, patch_size, positions)
     return out
 
 
@@ -779,7 +781,7 @@ def conv_kernel_grad(image, index, grad, batches: int, image_size: int,
         images_per_slice, slices_per_image = 1, -(-positions // chunk)
         slices = batches * slices_per_image
     partial = dkernel if slices == 1 else DeviceArray.empty(slices * count, code)
-    launch("conv_kernel_grad", code, grid[:2] + (slices,), CONV_THREADS, image, index, grad, partial,
+    launch(_conv_kernel("conv_kernel_grad"), code, grid[:2] + (slices,), CONV_THREADS, image, index, grad, partial,
            batches, image_size, filters, patch_size, positions, images_per_slice, slices_per_image, chunk)
     if slices > 1:
         launch("conv_sum_slices", code, blocks(count), BLOCK, partial, dkernel, slices, count)
@@ -792,8 +794,8 @@ def conv_input_grad(grad, kernel, index, batches: int, image_size: int,
     index = _indices(index)
     image_grad = zeros(batches * image_size, grad.typecode)
     if image_grad.count and positions and patch_size:
-        launch("conv_input_grad", grad.typecode, _conv_product_grid(positions, patch_size, batches), CONV_THREADS,
-               grad, kernel, index, image_grad, batches, image_size, filters, patch_size, positions)
+        launch(_conv_kernel("conv_input_grad"), grad.typecode, _conv_product_grid(positions, patch_size, batches),
+               CONV_THREADS, grad, kernel, index, image_grad, batches, image_size, filters, patch_size, positions)
     return image_grad
 
 
@@ -957,6 +959,67 @@ def sum_repeated(x, outer: int, size: int, inner: int) -> DeviceArray:
     return out
 
 # (end of conv)
+
+
+# ---------------------------------------------------------------------------
+# Mixed precision: matrix products on the tensor cores (kernels.cu, same section)
+# ---------------------------------------------------------------------------
+
+# "fp32": gemm and the convolutions use the kernels above. "bf16" or "fp16":
+# they use kernels.cu's mma_ kernels instead, which round their inputs to
+# 16 bits as they load them and sum in float32 on the tensor cores. Set it
+# with kernels.set_matmul_precision (or NANOGRAD_AUTOCAST); arrays are stored
+# as before, so nothing else changes.
+matmul_precision = "fp32"
+MMA_BK = 32                       # as in kernels.cu
+_MMA_TILES = (128, 64)            # tile edges of the mma_gemm kernels, biggest first
+
+
+def _mma_gemm(a: DeviceArray, b: DeviceArray, c: DeviceArray, batches: int, m: int, k: int, n: int,
+              a_step: int, b_step: int, c_step: int, trans_a: bool, trans_b: bool, summed: bool,
+              accumulate: int) -> DeviceArray:
+    """The tiled part of gemm (tile choice, split-k) for the mma_gemm kernels."""
+
+    code, processors = a.typecode, _multiprocessors()
+    for edge in _MMA_TILES:
+        tiles = -(-m // edge) * -(-n // edge)
+        steps = batches * -(-k // MMA_BK)
+        reach = max(1, steps // _GEMM_SLICE_STEPS) if summed else batches
+        if tiles * reach >= processors and 2 * m * n >= tiles * edge * edge:
+            break
+    grid = (-(-n // edge), -(-m // edge))
+    name = f"mma_gemm_{edge}x{edge}_{matmul_precision}_{'t' if trans_a else 'n'}{'t' if trans_b else 'n'}"
+    if not summed:
+        launch(name, code, (*grid, min(batches, 65535)), _GEMM_THREADS, a, b, c, batches, m, k, n,
+               a_step, b_step, c_step, accumulate, 0)
+    else:
+        slices = 1 if tiles >= processors else min(-(-processors // tiles), max(1, steps // _GEMM_SLICE_STEPS), 64)
+        if slices == 1:
+            launch(name, code, grid, _GEMM_THREADS, a, b, c, batches, m, k, n, a_step, b_step, 0, accumulate, 1)
+        else:
+            share = -(-steps // slices)
+            slices = -(-steps // share)
+            partials = DeviceArray.empty(slices * m * n, code)
+            launch(name, code, (*grid, slices), _GEMM_THREADS, a, b, partials, batches, m, k, n,
+                   a_step, b_step, 0, 0, slices)
+            launch("gemm_sum_slices", code, blocks(m * n), BLOCK, partials, c, m * n, slices, accumulate)
+    c.changed()
+    return c
+
+
+def _conv_kernel(name: str) -> str:
+    """Convolution product ``name`` (conv_forward, ...), or with mixed precision its mma_ twin."""
+
+    return name if matmul_precision == "fp32" else f"mma_{name}_{matmul_precision}"
+
+
+def round_to_16bit(x, kind: str) -> DeviceArray:
+    """Every value rounded to bfloat16 (``kind`` "bf16") or float16 ("fp16") and back."""
+
+    return _map("round_to_16bit", x, scalars=(int(kind == "bf16"),))
+
+
+# (end of mixed precision)
 
 
 # ---------------------------------------------------------------------------

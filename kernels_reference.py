@@ -11,6 +11,7 @@ Values come in as flat row-major sequences of floats and go out as lists.
 from __future__ import annotations
 
 import math
+import struct
 from collections.abc import Callable, Sequence
 from operator import mul
 
@@ -729,3 +730,38 @@ def window_max(
             argmax.append(start + best)
     return out, argmax
 
+
+
+# ---------------------------------------------------------------------------
+# Mixed precision, emulated (see kernels.c)
+# ---------------------------------------------------------------------------
+
+
+def round_to_16bit(x: Sequence[float], kind: str) -> list[float]:
+    """Every value rounded to the nearest bfloat16 ("bf16") or float16 ("fp16"), ties to even.
+
+    bfloat16 is a float32 with the low 16 of its 23 mantissa bits rounded
+    off; float16 keeps 10 mantissa bits but only 5 exponent bits, so it
+    overflows past 65504 and has evenly spaced (subnormal) steps of 2^-24
+    below 2^-14.
+    """
+
+    out = []
+    for value in x:
+        try:
+            value = struct.unpack("f", struct.pack("f", value))[0]       # to float32 first, as the C does
+        except OverflowError:
+            value = math.copysign(math.inf, value)
+        if not math.isfinite(value):
+            out.append(value)
+            continue
+        if kind == "bf16":
+            bits = struct.unpack("I", struct.pack("f", value))[0]
+            bits = (bits + 0x7FFF + ((bits >> 16) & 1)) & 0xFFFF0000
+            out.append(struct.unpack("f", struct.pack("I", bits))[0])
+        elif abs(value) >= 65520.0:
+            out.append(math.copysign(math.inf, value))
+        else:                                     # round() is to nearest, ties to even
+            step = 2.0 ** max(math.frexp(value)[1] - 11, -24)
+            out.append(math.copysign(round(abs(value) / step) * step, value))
+    return out

@@ -1,5 +1,6 @@
 """The CUDA kernels against the C ones (skipped without an NVIDIA GPU)."""
 
+import math
 import pickle
 import random
 import unittest
@@ -438,6 +439,130 @@ class ConvTests(CudaTestCase):
                     kernels.set_default_dtype("float64")
 
 # (end of conv tests)
+
+
+# Mixed precision: the tensor-core products (kernels.cu, "Mixed precision").
+# With the switch on, the C backend rounds the products' inputs to 16 bits
+# and computes as usual (kernels.set_matmul_precision), so it gives what the
+# tensor cores should, up to their float32 sums (which round toward zero:
+# a sum of 3000 products drifts by about 1e-5); and against plain float32
+# the results may only differ by about the 16-bit rounding.
+
+
+class MixedPrecisionTests(CudaTestCase):
+    PRECISIONS = ("bf16", "fp16")
+    # Shapes for both tiles (64, 128), sizes off the k slab (32), split-k
+    # (a long k), and matrix-vector products (which also go to the tensor cores).
+    GEMM_SHAPES = ((3, 4, 5), (1, 37, 9), (9, 37, 1), (17, 33, 65), (130, 70, 260), (5, 3000, 7))
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.addCleanup(kernels.set_matmul_precision, "fp32")
+
+    def test_gemm_matches_the_cpu_emulation(self) -> None:
+        for precision in self.PRECISIONS:
+            kernels.set_matmul_precision(precision)
+            for m, k, n in self.GEMM_SHAPES:
+                for trans_a in (False, True):
+                    for trans_b in (False, True):
+                        for batches, steps in ((1, (0, 0, 0)), (3, (m * k, k * n, m * n)), (3, (m * k, k * n, 0))):
+                            for initial in (False, True):
+                                case = (m, k, n, batches, steps, trans_a, trans_b)
+                                with self.subTest(precision=precision, case=case, initial=initial):
+                                    self.agree(GemmTests.gemm(self, *case, initial=initial), tolerance=1e-4)
+
+    def test_gemm_is_close_to_float32(self) -> None:
+        # The 16-bit roundings (2^-8 apart in bfloat16, 2^-11 in float16) are all
+        # that separates the two; summed in float32, they mostly cancel.
+        kernels.use_backend("cuda")
+        kernels.set_default_dtype("float32")
+        self.addCleanup(kernels.set_default_dtype, "float64")
+        m, k, n = 300, 1000, 200
+        a, b = values(m * k, 1), values(k * n, 2)
+        sizes = dict(batches=1, m=m, k=k, n=n, a_step=0, b_step=0, c_step=0)
+        exact = list(kernels.gemm(a, b, **sizes))
+        largest = max(map(abs, exact))
+        for precision, tolerance in (("bf16", 2 ** -7), ("fp16", 2 ** -10)):
+            with kernels.autocast(precision):
+                mixed = kernels.gemm(a, b, **sizes)
+            self.assertEqual(mixed.typecode, "f")
+            error = max(abs(x - y) for x, y in zip(exact, mixed))
+            self.assertLess(error, tolerance * largest, precision)
+            self.assertGreater(error, 0.0, precision)              # it did round
+
+    def test_convolution_products_match_the_cpu_emulation(self) -> None:
+        for precision in self.PRECISIONS:
+            kernels.set_matmul_precision(precision)
+            for shape in ConvTests.SHAPES:
+                batches, channels, rows, cols, filters, kh, kw, stride = shape
+                image = values(batches * channels * rows * cols, 1)
+                kernel = values(filters * channels * kh * kw, 2)
+                positions = ((rows - kh) // stride + 1) * ((cols - kw) // stride + 1)
+                grad = values(batches * filters * positions, 3)
+                sizes = dict(batches=batches, image_size=channels * rows * cols, filters=filters,
+                             patch_size=channels * kh * kw, positions=positions)
+
+                def index():
+                    return patch_index(channels, rows, cols, kh, kw, stride)
+
+                with self.subTest(precision=precision, shape=shape):
+                    self.agree(lambda: kernels.conv_forward(image, index(), kernel, **sizes), 1e-5)
+                    self.agree(lambda: kernels.conv_kernel_grad(image, index(), grad, **sizes), 1e-5)
+                    self.agree(lambda: kernels.conv_input_grad(grad, kernel, index(), **sizes), 1e-5)
+
+    def test_round_to_16bit_agrees(self) -> None:
+        edges = [0.0, -0.0, 1.0, 1 + 2 ** -8, 1 + 3 * 2 ** -8, 65504.0, 65519.9, 65520.0, -1e6, 3e-8, -2.9e-8,
+                 1e-8, 6.1e-5, 1e-40, 3.4e38, 1e39, float("inf"), float("-inf")]
+        numbers = edges + [v * 10 ** e for e, v in zip(range(-12, 12), values(24, 5, -3.0, 3.0))] + values(500, 6)
+        for kind in ("bf16", "fp16"):
+            with self.subTest(kind=kind):
+                c, cuda = self.run_both(lambda: kernels.round_to_16bit(numbers, kind))
+                self.assertEqual(c, cuda)
+        kernels.use_backend("cuda")
+        self.assertTrue(math.isnan(list(kernels.round_to_16bit([float("nan")], "bf16"))[0]))
+        self.assertEqual(list(kernels.round_to_16bit([1 + 2 ** -8, 70000.0], "bf16")), [1.0, 70144.0])
+        self.assertEqual(list(kernels.round_to_16bit([1 + 2 ** -11, 70000.0], "fp16")), [1.0, float("inf")])
+
+    def test_a_small_network_trains_like_the_cpu_emulation(self) -> None:
+        from losses import softmax_cross_entropy
+        from optim import TensorAdam
+        from tensor_nn import TensorConv2D, TensorLinear
+
+        def train():
+            conv = TensorConv2D((40, 1, 3, 3), padding=1, seed=0)        # 40 filters: the implicit GEMM
+            linear = TensorLinear(40 * 4 * 4, 3, seed=1)
+            parameters = conv.parameters() + linear.parameters()
+            optimizer = TensorAdam(parameters, lr=1e-2)
+            images = Tensor(values(2 * 64, 4), (2, 1, 8, 8))
+            losses = []
+            for _ in range(5):
+                optimizer.zero_grad()
+                hidden = conv(images).relu().max_pool2d((2, 2)).flatten(start_axis=1)
+                loss = softmax_cross_entropy(linear(hidden), [0, 2])
+                loss.backward()
+                optimizer.step()
+                losses.append(loss.item())
+            return losses
+
+        exact = self.run_both(train)[1]
+        for precision in self.PRECISIONS:
+            with self.subTest(precision=precision), kernels.autocast(precision):
+                c, cuda = self.run_both(train)
+                self.assertClose(c, cuda, tolerance=1e-4)
+                self.assertClose(exact, cuda, tolerance=2e-2)
+
+    def test_autocast_switches_back(self) -> None:
+        self.assertEqual(kernels.matmul_precision(), "fp32")
+        with kernels.autocast("bf16"):
+            self.assertEqual(kernels_cuda.matmul_precision, "bf16")
+            with kernels.autocast("fp16"):
+                self.assertEqual(kernels.matmul_precision(), "fp16")
+            self.assertEqual(kernels.matmul_precision(), "bf16")
+        self.assertEqual(kernels.matmul_precision(), "fp32")
+        with self.assertRaises(ValueError):
+            kernels.set_matmul_precision("fp8")
+
+# (end of mixed precision tests)
 
 
 # Rows and channels: softmax, norms, losses, GELU, the optimizer.
