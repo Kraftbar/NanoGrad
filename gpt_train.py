@@ -76,6 +76,13 @@ PRESETS = {
         architecture="lstm", layers=2, embedding_dim=64, lstm_hidden=256, context_size=64,
         batch_size=12, steps=2000, lr=1e-3, min_lr=1e-4, warmup_steps=100, dropout=0.0,
     ),
+    # nanoGPT's config/train_shakespeare_char.py, its GPU recipe (val loss
+    # 1.4697): 10.7M parameters. Batch 64 needs more than 8 GB of GPU memory
+    # here, so on such a GPU run it as --batch-size 32 --grad-accum 2.
+    "shakespeare": dict(
+        layers=6, heads=6, embedding_dim=384, context_size=256, batch_size=64,
+        steps=5000, lr=1e-3, min_lr=1e-4, warmup_steps=100, dropout=0.2,
+    ),
     # A smaller rung that trains in minutes, for trying things out.
     "mini": dict(
         layers=2, heads=2, embedding_dim=32, context_size=32, batch_size=16,

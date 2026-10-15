@@ -1,171 +1,86 @@
 # The CUDA Backend
 
-NanoGrad's kernels also run on an NVIDIA GPU. The GPU code sits next to its
-C twin, so the two can be read side by side:
+NanoGrad's kernels also run on an NVIDIA GPU. Each GPU file sits next to
+its C twin:
 
 | CPU | GPU |
 | --- | --- |
-| `kernels.c`: the loops | `kernels.cu`: the same kernels (same names), as GPU threads |
-| `kernels_c.py`: builds it, calls it through ctypes | `kernels_cuda.py`: compiles it with NVRTC, launches it through the driver |
-| `test_kernels.py`: C against Python | `test_kernels_cuda.py`: CUDA against C |
+| `kernels.c` | `kernels.cu` (same kernel names) |
+| `kernels_c.py` | `kernels_cuda.py` |
+| `test_kernels.py` | `test_kernels_cuda.py` |
 
-Nothing above the kernels changes: `tensor.py`, the layers and every model
+Nothing above the kernels changes: `tensor.py`, the layers and the models
 run as they are.
 
 ```bash
-.venv/bin/pip install "nvidia-cuda-nvrtc>=13,<14"       # NVIDIA's runtime compiler, ~60 MB
+.venv/bin/pip install "nvidia-cuda-nvrtc>=13,<14"
 NANOGRAD_BACKEND=cuda NANOGRAD_DTYPE=float32 .venv/bin/python diffusion_demo.py ...
 ```
 
-or in code, before making any tensors:
-
-```python
-import kernels
-kernels.use_backend("cuda")
-kernels.set_default_dtype("float32")   # a gaming GPU runs float64 at 1/64 of float32's speed
-```
-
-It needs the NVIDIA driver (for `libcuda`) and the pip package above;
-no CUDA toolkit, no build step. The first use compiles `kernels.cu` for
-the GPU at hand, in about half a second, and caches the binary under
-`~/.cache/nanograd/`.
+or `kernels.use_backend("cuda")` before making any tensors. It needs only
+the NVIDIA driver and that pip package; the first run compiles
+`kernels.cu` (about 0.5 s) and caches the binary in `~/.cache/nanograd/`.
 
 ## How It Works
 
-**Compiling.** `kernels_cuda.py` hands the source of `kernels.cu` to
-NVRTC with `-DREAL=float` or `-DREAL=double` (the same trick as
-`kernels.c`), gets back a cubin for this GPU's architecture, and loads it
-with `cuModuleLoadData`. Kernels are launched with `cuLaunchKernel`. That
-is all the CUDA API there is: about a dozen driver calls through ctypes.
-
-**Tensors live on the GPU.** With the CUDA backend, `Tensor.data` is a
-`DeviceArray`: GPU memory that also behaves like a flat, read-only Python
-sequence. Kernels take DeviceArrays and return new ones, so values stay
-on the GPU from op to op. When Python code reads one (`x.data[i]`,
-`sum(x.data)`, `loss.item()`), the whole array is copied to the host
-once and kept until a kernel writes to it. Each such copy is a *sync*:
-Python waits for the GPU to finish everything queued before it.
-`kernels_cuda.syncs` counts them, which shows where code still touches
-values from Python. Making the backend fast was mostly about removing
-syncs: a training step now has three (the loss value, its gradient's
-scale, and the loss that the training loop prints), four when clipping
-gradients.
-
-**Kernels are queued, not waited for.** A launch returns immediately, so
-Python builds the next op while the GPU runs the last one. Only a sync
-waits.
-
-**Memory.** Freed DeviceArrays go back to a pool, kept by size, instead
-of to the driver (`cuMemFree` waits for the GPU, and `cuMemAlloc` is
-slow). Reusing a block without waiting is safe because every kernel runs
-in order on one stream. This is PyTorch's caching allocator in small.
-
-**Conventions.** A kernel takes only pointers, `double` (scalar settings,
-as in `kernels.c`) and `long` (counts), so `launch()` packs any argument
-list into one buffer without per-kernel declarations.
+- **Compiling.** NVRTC compiles `kernels.cu` with `-DREAL=float` or
+  `double`, the same trick as `kernels.c`. About a dozen driver calls
+  through ctypes load and launch it.
+- **Tensors stay on the GPU.** `Tensor.data` is a `DeviceArray`. Reading
+  one from Python copies it to the host once; that copy is a *sync*,
+  because Python waits for the GPU. A training step has three syncs
+  (`kernels_cuda.syncs` counts them).
+- **Launches don't wait.** Python builds the next op while the GPU runs
+  the last one.
+- **Memory.** Freed blocks go back to a pool instead of the driver, like
+  PyTorch's caching allocator.
 
 ## Reading kernels.cu
 
-The header of `kernels.cu` explains the one idea behind all of it: the C
-loop `for (i = 0; i < count; i++) out[i] = ...` becomes one GPU thread
-per `i`, and thousands run at once. From there each section shows one
-technique, roughly in order of difficulty:
+The C loop `for (i = 0; i < n; i++)` becomes one GPU thread per `i`. The
+sections go from easy to hard:
 
-- **Elementwise** (`add_vectors`, `relu_forward`, ...): one thread per
-  value. Neighbouring threads touch neighbouring memory, so a warp of 32
-  threads loads one contiguous run in a single transaction.
-- **Rows** (`softmax_rows`, `layer_norm_rows`): a row's maximum or sum
-  needs threads to cooperate. A warp shares values with
-  `__shfl_xor_sync`, so rows up to 1024 wide get one warp each and need
-  no shared memory; wider rows get a block whose warps combine their
-  totals in shared memory. Sums over all rows (a bias gradient) are done
-  in two passes (column sums over chunks of rows, then the chunks added in
-  order), so the result is the same every run.
-- **Matrix products** (`gemm_*`): the classic tiled product. A block
-  copies a 128 x 8 slice of A and an 8 x 128 slice of B into shared
-  memory, and each of its 256 threads computes an 8 x 8 piece of the
-  output from there, so every number loaded from GPU memory is used 128
-  times. The next slices are loaded while the current ones are multiplied
-  (double buffering). About 8 TFLOP/s in float32 at 1024^3, against the C
-  gemm's 0.11 on one core.
-- **Convolutions** (`conv_forward`, ...): implicit GEMM, the same tiled
-  product, but its tile loads read image patches through the index table
-  that `tensor.py` already builds, so no patch matrix ever exists in
-  memory.
-- **Scatters** (col2im, pooling and embedding gradients): many inputs add
-  into the same output. With atomics the order of the additions, and so
-  the last bits of a float32 result, changes from run to run. For the
-  fixed index tables the scatter is turned around into a gather (each
-  output thread adds up its own inputs, in the C loop's order), which
-  gives the C kernel's bits exactly; atomics remain only where the
-  indices exist only on the GPU (max-pool winners, embedding ids).
-- **Recurrent** (`lstm_sequence`, `crf_forward`): time steps depend on
-  each other. The LSTM launches two kernels per step (a small tiled
-  product h W^T, then the cell); the CRF runs a block per sentence that
-  walks all the words in one launch, with `__syncthreads()` between
-  words.
+- **Elementwise:** one thread per value.
+- **Rows** (softmax, layer norm): a warp shares values with
+  `__shfl_xor_sync`.
+- **Matrix products:** tiles in shared memory, double buffered; about
+  8 TFLOP/s in float32.
+- **Convolutions:** implicit GEMM, where tiles read patches through the
+  index table, so no patch matrix exists in memory.
+- **Scatters:** turned into gathers, so the sums run in a fixed order and
+  give the same bits every run.
+- **Recurrent** (LSTM, CRF): one launch walks all the time steps.
 
 ## Correctness
 
-`test_kernels_cuda.py` runs every kernel on both backends in float64 and
-requires agreement to about 1e-12 (1e-5 in float32), on shapes chosen to
-miss the tile sizes, and checks a few things only the GPU has (one sync
-per array, the in-place `initial` of gemm). The whole test suite also runs
-on the GPU:
-
-```bash
-NANOGRAD_BACKEND=cuda .venv/bin/python -m unittest discover
-```
-
-and passes, except for the tests that are skipped there: bit identity
-with the fused C kernels (the GPU sums in a different order) and the
-data-parallel tests that fork worker processes (CUDA does not survive a
-fork).
+`test_kernels_cuda.py` checks every kernel against C (1e-12 in float64).
+The whole suite also passes with `NANOGRAD_BACKEND=cuda`, apart from the
+bit-identity and fork tests, which are skipped there.
 
 ## Speed
 
-`gpu_benchmark.py`: one training step on random data, float32, RTX 3060 Ti
-against the C kernels on 8 threads of an otherwise idle Ryzen 7 3700X:
+One training step in float32: RTX 3060 Ti against 8 threads of an idle
+Ryzen 7 3700X (`gpu_benchmark.py`).
 
-| model | GPU ms | CPU ms | speedup |
+| model | GPU ms | CPU ms | gain |
 | --- | ---: | ---: | ---: |
-| LeNet-5, MNIST, batch 32 | 1.9 | 5.4 | 2.9x |
-| small ResNet, MNIST, batch 32 | 5.4 | 29.9 | 5.5x |
-| ResNet-8, CIFAR-10, batch 32 | 9.5 | 82.6 | 8.7x |
-| ResNet-8, CIFAR-10, batch 256 | 60.5 | 394.8 | 6.5x |
-| ViT, MNIST, batch 32 | 6.2 | 25.0 | 4.1x |
-| baby GPT (4 x 128, context 64), batch 12 | 15.8 | 274.9 | 17x |
-| GPT (6 x 384, context 256), batch 32 | 221.9 | 12,176 | 55x |
-| diffusion U-Net (width 32, norm + attention), batch 128 | 136.9 | 1,820 | 13x |
+| LeNet-5 | 1.9 | 5.4 | 2.9x |
+| ResNet, MNIST | 5.4 | 29.9 | 5.5x |
+| ResNet-8, b32 | 9.5 | 82.6 | 8.7x |
+| ResNet-8, b256 | 60.5 | 395 | 6.5x |
+| ViT | 6.2 | 25.0 | 4.1x |
+| baby GPT | 15.8 | 275 | 17x |
+| GPT 6x384 | 222 | 12,176 | 55x |
+| diffusion U-Net | 137 | 1,820 | 13x |
 
-The bigger the model, the bigger the gain. Small models are limited by
-Python: a launch costs about 6 microseconds (3 of them in the driver),
-and the baby GPT's step is about 1,000 launches plus the autograd
-bookkeeping around them, while the GPU itself would need a few
-milliseconds.
+Small models are limited by Python, at about 6 µs per launch.
 
-## A Whole Training Run
-
-The MNIST diffusion model of [model_families.md](./model_families.md#diffusion-diffusionpy-diffusion_demopy)
-(455K-parameter U-Net with group norm and attention, 20 epochs, EMA, DDIM
-sampling), once on each backend, float32:
-
-| | time | FID (same judge) |
-| --- | ---: | ---: |
-| C kernels, 8 threads | 268 min | 18.11 |
-| CUDA | 30 min | 18.12 |
-
-The two runs print the same loss, to the four digits shown, at every
-report from step 100 to step 9,300: summing in a different order changes
-the last bits of float32 values, not the training.
+A whole diffusion run (MNIST, 20 epochs) takes 268 min on the CPU and
+30 min on the GPU. The FIDs are 18.11 and 18.12, and the two runs print
+the same losses.
 
 ## Limits
 
-- **Memory.** Every op's output stays alive until the backward pass
-  reaches it, as on the CPU, but the GPU has only 8 GB: the 6 x 384 GPT
-  fits batch 32, not nanoGPT's 64.
-- **float64** runs at 1/64 of the float32 rate on a gaming GPU (about
-  250 GFLOP/s here, still above the CPU), fine for checking, not for
-  training.
-- **One process.** CUDA does not survive `fork()`, so the data-parallel
-  workers of `parallel.py` stay CPU-only.
+- 8 GB: the 6x384 GPT fits batch 32, but not batch 64.
+- float64 runs 64x slower than float32 on a gaming GPU.
+- CUDA does not survive `fork()`, so `parallel.py` stays on the CPU.
