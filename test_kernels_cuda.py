@@ -688,5 +688,168 @@ class ModelTests(CudaTestCase):
         self.agree(train, tolerance=1e-10)
 
 
+# CUDA graphs (kernels_cuda.capture): a recorded step, replayed, against the same step run eagerly.
+
+
+class GraphTests(CudaTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        kernels.use_backend("cuda")
+        kernels.set_default_dtype("float32")
+
+    def tearDown(self) -> None:
+        kernels.set_default_dtype("float64")
+        super().tearDown()
+
+    def batches(self, count, size, classes, rows, seed):
+        rng = random.Random(seed)
+        return [([rng.uniform(-1.0, 1.0) for _ in range(rows * size)], [rng.randrange(classes) for _ in range(rows)])
+                for _ in range(count)]
+
+    def train(self, build, batches, graphed):
+        """Each step's loss and weights (read after every step: the replays
+        must refresh the host copies), training on ``batches`` one step each:
+        eagerly, or eagerly once and then as replays of a recorded graph.
+        The learning rate changes every step (a schedule)."""
+
+        parameters, optimizer, step, state = build()
+        x, y = kernels.storage(batches[0][0]), kernels_cuda.DeviceArray("l", batches[0][1])
+        results = []
+        graph = None
+        for index, (inputs, targets) in enumerate(batches):
+            optimizer.lr = 1e-2 / (1 + index)
+            if graph is not None:
+                loss = graph(inputs, targets)
+            else:
+                x[:], y[:] = inputs, targets
+                loss = step(x, y)
+            results.append((loss.item(), [list(p.data) for p in parameters + state()]))
+            if graphed and graph is None:
+                graph = kernels_cuda.capture(lambda: step(x, y), x, y)
+        if graph is not None:
+            graph.close()
+        return results
+
+    def classifier(self, model, shape, parameters=None, **adam):
+        from losses import softmax_cross_entropy
+        from optim import TensorAdam
+
+        parameters = parameters or model.parameters()
+        optimizer = TensorAdam(parameters, lr=1e-2, **adam)
+
+        def step(x, y):
+            optimizer.zero_grad()
+            loss = softmax_cross_entropy(model(Tensor(x, shape)), y)
+            loss.backward()
+            optimizer.step()
+            return loss
+
+        return parameters, optimizer, step, lambda: []
+
+    def assertReplaysMatch(self, build, batches) -> None:
+        eager, graphed = self.train(build, batches, False), self.train(build, batches, True)
+        self.assertEqual(len(eager), len(graphed))
+        for step, ((loss, weights), (graph_loss, graph_weights)) in enumerate(zip(eager, graphed)):
+            self.assertEqual(loss, graph_loss, f"step {step}: the loss")
+            for index, (left, right) in enumerate(zip(weights, graph_weights)):
+                if left != right:
+                    self.fail(f"step {step}: array {index} differs (by up to {max(abs(a - b) for a, b in zip(left, right))})")
+
+    def test_an_mlp_with_clipping_and_weight_decay_replays_bit_for_bit(self) -> None:
+        from tensor_nn import TensorLinear
+
+        def build():
+            hidden, out = TensorLinear(12, 16, seed=0), TensorLinear(16, 5, seed=1)
+            return self.classifier(lambda x: out(hidden(x).relu()), (8, 12), hidden.parameters() + out.parameters(),
+                                   weight_decay=0.1, weight_decay_min_ndim=2, max_grad_norm=0.5)
+
+        self.assertReplaysMatch(build, self.batches(5, 12, 5, 8, seed=1))
+
+    def test_a_vit_replays_bit_for_bit(self) -> None:
+        from vit import TinyViT
+
+        def build():
+            model = TinyViT(image_shape=(1, 8, 8), patch_size=2, classes=4, embedding_dim=16, seed=0)
+            return self.classifier(model, (6, 1, 8, 8))
+
+        self.assertReplaysMatch(build, self.batches(4, 64, 4, 6, seed=2))
+
+    def test_batch_norm_statistics_replay_bit_for_bit(self) -> None:
+        from tensor_nn import TensorBatchNorm2d, TensorConv2D, TensorLinear
+
+        def build():
+            conv, norm, linear = TensorConv2D((4, 1, 3, 3), padding=1, seed=0), TensorBatchNorm2d(4), TensorLinear(64, 3, seed=1)
+            model = lambda x: linear(norm(conv(x)).relu().max_pool2d((2, 2)).flatten(start_axis=1))
+            parameters, optimizer, step, _ = self.classifier(model, (4, 1, 8, 8), conv.parameters() + norm.parameters()
+                                                             + linear.parameters())
+            running = lambda: [Tensor(norm.running_mean, (4,)), Tensor(norm.running_var, (4,))]
+            return parameters, optimizer, step, running
+
+        self.assertReplaysMatch(build, self.batches(4, 64, 3, 4, seed=3))
+
+    def test_a_gpt_replays_bit_for_bit(self) -> None:
+        # Token ids on the GPU (an input graph). Each id appears once per batch, so
+        # that the embedding gradient's atomic adds land on distinct rows, in any order.
+        from language import CharTransformerModel
+        from losses import softmax_cross_entropy
+        from optim import TensorAdam
+
+        def build():
+            model = CharTransformerModel(11, context_size=8, embedding_dim=16, num_heads=2, num_layers=2,
+                                         feed_forward_activation="gelu", tie_embeddings=True, seed=0)
+            optimizer = TensorAdam(model.parameters(), lr=1e-2, weight_decay=0.1, max_grad_norm=1.0)
+
+            def step(tokens, targets):
+                logits = model.sequence_logits(Tensor(tokens, (1, 8)))
+                loss = softmax_cross_entropy(logits.reshape((8, 11)), targets)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                return loss
+
+            return model.parameters(), optimizer, step, lambda: []
+
+        rng = random.Random(4)
+        batches = [(rng.sample(range(11), 8), [rng.randrange(11) for _ in range(8)]) for _ in range(4)]
+        self.assertReplaysMatch(build, batches)
+
+    def test_reading_a_value_while_recording_raises(self) -> None:
+        parameters, optimizer, step, _ = self.mlp()
+        x, y = kernels.storage(values(24, 5)), kernels_cuda.DeviceArray("l", [0, 1])
+        step(x, y)
+        with self.assertRaisesRegex(RuntimeError, "recorded"):
+            kernels_cuda.capture(lambda: step(x, y).item(), x, y)
+        self.assertFalse(kernels_cuda.capturing())
+        self.assertGreater(step(x, y).item(), 0.0)          # eager steps still work
+
+    def test_replacing_an_array_the_step_reads_raises(self) -> None:
+        parameters, optimizer, step, _ = self.mlp()
+        x, y = kernels.storage(values(24, 6)), kernels_cuda.DeviceArray("l", [0, 1])
+        step(x, y)
+
+        def replacing():
+            loss = step(x, y)
+            parameters[0].data = kernels.scale(parameters[0].data, 0.5)      # not in place
+            return loss
+
+        with self.assertRaisesRegex(RuntimeError, "in place"):
+            kernels_cuda.capture(replacing, x, y)
+
+    def test_closing_hands_the_memory_back(self) -> None:
+        parameters, optimizer, step, _ = self.mlp()
+        x, y = kernels.storage(values(24, 7)), kernels_cuda.DeviceArray("l", [0, 1])
+        step(x, y)
+        graph = kernels_cuda.capture(lambda: step(x, y), x, y)
+        self.assertGreater(graph.nodes, 10)
+        self.assertIn(graph, kernels_cuda._graph_blocks.values())
+        graph.close()
+        self.assertNotIn(graph, kernels_cuda._graph_blocks.values())
+
+    def mlp(self):
+        from tensor_nn import TensorLinear
+
+        return self.classifier(TensorLinear(12, 3, seed=0), (2, 12))
+
+
 if __name__ == "__main__":
     unittest.main()

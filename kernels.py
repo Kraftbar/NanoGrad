@@ -145,6 +145,24 @@ def zeros(count: int) -> array | list[float]:
     return _kernels().zeros(count) if BACKEND != "python" else [0.0] * count
 
 
+def copy(values: Sequence[float]) -> array | list[float]:
+    """A copy of ``values`` as tensor storage. Values already on the GPU are
+    copied there, without passing through the host."""
+
+    if (BACKEND == "cuda" and isinstance(values, kernels_cuda.DeviceArray)
+            and values.typecode == kernels_cuda.typecode):
+        return values[:]
+    return storage(list(map(float, values)))
+
+
+def capturing() -> bool:
+    """Whether a CUDA graph is recording the kernels (``kernels_cuda.capture``):
+    then nothing runs, and the few ops whose numbers change from step to
+    step keep them on the GPU."""
+
+    return BACKEND == "cuda" and kernels_cuda.capturing()
+
+
 # ---------------------------------------------------------------------------
 # The kernels
 # ---------------------------------------------------------------------------
