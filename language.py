@@ -932,7 +932,7 @@ class CharTransformerModel(TensorModule):
         self.projection.load_state_dict(state["projection"])
 
 
-FEED_FORWARD_ACTIVATIONS = ("relu", "gelu", "swiglu")
+FEED_FORWARD_ACTIVATIONS = ("relu", "gelu", "gelu_tanh", "swiglu")
 NORMS = ("layer", "rms")
 
 
@@ -947,6 +947,12 @@ def _feed_forward_activation(tensor: Tensor, activation: str) -> Tensor:
         return tensor.relu()
     if activation == "gelu":
         return tensor.gelu()
+    if activation == "gelu_tanh":
+        # GPT-2's approximation of GELU (Hendrycks and Gimpel, 2016), which its
+        # published weights were trained with:
+        #     0.5 x (1 + tanh(sqrt(2 / pi) (x + 0.044715 x^3)))
+        inner = (tensor + tensor * tensor * tensor * 0.044715) * math.sqrt(2 / math.pi)
+        return tensor * (inner.tanh() + 1.0) * 0.5
     if activation == "swiglu":
         return tensor * tensor.sigmoid()          # SiLU; the "GLU" gate is in the block
     raise ValueError(f"unknown feed-forward activation: {activation}")

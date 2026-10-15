@@ -321,7 +321,7 @@ def train(args) -> dict:
                 for episode in episodes:
                     meta["flags"] += episode["flag"]
                     meta["best_x"] = max(meta["best_x"], episode["x"])
-                recent = (recent + episodes)[-20:]
+                recent = (recent + episodes)[-args.window:]
             with no_grad():
                 _, last = model(screens_tensor(games.frames))
             advantages, returns = advantages_and_returns(rewards, values, dones, list(last.data),
@@ -366,8 +366,8 @@ def train(args) -> dict:
                       flush=True)
             if meta["updates"] % args.save_every == 0:
                 save(out / "model.json", model, meta)
-            if len(window) >= 20 and row["flag_rate"] >= args.solved:
-                print(f"solved: {row['flag_rate']:.0%} of the last 20 episodes reached the flag", flush=True)
+            if len(window) >= args.window and row["flag_rate"] >= args.solved:
+                print(f"solved: {row['flag_rate']:.0%} of the last {args.window} episodes reached the flag", flush=True)
                 break
         save(out / "model.json", model, meta)
     finally:
@@ -422,7 +422,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--beta", type=float, default=0.01, help="entropy bonus")
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--total-steps", type=int, default=5_000_000)
-    parser.add_argument("--solved", type=float, default=0.9, help="stop once this share of 20 episodes finish")
+    parser.add_argument("--solved", type=float, default=0.9, help="stop once this share of --window episodes finish")
+    parser.add_argument("--window", type=int, default=100, help="episodes the flag rate is measured over")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--log-every", type=int, default=1)
     parser.add_argument("--save-every", type=int, default=10)

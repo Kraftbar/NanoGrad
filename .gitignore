@@ -57,3 +57,6 @@ data/camvid/download.done
 data/ud_ewt/*.conllu
 data/speech_commands/*
 !data/speech_commands/DOWNLOAD.md
+
+# GPT-2 weights and tokenizer (gpt2.py --download)
+data/gpt2/
