@@ -254,26 +254,35 @@ def save_pgm(path: str | Path, image: Tensor) -> None:
 
 
 def save_png(path: str | Path, image: Tensor) -> None:
-    """Write a grayscale PNG (values in [0, 1]) with only the standard library.
+    """Write a grayscale (H, W) or colour (3, H, W) PNG (values in [0, 1]) with only the standard library.
 
     A PNG is a signature, then chunks of (length, type, data, CRC32): IHDR
-    (size, 8-bit grayscale), IDAT (zlib-compressed rows, each prefixed by a
-    0 byte meaning "no filter"), and IEND.
+    (size, 8-bit grayscale or RGB), IDAT (zlib-compressed rows, each
+    prefixed by a 0 byte meaning "no filter"), and IEND.
     """
 
     import struct
     import zlib
 
-    height, width = image.shape
-    rows = b"".join(
-        b"\x00" + bytes(max(0, min(255, round(value * 255))) for value in image.data[r * width : (r + 1) * width])
-        for r in range(height)
-    )
+    byte = lambda value: max(0, min(255, round(value * 255)))      # noqa: E731
+    if len(image.shape) == 3:                                        # RGB: each pixel's three values in a row
+        _, height, width = image.shape
+        plane = height * width
+        rows = b"".join(
+            b"\x00" + bytes(byte(image.data[c * plane + r * width + x]) for x in range(width) for c in range(3))
+            for r in range(height)
+        )
+        colour = 2
+    else:
+        height, width = image.shape
+        rows = b"".join(b"\x00" + bytes(byte(value) for value in image.data[r * width : (r + 1) * width])
+                        for r in range(height))
+        colour = 0
 
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
-    header = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    header = struct.pack(">IIBBBBB", width, height, 8, colour, 0, 0, 0)
     Path(path).write_bytes(
         b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
     )

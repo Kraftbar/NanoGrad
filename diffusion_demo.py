@@ -1,8 +1,8 @@
-"""Train the diffusion model (diffusion.py) on MNIST and draw new digits.
+"""Train the diffusion model (diffusion.py) on MNIST, Fashion-MNIST or CIFAR-10 and draw new images.
 
     python3 diffusion_demo.py --epochs 2 --out runs/diffusion
 
-Writes the loss log and a grid of generated digits (samples.png), each
+Writes the loss log and a grid of generated images (samples.png), each
 made by denoising pure random noise in 200 steps.
 """
 
@@ -24,19 +24,24 @@ from tensor import Tensor
 _SIGNED = [value / 127.5 - 1.0 for value in range(256)]     # byte -> value in [-1, 1]
 
 
-def grid_image(values: list[float], count: int, columns: int) -> Tensor:
-    """Tile ``count`` 28x28 images (values in [-1, 1]) into one picture in [0, 1]."""
+def grid_image(values: list[float], count: int, columns: int, shape: tuple[int, int, int] = (1, 28, 28)) -> Tensor:
+    """Tile ``count`` images of ``shape`` (values in [-1, 1]) into one picture in [0, 1]:
+    (height, width) for grayscale, (3, height, width) for colour."""
 
+    channels, size = shape[0], shape[1]
     rows_of_images = -(-count // columns)
-    height, width = rows_of_images * 28, columns * 28
-    pixels = [0.0] * (height * width)
+    height, width = rows_of_images * size, columns * size
+    pixels = [0.0] * (channels * height * width)
     for index in range(count):
-        top, left = (index // columns) * 28, (index % columns) * 28
-        for r in range(28):
-            for c in range(28):
-                value = values[index * 784 + r * 28 + c]
-                pixels[(top + r) * width + left + c] = min(1.0, max(0.0, (value + 1.0) / 2.0))
-    return Tensor(pixels, (height, width))
+        top, left = (index // columns) * size, (index % columns) * size
+        for channel in range(channels):
+            image = values[(index * channels + channel) * size * size :]
+            plane = channel * height * width
+            for r in range(size):
+                for c in range(size):
+                    value = image[r * size + c]
+                    pixels[plane + (top + r) * width + left + c] = min(1.0, max(0.0, (value + 1.0) / 2.0))
+    return Tensor(pixels, (height, width) if channels == 1 else (channels, height, width))
 
 
 class EMA:
@@ -65,7 +70,7 @@ def sample(process: Diffusion, count: int, args: argparse.Namespace, seed: int) 
     values = []
     rng = random.Random(seed)
     for start in range(0, count, 64):
-        shape = (min(64, count - start), 1, 28, 28)
+        shape = (min(64, count - start), *DATASETS[args.dataset][1])
         values += (process.ddim_sample(shape, rng, args.ddim_steps) if args.ddim_steps
                    else process.sample(shape, rng))
     return values
@@ -74,7 +79,9 @@ def sample(process: Diffusion, count: int, args: argparse.Namespace, seed: int) 
 def run(args: argparse.Namespace) -> dict:
     kernels.set_default_dtype(args.dtype)
     images, _ = load_split(args.dataset, Path(DATASETS[args.dataset][0]), "train", args.train_limit)
-    model = TinyUNet(width=args.width, groups=args.groups, attention=args.attention, seed=args.seed)
+    shape = DATASETS[args.dataset][1]
+    model = TinyUNet(channels=shape[0], size=shape[1], width=args.width, groups=args.groups,
+                     attention=args.attention, seed=args.seed)
     process = Diffusion(model, steps=args.diffusion_steps)
     optimizer = TensorAdam(model.parameters(), lr=args.lr)
     ema = EMA(model.parameters(), args.ema) if args.ema else None
@@ -96,7 +103,7 @@ def run(args: argparse.Namespace) -> dict:
         for batch in epoch_batches(len(images), args.batch_size, rng):
             pixels = [_SIGNED[byte] for index in batch for byte in images[index]]
             optimizer.zero_grad()
-            loss = process.loss(pixels, (len(batch), 1, 28, 28), rng)
+            loss = process.loss(pixels, (len(batch), *shape), rng)
             loss.backward()
             optimizer.step()
             if ema is not None:
@@ -123,21 +130,21 @@ def run(args: argparse.Namespace) -> dict:
     if ema is not None:
         ema.swap()
     samples = sample(process, args.samples, args, args.seed + 2)
-    save_png(out / "samples.png", grid_image(samples, args.samples, columns=8))
+    save_png(out / "samples.png", grid_image(samples, args.samples, columns=8, shape=shape))
     print(f"wrote {out / 'samples.png'} after {(perf_counter() - start) / 60:.1f} min")
     return results
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--dataset", choices=("mnist", "fashion"), default="mnist")
+    parser.add_argument("--dataset", choices=("mnist", "fashion", "cifar10"), default="mnist")
     parser.add_argument("--dtype", choices=("float64", "float32"), default="float64")
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=2e-3)
     parser.add_argument("--width", type=int, default=16)
     parser.add_argument("--groups", type=int, default=0, help="group norm with this many groups in every block (DDPM: 32)")
-    parser.add_argument("--attention", action="store_true", help="self-attention over the 7 x 7 middle")
+    parser.add_argument("--attention", action="store_true", help="self-attention over the middle (7 x 7, CIFAR 8 x 8)")
     parser.add_argument("--diffusion-steps", type=int, default=200)
     parser.add_argument("--ema", type=float, default=0.0, help="decay of an averaged copy of the weights to sample from (DDPM: 0.9999)")
     parser.add_argument("--ddim-steps", type=int, default=0, help="sample with DDIM in this many steps (0: DDPM's full chain)")

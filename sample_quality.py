@@ -1,4 +1,4 @@
-"""How good are generated 28 x 28 images? A Frechet distance on a classifier's features.
+"""How good are generated images? A Frechet distance on a classifier's features.
 
 FID (Heusel et al., 2017) compares two sets of images through the features
 a trained classifier sees in them: fit a Gaussian (mean mu, covariance S)
@@ -15,8 +15,9 @@ are comparable within this file's setup, not with Inception FIDs.
 The classifier here is two 3 x 3 convolutions (32 and 64 channels, ReLU,
 2 x 2 max pooling), a 128-wide ReLU layer whose outputs are the features,
 and a 10-way output, trained for two epochs of Adam: about 99% test
-accuracy on MNIST and 91% on Fashion-MNIST. It also labels the samples,
-so the report includes how often each class was generated.
+accuracy on MNIST and 91% on Fashion-MNIST (CIFAR-10: ten epochs, about
+70%). It also labels the samples, so the report includes how often each
+class was generated.
 """
 
 from __future__ import annotations
@@ -35,11 +36,15 @@ from tensor_nn import TensorConv2D, TensorLinear, TensorModule
 SIGNED = [value / 127.5 - 1.0 for value in range(256)]      # byte -> value in [-1, 1], as the diffusion model sees it
 
 
+EPOCHS = {"mnist": 2, "fashion": 2, "cifar10": 10}
+
+
 class FeatureNet(TensorModule):
-    def __init__(self, seed: int = 0) -> None:
-        self.conv1 = TensorConv2D((32, 1, 3, 3), padding=1, seed=seed)
+    def __init__(self, seed: int = 0, shape: tuple[int, int, int] = (1, 28, 28)) -> None:
+        channels, size = shape[0], shape[1] // 4
+        self.conv1 = TensorConv2D((32, channels, 3, 3), padding=1, seed=seed)
         self.conv2 = TensorConv2D((64, 32, 3, 3), padding=1, seed=seed + 1)
-        self.hidden = TensorLinear(64 * 7 * 7, 128, seed=seed + 2)
+        self.hidden = TensorLinear(64 * size * size, 128, seed=seed + 2)
         self.out = TensorLinear(128, 10, seed=seed + 3)
 
     def features(self, images: Tensor) -> Tensor:
@@ -54,29 +59,32 @@ class FeatureNet(TensorModule):
         return [p for layer in (self.conv1, self.conv2, self.hidden, self.out) for p in layer.parameters()]
 
 
-def train_feature_net(dataset: str, *, epochs: int = 2, seed: int = 0, batch_size: int = 64) -> FeatureNet:
+def train_feature_net(dataset: str, *, seed: int = 0, batch_size: int = 64) -> FeatureNet:
     images, labels = load_split(dataset, Path(DATASETS[dataset][0]), "train", None)
-    model = FeatureNet(seed)
+    shape = DATASETS[dataset][1]
+    model = FeatureNet(seed, shape)
     optimizer = TensorAdam(model.parameters(), lr=1e-3)
     rng = random.Random(seed)
-    for _ in range(epochs):
+    for _ in range(EPOCHS[dataset]):
         for batch in epoch_batches(len(images), batch_size, rng):
-            pixels = Tensor([SIGNED[b] for i in batch for b in images[i]], (len(batch), 1, 28, 28))
+            pixels = Tensor([SIGNED[b] for i in batch for b in images[i]], (len(batch), *shape))
             optimizer.zero_grad()
             softmax_cross_entropy(model(pixels), [labels[i] for i in batch]).backward()
             optimizer.step()
     return model
 
 
-def run_in_batches(model: FeatureNet, values: list[float], batch_size: int = 500) -> tuple[list[list[float]], list[int]]:
+def run_in_batches(model: FeatureNet, values: list[float], shape: tuple[int, int, int],
+                   batch_size: int = 500) -> tuple[list[list[float]], list[int]]:
     """(128 features per image, predicted class per image) for flat [-1, 1] images."""
 
     features, classes = [], []
-    count = len(values) // 784
+    size = shape[0] * shape[1] * shape[2]
+    count = len(values) // size
     with no_grad():
         for start in range(0, count, batch_size):
             end = min(count, start + batch_size)
-            hidden = model.features(Tensor(values[start * 784 : end * 784], (end - start, 1, 28, 28)))
+            hidden = model.features(Tensor(values[start * size : end * size], (end - start, *shape)))
             scores = model.out(hidden).data
             width = hidden.shape[1]
             for row in range(end - start):
@@ -125,8 +133,9 @@ class Judge:
 
     def __init__(self, dataset: str, *, seed: int = 0) -> None:
         self.model = train_feature_net(dataset, seed=seed)
+        self.shape = DATASETS[dataset][1]
         images, labels = load_split(dataset, Path(DATASETS[dataset][0]), "test", None)
-        features, classes = run_in_batches(self.model, [SIGNED[b] for image in images for b in image])
+        features, classes = run_in_batches(self.model, [SIGNED[b] for image in images for b in image], self.shape)
         self.accuracy = sum(c == y for c, y in zip(classes, labels)) / len(labels)
         self.real = gaussian(features)
         self.train_images = load_split(dataset, Path(DATASETS[dataset][0]), "train", None)[0]
@@ -134,7 +143,7 @@ class Judge:
     def score(self, samples: list[float]) -> dict:
         """FID against the test set, and how many samples fell in each class."""
 
-        features, classes = run_in_batches(self.model, samples)
+        features, classes = run_in_batches(self.model, samples, self.shape)
         return {"fid": frechet_distance(gaussian(features), self.real),
                 "class_counts": [classes.count(c) for c in range(10)]}
 

@@ -80,11 +80,13 @@ class ConvBlock(TensorModule):
 
 
 class TinyUNet(TensorModule):
-    """28x28 -> 14x14 -> 7x7 -> 14x14 -> 28x28, with skip connections."""
+    """28x28 -> 14x14 -> 7x7 -> 14x14 -> 28x28, with skip connections (any
+    ``size`` divisible by 4: CIFAR's 32 goes down to 8 x 8)."""
 
-    def __init__(self, *, channels: int = 1, width: int = 16, time_width: int = 32, groups: int = 0,
+    def __init__(self, *, channels: int = 1, size: int = 28, width: int = 16, time_width: int = 32, groups: int = 0,
                  attention: bool = False, seed: int = 0) -> None:
         wide = 2 * width
+        self.middle_size = size // 4
         self.time_width = time_width
         self.time_in = TensorLinear(time_width, 2 * time_width, seed=seed)
         self.time_out = TensorLinear(2 * time_width, 2 * time_width, seed=seed + 1)
@@ -101,20 +103,20 @@ class TinyUNet(TensorModule):
         # Self-attention over the 7 x 7 positions of the middle (DDPM attends
         # at its 16 x 16 level): a non-causal pre-norm transformer block, so
         # every position can see the whole digit, not just its neighbours.
-        self.attend = (TransformerBlock(wide, 49, num_heads=1, feed_forward_activation="gelu", causal=False,
+        self.attend = (TransformerBlock(wide, self.middle_size ** 2, num_heads=1, feed_forward_activation="gelu", causal=False,
                                         seed=seed + 90) if attention else None)
 
     def __call__(self, images: Tensor, steps: list[int]) -> Tensor:
-        """Predicted noise for noisy images (B, C, 28, 28) at time steps (B,)."""
+        """Predicted noise for noisy images (B, C, size, size) at time steps (B,)."""
 
         time = self.time_out(silu(self.time_in(timestep_embedding(steps, self.time_width))))
         skip1 = self.down1(self.stem(images), time)                      # 28 x 28
         skip2 = self.down2(self.shrink1(skip1), time)                    # 14 x 14
         hidden = self.middle(self.shrink2(skip2), time)                  # 7 x 7
         if self.attend is not None:
-            batch, wide = hidden.shape[:2]
-            tokens = self.attend(hidden.reshape((batch, wide, 49)).permute((0, 2, 1)))
-            hidden = tokens.permute((0, 2, 1)).reshape((batch, wide, 7, 7))
+            batch, wide, side = hidden.shape[:3]
+            tokens = self.attend(hidden.reshape((batch, wide, side * side)).permute((0, 2, 1)))
+            hidden = tokens.permute((0, 2, 1)).reshape((batch, wide, side, side))
         hidden = self.up2(concat([upsample_nearest2d(hidden), skip2], axis=1), time)
         hidden = self.up1(concat([upsample_nearest2d(hidden), skip1], axis=1), time)
         return self.head(hidden)
