@@ -137,6 +137,14 @@ whole digit.
 
 ![64 DDIM samples from the group norm + attention U-Net](images/diffusion_mnist.png)
 
+The same model and recipe on Fashion-MNIST (`--dataset fashion`) reaches
+FID **7.3** after 20 epochs (52 / 18 / 9.8 / 7.3 after 5 / 10 / 15 / 20;
+4.2 h on 8 threads). Its judge is a Fashion-MNIST CNN (89.9% test
+accuracy), on whose features 1,000 real images score 0.6, so the number
+is not comparable with the MNIST one.
+
+![64 DDIM samples from the same U-Net trained on Fashion-MNIST](images/diffusion_fashion.png)
+
 *Added*: group norm, DDIM sampling, the clipped DDPM posterior step, an
 EMA of the weights, and the FID.
 

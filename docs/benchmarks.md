@@ -45,6 +45,7 @@ and float64, and NanoGrad uses its C kernels.
 | Tiny Shakespeare | BERT-style encoder, masked characters | identical in both | |
 | MNIST | VAE, 3 epochs | **117.3** nats per image (negative ELBO) | |
 | MNIST (generation) | DDPM, 455K-parameter U-Net with group norm and 7 x 7 attention, 20 epochs, EMA, DDIM 100 steps | FID **18.1** on a small MNIST CNN's features, 1,000 samples (real images: 2.4; without norm and attention: 24.8) | |
+| Fashion-MNIST (generation) | the same U-Net and recipe | FID **7.3** on a small Fashion-MNIST CNN's features, 1,000 samples (real images: 0.6) | |
 
 The Tiny Shakespeare GPT is compared against nanoGPT itself (a separate
 implementation, so the curves agree statistically, not to rounding); see
