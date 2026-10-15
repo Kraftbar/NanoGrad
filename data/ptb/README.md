@@ -15,3 +15,9 @@ Then:
 ```bash
 python3 wikitext_lm.py --data data/ptb --preset zaremba-small --dtype float32
 ```
+
+Their "medium" LSTM, on the GPU (about 70 minutes; test perplexity 84.0):
+
+```bash
+NANOGRAD_BACKEND=cuda python3 wikitext_lm.py --data data/ptb --preset zaremba-medium --dtype float32
+```
