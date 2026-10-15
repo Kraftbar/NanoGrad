@@ -42,6 +42,7 @@ and float64, and NanoGrad uses its C kernels.
 | ETTh1 (forecasting) | DLinear, 336 hours -> 96 / 192 / 336 / 720 | test MSE 0.370 / 0.421 / 0.455 / 0.494 | DLinear paper: 0.375 / 0.405 / 0.439 / 0.472 |
 | Multi30k (German -> English) | encoder-decoder transformer, width 128, 2 + 2 layers, 10 epochs | test 2016 BLEU **32.5** greedy, **33.4** beam 4 | |
 | Tiny Shakespeare | nanoGPT's baby GPT, 2,000 steps | val loss **1.921** | nanoGPT, same recipe: 1.886 |
+| Tiny Shakespeare | nanoGPT's 6 x 384 GPT, 5,000 steps, on the GPU | best val loss **1.474** | nanoGPT, same recipe: 1.4697 |
 | Tiny Shakespeare | BERT-style encoder, masked characters | identical in both | |
 | MNIST | VAE, 3 epochs | **117.3** nats per image (negative ELBO) | |
 | MNIST (generation) | DDPM, 455K-parameter U-Net with group norm and 7 x 7 attention, 20 epochs, EMA, DDIM 100 steps | FID **18.1** on a small MNIST CNN's features, 1,000 samples (real images: 2.4; without norm and attention: 24.8) | |
