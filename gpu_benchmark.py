@@ -18,7 +18,13 @@ graph's static inputs, replays it with one launch and reads the loss.
 
 ``--fuse`` also times the graph with its chains of elementwise kernels
 fused into generated ones (``fusion.capture``), and prints how many
-kernels a step launches before and after.
+kernels a step launches before and after. ``--rounds`` times the columns
+one after another several times and keeps each one's best, for when
+another program shares the GPU.
+
+The diffusion step's random draws (noise, time steps) are made once, for
+every column: Python takes longer to draw them than the GPU takes for the
+step, and a graph takes them as inputs.
 """
 
 from __future__ import annotations
