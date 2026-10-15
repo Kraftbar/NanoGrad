@@ -108,3 +108,24 @@ Getting here took:
 
 What remains between NanoGrad and PyTorch here is mostly Python: each op
 is a Python call that sets up a kernel and records a backward step.
+
+## The Full Recipe, On The GPU
+
+nanoGPT's GPU config (`config/train_shakespeare_char.py`: 6 layers,
+6 heads, 384 wide, context 256, dropout 0.2, 5,000 steps of 64 windows,
+10.7M parameters), run on the [CUDA backend](./cuda.md) as 2 x 32 windows
+per step (batch 64 does not fit in 8 GB):
+
+```bash
+NANOGRAD_BACKEND=cuda .venv/bin/python gpt_train.py --text-file data/tinyshakespeare/input.txt \
+    --preset shakespeare --dtype float32 --batch-size 32 --grad-accum 2 --eval-batches 100
+```
+
+| | best val loss | time |
+| --- | ---: | ---: |
+| NanoGrad, RTX 3060 Ti | **1.474** (step 1,750) | 15 min (40 for all 5,000 steps) |
+| nanoGPT, A100 | 1.4697 | about 3 min |
+
+After step 1,750 it overfits (train 0.59, val 1.73 at step 5,000), as
+nanoGPT's config warns, so only the best checkpoint is kept. On the CPU
+the same run would take about 34 hours.
