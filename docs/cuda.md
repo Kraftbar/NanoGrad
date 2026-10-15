@@ -48,6 +48,8 @@ sections go from easy to hard:
   8 TFLOP/s in float32.
 - **Convolutions:** implicit GEMM, where tiles read patches through the
   index table, so no patch matrix exists in memory.
+- **Mixed precision:** the same products on the tensor cores, in PTX
+  (see "Mixed Precision" below).
 - **Scatters:** turned into gathers, so the sums run in a fixed order and
   give the same bits every run.
 - **Recurrent** (LSTM, CRF): one launch walks all the time steps.
@@ -134,10 +136,85 @@ Replays copy their inputs from pinned host memory without waiting: a
 plain upload waits for the GPU, which takes milliseconds when another
 program shares it.
 
+## Mixed Precision
+
+The GPU's *tensor cores* multiply 16-bit matrices several times faster
+than its float32 units. One switch puts every matrix product (matmul,
+linear layers, attention, the convolutions) on them:
+
+```python
+kernels.set_matmul_precision("bf16")   # or "fp16"; "fp32" switches back
+with kernels.autocast("bf16"): ...     # or NANOGRAD_AUTOCAST=bf16
+```
+
+The `mma_` kernels in `kernels.cu` round each input to 16 bits as they
+load it and sum in float32. Tensors stay float32, so the weights, the
+optimizer's state, softmax and the norms do too. On the CPU the switch
+rounds the products' inputs the same way, so the CPU suite tests it.
+
+- **bfloat16** keeps float32's 8 exponent bits and 7 of its 23 mantissa
+  bits: less precise, same range. A gradient too small for it is too
+  small for float32 too, so it needs nothing else.
+- **float16** has 10 mantissa bits but overflows past 65504, and values
+  below 3e-8 become 0, so small gradients vanish. `optim.GradScaler`
+  multiplies the loss by 65536 before `backward()`, divides the
+  gradients by it again, and skips the step (halving the scale) when one
+  overflows.
+- **Sums round toward zero** on the tensor cores: 4000 positive products
+  come out 3e-5 low, where float32 cores are off by 3e-8.
+
+A @ B in TFLOP/s (the transposed layouts are within 15%; fp16 runs as
+fast as bf16):
+
+| size | fp32 | bf16 |
+| --- | ---: | ---: |
+| 1024³ | 7.0 | 15.5 |
+| 4096³ | 8.8 | 18.3 |
+
+One training step (`gpu_benchmark.py --mixed bf16`, back to back, with
+another program using a fifth to half of the GPU):
+
+| model | fp32 ms | bf16 ms | gain |
+| --- | ---: | ---: | ---: |
+| LeNet-5 | 1.5 | 1.4 | 1.1x |
+| ResNet, MNIST | 4.5 | 4.2 | 1.1x |
+| ResNet-8, b32 | 8.2 | 7.0 | 1.2x |
+| ResNet-8, b256 | 60.7 | 52.1 | 1.2x |
+| ViT | 5.6 | 5.7 | 1.0x |
+| baby GPT | 14.1 | 14.6 | 1.0x |
+| GPT 6x384 | 186 | 145 | 1.3x |
+| diffusion U-Net | 124 | 100 | 1.2x |
+
+The rest of a step (sums, softmax, norms, Adam, Python's launches) stays
+as it was, so a whole step gains much less than its products do: in the
+6x384 GPT's step they go from 83 ms to 41. Small models are limited by
+Python's launches; recorded as CUDA graphs they gain a little (ResNet on
+MNIST 2.6 to 2.1 ms, baby GPT 5.1 to 4.5).
+
+Training follows float32 (same seed, `gpt_train.py --precision`):
+
+| baby GPT, val loss | step 500 | step 2000 |
+| --- | ---: | ---: |
+| fp32 | 2.2672 | 1.8968 |
+| bf16 | 2.2686 | 1.8993 |
+| fp16 + GradScaler | 2.2675 | 1.8970 |
+| fp16, no scaling | 2.2698 | 1.9000 |
+
+ResNet-8 on MNIST, 3 epochs (`NANOGRAD_AUTOCAST=bf16 mnist_compare.py`):
+training loss 0.0387 in float32, 0.0389 in bf16 and 0.0388 in fp16
+(unscaled); test
+accuracy 98.99%, 98.55% and 98.79% (it moves by more than that from epoch
+to epoch).
+
 ## Limits
 
-- 8 GB: the 6x384 GPT fits batch 32, but not batch 64.
+- 8 GB: the 6x384 GPT fits batch 32, but not batch 64 (mixed precision
+  does not store anything in 16 bits, so it saves no memory).
 - Two processes on one GPU: each pool keeps what it has freed, so cap
   them with `NANOGRAD_CUDA_MEMORY_MB`.
 - float64 runs 64x slower than float32 on a gaming GPU.
 - CUDA does not survive `fork()`, so `parallel.py` stays on the CPU.
+- Mixed precision covers the matrix products only: the direct
+  convolution (16 filters or fewer), depthwise convolutions and the LSTM
+  stay float32. `GradScaler` reads a value back every step, so a float16
+  step with it cannot be recorded as a CUDA graph (a bfloat16 one can).
