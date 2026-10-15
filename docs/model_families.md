@@ -87,6 +87,11 @@ example: the state carries over from one 35-word window to the next while
 gradients stop at the window edge (truncated backpropagation through
 time).
 
+On the GPU, `--data data/ptb --preset zaremba-medium` trains Zaremba et
+al.'s "medium" LSTM (two layers of 650, dropout 0.5, 39 epochs) on the
+Penn Treebank in 70 minutes: test perplexity **84.0** (validation 87.6;
+paper 82.7 and 86.2).
+
 *Added*: `split` (whose pieces share one gradient buffer, so splitting a
 sequence into T steps stays linear in T), sigmoid kernel, LSTM state in
 and out, and a fused LSTM cell (two ops with C kernels instead of a

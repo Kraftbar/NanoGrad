@@ -22,6 +22,7 @@ and float64, and NanoGrad uses its C kernels.
 | CIFAR-10 | ResNet-8 (MLPerf Tiny's shape), 78K parameters, 3 epochs; MLPerf's recipe (shifts and flips, L2 2e-4, lr x0.967 per epoch), float32, 8 threads | 68.57% after 3 epochs; **85.61%** after 150 epochs (best 85.95%, last ten 85.5-86.0%; 63 s per epoch, 792 MB steady) | MLPerf Tiny target: 85% |
 | Fashion-MNIST / CIFAR-10 | small ResNet, 2 epochs | 86.90% / 58.30% | [all models below](#model-families) |
 | Penn Treebank | Zaremba et al.'s small LSTM, 13 epochs | test perplexity **113.8** (PyTorch, same weights and batches: 115.0) | paper: test perplexity 114.5 |
+| Penn Treebank | Zaremba et al.'s medium LSTM (650 wide, dropout 0.5), 39 epochs, on the GPU | test perplexity **84.0** | paper: 82.7 |
 | WikiText-2 | PyTorch's `word_language_model` LSTM, 6 epochs | test perplexity **135.4** (PyTorch, same weights and batches: 139.6; dropout masks differ) | |
 | WikiText-2 | 2-layer GPT, same recipe | test perplexity **244.2** (PyTorch, same weights and batches: 240.3; dropout masks differ) | |
 | Cora (citation graph) | GCN, pygcn's recipe, 10 seeds | **83.1% +- 0.6** test accuracy (PyTorch, own dropout masks: 82.9% +- 0.7) | GCN paper: 81.5% (on the Planetoid split) |

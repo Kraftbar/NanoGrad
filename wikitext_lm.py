@@ -454,6 +454,12 @@ PRESETS = {
     # Zaremba, Sutskever and Vinyals (2014), "small" non-regularized LSTM on PTB.
     "zaremba-small": dict(bptt=20, dropout=0.0, epochs=13, decay_after=4, decay=2.0, init_range=0.1,
                           eval_batch_size=1),
+    # Their "medium" regularized LSTM (test perplexity 82.7): 650 wide, dropout
+    # 0.5, 35-word windows, 39 epochs, the rate divided by 1.2 after every epoch
+    # from the seventh on. Their learning rate 1 and clip norm 5 on the loss
+    # summed over 35 steps are 35 and 5 / 35 on the mean loss used here.
+    "zaremba-medium": dict(emsize=650, nhid=650, bptt=35, dropout=0.5, epochs=39, lr=35.0, clip=5 / 35,
+                           decay_after=6, decay=1.2, init_range=0.05, eval_batch_size=1),
 }
 
 
