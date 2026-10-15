@@ -65,6 +65,34 @@ grouped-query and sliding-window attention, mixture-of-experts
 feed-forward layers (`moe.py`, which needed a row-scatter op), LoRA
 adapters (`lora.py`) and weight quantization (`quantize.py`).
 
+### GPT-2 small, OpenAI's weights (`gpt2.py`)
+
+The same transformer at full size (12 x 768, 124M parameters) with the
+published weights. `gpt2.py` reads the safetensors file and GPT-2's
+byte-level BPE by hand. Checked against Hugging Face's GPT-2 on one
+42-token text, in float64:
+
+| | NanoGrad vs PyTorch |
+| --- | ---: |
+| tokens (all of tiny Shakespeare, 338,025) | identical |
+| logits (largest 186) | within 8e-13 |
+| loss | 4.475267545281 both |
+| gradients, 4 layers | within 3e-14 relative |
+
+Fine-tuned on tiny Shakespeare on the GPU (100 steps of 8 x 1,024
+tokens, lr 3e-5, 13 min): val loss 4.035 -> **3.333**. Sample:
+
+```
+ROMEO: I was told that I had, and I would send it to him, and take our
+house from him, which is to-morrow, with most care: ...
+
+PARIS:
+Why not?
+```
+
+*Added*: the tanh form of GELU, GPT-2's. Fine-tuning at 1,024 tokens
+needs `recompute` to fit in 8 GB.
+
 ## Encoders: BERT (`bert.py`, `bert_finetune.py`)
 
 The GPT block without the causal mask, trained by masked character
@@ -215,6 +243,35 @@ better it turned out. Solved means a running return above 475 of 500:
 *Added*: nothing in the core; the policy-gradient loss is a gather of the
 log-probabilities of the actions taken, weighted by the returns, and a
 custom Huber loss op. Tests check both agents' gradients against PyTorch.
+
+### Super Mario Bros 1-1 with PPO (`mario.py`)
+
+PPO learns 1-1 from the screen: 4 stacked grey 84 x 84 frames in, one of
+7 button combinations out, every 4th frame. The network is DQN's (three
+convolutions and a 512-wide layer) with a policy and a value head.
+8 emulators (nes-py) play in worker processes, and the network trains on
+the GPU. Hyperparameters are uvipen's Super-mario-bros-PPO-pytorch:
+512 steps per game per rollout, 10 epochs, clip 0.2, gamma 0.9, lr 1e-4.
+
+| | |
+| --- | ---: |
+| first flag | 86K steps, 4 min |
+| 90% of 100 training episodes reach the flag | 1.57M steps, 66 min |
+| 50 fresh episodes, sampled actions | 42 reach the flag |
+| always the likeliest action | reaches the flag |
+
+![Mario finishing 1-1](images/mario_1_1.gif)
+
+```bash
+.venv/bin/pip install "numpy<2" gym==0.26.2 nes-py gym-super-mario-bros
+NANOGRAD_BACKEND=cuda NANOGRAD_DTYPE=float32 .venv/bin/python mario.py --out runs/mario
+.venv/bin/python mario.py --play runs/mario/model.json      # watch it in a window
+```
+
+*Added*: nothing in the core. The clipped objective is written with
+ReLUs (`min(a, b) = a - relu(a - b)`). `Tensor()` now copies a host array
+of the right precision in one go: the 4,096 screens of a rollout went
+from 8 s to 0.7 s.
 
 ## Time-series forecasting: DLinear and a patch transformer (`timeseries.py`)
 

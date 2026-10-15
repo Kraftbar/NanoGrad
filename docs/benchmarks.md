@@ -45,7 +45,9 @@ and float64, and NanoGrad uses its C kernels.
 | Multi30k (German -> English) | encoder-decoder transformer, width 128, 2 + 2 layers, 10 epochs | test 2016 BLEU **32.5** greedy, **33.4** beam 4 | |
 | Tiny Shakespeare | nanoGPT's baby GPT, 2,000 steps | val loss **1.921** | nanoGPT, same recipe: 1.886 |
 | Tiny Shakespeare | nanoGPT's 6 x 384 GPT, 5,000 steps, on the GPU | best val loss **1.474** | nanoGPT, same recipe: 1.4697 |
+| Tiny Shakespeare | GPT-2 small, OpenAI's weights (124M) | logits within 8e-13 of Hugging Face's in float64; fine-tuned 100 steps on the GPU: val loss 4.035 -> **3.333** | |
 | Tiny Shakespeare | BERT-style encoder, masked characters | identical in both | |
+| Super Mario Bros 1-1 | PPO from pixels, DQN's network, uvipen's recipe, on the GPU | 90% of 100 training episodes reach the flag after 1.57M steps (66 min); 42 of 50 fresh episodes | |
 | MNIST | VAE, 3 epochs | **117.3** nats per image (negative ELBO) | |
 | MNIST (generation) | DDPM, 455K-parameter U-Net with group norm and 7 x 7 attention, 20 epochs, EMA, DDIM 100 steps | FID **18.1** on a small MNIST CNN's features, 1,000 samples (real images: 2.4; without norm and attention: 24.8) | |
 | Fashion-MNIST (generation) | the same U-Net and recipe | FID **7.3** on a small Fashion-MNIST CNN's features, 1,000 samples (real images: 0.6) | |
