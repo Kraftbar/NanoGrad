@@ -67,16 +67,16 @@ Ryzen 7 3700X (`gpu_benchmark.py`).
 
 | model | GPU ms | CPU ms | gain |
 | --- | ---: | ---: | ---: |
-| LeNet-5 | 1.9 | 5.4 | 2.9x |
-| ResNet, MNIST | 5.4 | 29.9 | 5.5x |
-| ResNet-8, b32 | 9.5 | 82.6 | 8.7x |
-| ResNet-8, b256 | 60.5 | 395 | 6.5x |
-| ViT | 6.2 | 25.0 | 4.1x |
-| baby GPT | 15.8 | 275 | 17x |
-| GPT 6x384 | 222 | 12,176 | 55x |
-| diffusion U-Net | 137 | 1,820 | 13x |
+| LeNet-5 | 1.4 | 5.4 | 3.9x |
+| ResNet, MNIST | 4.1 | 29.9 | 7.3x |
+| ResNet-8, b32 | 7.6 | 82.6 | 11x |
+| ResNet-8, b256 | 54.3 | 395 | 7.3x |
+| ViT | 5.6 | 25.0 | 4.5x |
+| baby GPT | 14.1 | 275 | 20x |
+| GPT 6x384 | 146 | 12,176 | 83x |
 
-Small models are limited by Python, at about 6 µs per launch.
+Small models are limited by Python, at about 6 µs per launch; the three
+sections below take that and more off.
 
 A whole diffusion run (MNIST, 20 epochs) takes 268 min on the CPU and
 30 min on the GPU. The FIDs are 18.11 and 18.12, and the two runs print
@@ -84,213 +84,75 @@ the same losses.
 
 ## CUDA Graphs
 
-A small model's step is about a thousand short kernels, and Python takes
-longer to launch them than the GPU takes to run them. A CUDA graph
-records one whole step (forward, backward, Adam) once; afterwards each
-step copies the batch into fixed input arrays and replays every kernel
-with one launch, as PyTorch's `torch.cuda.graphs` does:
+A small model's step is about a thousand short kernels. A CUDA graph
+records one whole step (forward, backward, Adam) once, then replays it
+with one launch, as `torch.cuda.graphs` does:
 
 ```python
-x = kernels.storage(pixels)                  # the graph's inputs
-y = kernels_cuda.DeviceArray("l", labels)
 step(x, y)                                   # one eager step first
 graph = kernels_cuda.capture(lambda: step(x, y), x, y)
-loss = graph(new_pixels, new_labels)         # step's loss tensor
+loss = graph(new_pixels, new_labels)         # copies the batch in, replays
 ```
 
-`step` returns the loss tensor without reading it. `gpu_benchmark.py
---graph` does this for each model. A replay runs the same kernels on the
-same addresses with the same arguments, so:
-
-- **Memory.** The graph keeps every block its step uses.
-- **No reads while recording** (nothing has run yet): `capture` raises.
-  The loss is averaged on the GPU, and so is Adam's clipping factor.
-- **Numbers that change every step** live in GPU memory. Adam's step
-  size is worked out on the host before each replay, so learning-rate
-  schedules still work.
-- **State is updated in place** (weights, batch-norm statistics);
-  `capture` raises if the step replaces an array it reads.
-- **Python runs once**, while recording: a dropout seed or noise drawn
-  there is fixed. The diffusion step draws its noise that way, so it
-  cannot be recorded as it is.
-
-Replays give the same bits as eager steps (`test_kernels_cuda.py`), where
-the eager step itself repeats bit for bit; atomic adds (the conv image
-gradient, repeated embedding ids) add in any order.
-
-With the GPU otherwise idle (`gpu_benchmark.py --backends cuda --graph`):
-
-| model | eager ms | graph ms | gain |
-| --- | ---: | ---: | ---: |
-| LeNet-5 | 1.5 | 0.7 | 2.1x |
-| ResNet, MNIST | 4.6 | 2.8 | 1.6x |
-| ResNet-8, b32 | 8.7 | 6.0 | 1.5x |
-| ViT | 6.0 | 1.2 | 4.8x |
-| baby GPT | 15.3 | 4.9 | 3.1x |
-
-The gain is largest where Python's launches, not the GPU, set the pace.
-While another program shares the GPU it grows (LeNet 3.9x), since each
-eager launch then also waits its turn.
-
-Replays copy their inputs from pinned host memory without waiting: a
-plain upload waits for the GPU, which takes milliseconds when another
-program shares it.
+A replay reuses the recorded addresses and arguments, so nothing may be
+read back while recording, state is updated in place, and numbers that
+change every step (Adam's step size) live in GPU memory. Anything Python
+draws while recording (a dropout seed) is fixed. Replays give the same
+bits as eager steps.
 
 ## Fused Kernels
 
-`relu(x * w + b)` is three kernels, and each one reads its inputs from
-GPU memory and writes its result back. They do one or two operations
-per value, so that traffic is their whole cost. `fusion.py` is a small
-compiler (a tiny `torch.compile`) that turns such chains into one
-generated kernel, inside a CUDA graph:
-
-```python
-graph = fusion.capture(lambda: step(x, y), x, y)    # as kernels_cuda.capture
-print(graph.program)                                 # what it fused
-```
-
-1. **Trace.** The step runs once; its launches, copies and clears are
-   noted down instead of sent.
-2. **Group.** Neighbouring elementwise kernels of one size become one:
-   thread i computes value i of each in turn, in registers.
-   `fusion.FUSIBLE` holds each kernel's arithmetic on one value, copied
-   from kernels.cu: arithmetic, activations and their gradients, bias
-   broadcasts, padding, gathers, copies, Adam.
-3. **Drop stores.** A temporary that nothing reads later stays in a
-   register.
-4. **Batch.** One kernel on many independent arrays (Adam on each
-   parameter, `zero_grad`) becomes one launch, which reads its pointers
-   from a table, like PyTorch's multi-tensor apply.
-5. **Compile.** NVRTC compiles the generated source once, cached on
-   disk; pointers live in the table, so the source does not change.
-
-A reduction, a matrix product or a convolution ends a group, and a
-kernel may read other indexes than its own (a bias, a padded image)
-only of arrays the group does not write. Only neighbours fuse, plus one
-small piece moved out of the way (a bias's copy) when the two share no
-array: then no reordering needs a proof.
-
-**Bit for bit.** The compiler contracts `a * b + c` into one fused
-multiply-add, rounded once. Across a former kernel boundary that would
-change the result, so each value passed on is rounded explicitly
-(`__fadd_rn(x, -0.0f)`, which cannot be contracted). Fused steps give
-the same bits as unfused ones (`test_kernels_cuda.py`: every template in
-both precisions, an MLP, a ViT, a GPT and batch norm over several
-steps). Inside one kernel the compiler is free to contract or not, and
-decided Adam's `w * decay - step` differently in a fused kernel, so
-kernels.cu now rounds that product explicitly (`__fmul_rn`).
-
-With the GPU otherwise idle (`gpu_benchmark.py --backends cuda --fuse
---rounds 5 --steps 10`: the columns timed one after another, five
-times, best kept; the rounds agreed to a few percent). Nodes are a
-step's kernels, copies and clears:
-
-| model | graph ms | fused ms | nodes | fused |
-| --- | ---: | ---: | ---: | ---: |
-| LeNet-5 | 0.7 | 0.7 | 48 | 34 |
-| ResNet, MNIST | 2.5 | 2.3 | 262 | 130 |
-| ResNet-8, b32 | 6.0 | 5.7 | 262 | 130 |
-| ResNet-8, b256 | 43.3 | 42.6 | 263 | 131 |
-| ViT | 1.3 | 1.0 | 385 | 202 |
-| baby GPT | 4.8 | 4.0 | 1214 | 674 |
-| GPT 6x384 | 174 | 171 | 2202 | 1105 |
-| diffusion U-Net | 82.2 | 75.7 | 831 | 444 |
-
-Two different gains. Small models run about half the nodes, at roughly
-1.5 µs each even inside a graph (ViT 1.3x, baby GPT 1.2x). The U-Net's
-group norms, SiLUs and time embeddings are long elementwise chains over
-big activations: one pass over memory instead of seven, 8% of its step.
-Where matrix products and convolutions take the time (ResNet-8 at batch
-256, the 6x384 GPT) fusion saves 1 to 2%, within the noise for the GPT.
-Most of the remaining traffic is in kernels this does not touch: a bias
-or activation fused into the product before it (an epilogue), and the
-gradient-norm sums, two launches per parameter.
-
-(The U-Net step is now recorded too: its noise and time steps come in
-as graph inputs, drawn once by the benchmark for every column, so its
-eager step is faster than in the first table, which drew them in Python
-every step.)
+`relu(x * w + b)` is three kernels, each reading and writing all of GPU
+memory's copy of the values. `fusion.py` is a tiny `torch.compile`: it
+traces a graph's kernels, merges neighbouring elementwise ones into one
+generated kernel (values stay in registers), batches one kernel over
+many arrays into one launch (Adam on every parameter), and compiles the
+result with NVRTC. `fusion.capture` works like `kernels_cuda.capture`.
+Each value passed between former kernels is rounded explicitly, so the
+compiler can't fuse a multiply and an add across them, and the results
+stay bit for bit the same.
 
 ## Mixed Precision
 
-The GPU's *tensor cores* multiply 16-bit matrices several times faster
-than its float32 units. One switch puts every matrix product (matmul,
-linear layers, attention, the convolutions) on them:
+The tensor cores multiply 16-bit matrices about twice as fast as the
+float32 kernels here (18 against 9 TFLOP/s). One switch puts every
+matrix product on them:
 
 ```python
-kernels.set_matmul_precision("bf16")   # or "fp16"; "fp32" switches back
-with kernels.autocast("bf16"): ...     # or NANOGRAD_AUTOCAST=bf16
+kernels.set_matmul_precision("bf16")   # or "fp16"; or NANOGRAD_AUTOCAST=bf16
 ```
 
-The `mma_` kernels in `kernels.cu` round each input to 16 bits as they
-load it and sum in float32. Tensors stay float32, so the weights, the
-optimizer's state, softmax and the norms do too. On the CPU the switch
-rounds the products' inputs the same way, so the CPU suite tests it.
+The inputs are rounded to 16 bits as they are loaded and summed in
+float32; weights, optimizer state, softmax and norms stay float32.
+bfloat16 has float32's range and needs nothing else; float16 needs
+`optim.GradScaler`. Baby GPT, 2,000 steps: val loss 1.8968 in float32,
+1.8993 in bf16. On the CPU the switch rounds the same way, for testing.
 
-- **bfloat16** keeps float32's 8 exponent bits and 7 of its 23 mantissa
-  bits: less precise, same range. A gradient too small for it is too
-  small for float32 too, so it needs nothing else.
-- **float16** has 10 mantissa bits but overflows past 65504, and values
-  below 3e-8 become 0, so small gradients vanish. `optim.GradScaler`
-  multiplies the loss by 65536 before `backward()`, divides the
-  gradients by it again, and skips the step (halving the scale) when one
-  overflows.
-- **Sums round toward zero** on the tensor cores: 4000 positive products
-  come out 3e-5 low, where float32 cores are off by 3e-8.
+## All Together
 
-A @ B in TFLOP/s (the transposed layouts are within 15%; fp16 runs as
-fast as bf16):
+GPU ms per step, idle GPU (`--backends cuda --fuse --mixed bf16`):
 
-| size | fp32 | bf16 |
-| --- | ---: | ---: |
-| 1024³ | 7.0 | 15.5 |
-| 4096³ | 8.8 | 18.3 |
+| model | eager | graph | fused | + bf16 |
+| --- | ---: | ---: | ---: | ---: |
+| LeNet-5 | 1.4 | 0.7 | 0.7 | 0.6 |
+| ResNet, MNIST | 4.1 | 2.5 | 2.3 | 1.9 |
+| ResNet-8, b32 | 7.6 | 5.9 | 5.7 | 4.8 |
+| ResNet-8, b256 | 54.3 | 42.7 | 42.8 | 35.5 |
+| ViT | 5.6 | 1.3 | 1.0 | 1.1 |
+| baby GPT | 14.1 | 4.5 | 3.7 | 3.1 |
+| GPT 6x384 | 146 | 136 | 129 | 85 |
+| diffusion U-Net | 78.6 | 79.3 | 72.4 | 48.3 |
 
-One training step (`gpu_benchmark.py --mixed bf16`, back to back, with
-another program using a fifth to half of the GPU):
-
-| model | fp32 ms | bf16 ms | gain |
-| --- | ---: | ---: | ---: |
-| LeNet-5 | 1.5 | 1.4 | 1.1x |
-| ResNet, MNIST | 4.5 | 4.2 | 1.1x |
-| ResNet-8, b32 | 8.2 | 7.0 | 1.2x |
-| ResNet-8, b256 | 60.7 | 52.1 | 1.2x |
-| ViT | 5.6 | 5.7 | 1.0x |
-| baby GPT | 14.1 | 14.6 | 1.0x |
-| GPT 6x384 | 186 | 145 | 1.3x |
-| diffusion U-Net | 124 | 100 | 1.2x |
-
-The rest of a step (sums, softmax, norms, Adam, Python's launches) stays
-as it was, so a whole step gains much less than its products do: in the
-6x384 GPT's step they go from 83 ms to 41. Small models are limited by
-Python's launches; recorded as CUDA graphs they gain a little (ResNet on
-MNIST 2.6 to 2.1 ms, baby GPT 5.1 to 4.5).
-
-Training follows float32 (same seed, `gpt_train.py --precision`):
-
-| baby GPT, val loss | step 500 | step 2000 |
-| --- | ---: | ---: |
-| fp32 | 2.2672 | 1.8968 |
-| bf16 | 2.2686 | 1.8993 |
-| fp16 + GradScaler | 2.2675 | 1.8970 |
-| fp16, no scaling | 2.2698 | 1.9000 |
-
-ResNet-8 on MNIST, 3 epochs (`NANOGRAD_AUTOCAST=bf16 mnist_compare.py`):
-training loss 0.0387 in float32, 0.0389 in bf16 and 0.0388 in fp16
-(unscaled); test
-accuracy 98.99%, 98.55% and 98.79% (it moves by more than that from epoch
-to epoch).
+Graphs help the small models (Python's launches), fusion the long
+elementwise chains (the U-Net's norms), bf16 the big products. The
+6x384 GPT ends at 85 ms, 143x the CPU.
 
 ## Limits
 
-- 8 GB: the 6x384 GPT fits batch 32, but not batch 64 (mixed precision
-  does not store anything in 16 bits, so it saves no memory).
-- Two processes on one GPU: each pool keeps what it has freed, so cap
-  them with `NANOGRAD_CUDA_MEMORY_MB`.
+- 8 GB: the 6x384 GPT fits batch 32, not 64 (nothing is stored in 16
+  bits, so mixed precision saves no memory).
+- Two processes on one GPU: cap each pool with `NANOGRAD_CUDA_MEMORY_MB`.
 - float64 runs 64x slower than float32 on a gaming GPU.
 - CUDA does not survive `fork()`, so `parallel.py` stays on the CPU.
-- Mixed precision covers the matrix products only: the direct
-  convolution (16 filters or fewer), depthwise convolutions and the LSTM
-  stay float32. `GradScaler` reads a value back every step, so a float16
-  step with it cannot be recorded as a CUDA graph (a bfloat16 one can).
-- Fusion works only inside a CUDA graph; eager steps run kernel by kernel.
+- Fusion only inside graphs; an fp16 step with `GradScaler` can't be
+  recorded (it reads a value back).
