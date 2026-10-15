@@ -153,7 +153,14 @@ def copy(values: Sequence[float]) -> array | list[float]:
     if (BACKEND == "cuda" and isinstance(values, kernels_cuda.DeviceArray)
             and values.typecode == kernels_cuda.typecode):
         return values[:]
+    if type(values) is array and values.typecode == _typecode():
+        # Already the backend's numbers: copied (or uploaded) whole, not one by one.
+        return values[:] if BACKEND == "c" else storage(values)
     return storage(list(map(float, values)))
+
+
+def _typecode() -> str | None:
+    return kernels_c.typecode if BACKEND == "c" else kernels_cuda.typecode if BACKEND == "cuda" else None
 
 
 def capturing() -> bool:
