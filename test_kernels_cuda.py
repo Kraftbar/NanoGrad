@@ -104,6 +104,7 @@ class DeviceArrayTests(CudaTestCase):
 
     def test_memory_limit_hands_kept_blocks_back(self) -> None:
         previous = kernels_cuda.memory_limit
+        kernels_cuda.release_memory()            # (a 32 MB block kept by earlier tests would be reused, over the cap)
         try:
             kept = kernels_cuda.DeviceArray.empty(1 << 18, "d")                # 2 MB, then kept by the pool
             del kept
@@ -476,7 +477,7 @@ class MixedPrecisionTests(CudaTestCase):
         # that separates the two; summed in float32, they mostly cancel.
         kernels.use_backend("cuda")
         kernels.set_default_dtype("float32")
-        self.addCleanup(kernels.set_default_dtype, "float64")
+        self.addCleanup(kernels_cuda.set_precision, "d")
         m, k, n = 300, 1000, 200
         a, b = values(m * k, 1), values(k * n, 2)
         sizes = dict(batches=1, m=m, k=k, n=n, a_step=0, b_step=0, c_step=0)
