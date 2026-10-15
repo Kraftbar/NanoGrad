@@ -102,8 +102,8 @@ bits as eager steps.
 
 ## Fused Kernels
 
-`relu(x * w + b)` is three kernels, each reading and writing all of GPU
-memory's copy of the values. `fusion.py` is a tiny `torch.compile`: it
+`relu(x * w + b)` is three kernels, each reading its inputs from GPU
+memory and writing its result back. `fusion.py` is a tiny `torch.compile`: it
 traces a graph's kernels, merges neighbouring elementwise ones into one
 generated kernel (values stay in registers), batches one kernel over
 many arrays into one launch (Adam on every parameter), and compiles the
